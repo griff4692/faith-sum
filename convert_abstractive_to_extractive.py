@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 import datasets as hf_nlp
 from helpers import _get_word_ngrams, load_json
-from run_no_trainer import summarization_name_mapping
+from constants import summarization_name_mapping
 
 
 logger = logging.getLogger(__name__)
@@ -436,6 +436,32 @@ def save(json_to_save, output_path, compression=False):
             save_file.write(json.dumps(json_to_save))
 
 
+def tokenize_for_oracle(
+        nlp,
+        docs,
+        n_process=5,
+        batch_size=100,
+        name="",
+        tokenizer_log_interval=0.1,
+        disable_progress_bar=False,
+):
+    """Tokenize using spacy and split into sentences and tokens."""
+    tokenized = []
+    for doc in tqdm(
+            nlp.pipe(
+                docs,
+                n_process=n_process,
+                batch_size=batch_size,
+            ),
+            total=len(docs),
+            desc='Tokenizing' + name,
+            mininterval=tokenizer_log_interval,
+            disable=disable_progress_bar,
+    ):
+        tokenized.append(doc)
+    return [list(doc.sents) for doc in tokenized]
+
+
 def tokenize(
     nlp,
     docs,
@@ -444,6 +470,7 @@ def tokenize(
     name="",
     tokenizer_log_interval=0.1,
     disable_progress_bar=False,
+    return_str=False
 ):
     """Tokenize using spacy and split into sentences and tokens."""
     tokenized = []
@@ -466,12 +493,14 @@ def tokenize(
 
     doc_sents = (doc.sents for doc in tokenized)
 
+    if return_str:
+        del doc_sents
+
     del tokenized
     del docs
     sents = (
         [[token.text for token in sentence] for sentence in doc] for doc in doc_sents
     )
-    del doc_sents
 
     logger.debug('Done in %.2f seconds', time() - t0)
     # `sents` is an array of documents where each document is an array sentences where each
@@ -669,15 +698,19 @@ def combination_selection(doc_sent_list, abstract_sent_list, summary_size):
     return sorted(list(max_idx)), best_rouges
 
 
-def gain_selection(doc_sent_list, abstract_sent_list, summary_size):
+def gain_selection(doc_sent_list, abstract_sent_list, summary_size, lower=False, sort=False):
     def _rouge_clean(s):
         return re.sub(r"[^a-zA-Z0-9 ]", "", s)
 
     curr_summary_1grams = set()
     curr_summary_2grams = set()
     abstract = sum(abstract_sent_list, [])
-    abstract = _rouge_clean(" ".join(abstract)).split()
-    sents = [_rouge_clean(" ".join(s)).split() for s in doc_sent_list]
+    if lower:
+        abstract = _rouge_clean(' '.join(abstract)).split()
+        sents = [_rouge_clean(' '.join(s)).split() for s in doc_sent_list]
+    else:
+        abstract = _rouge_clean(' '.join(abstract).lower()).split()
+        sents = [_rouge_clean(' '.join(s).lower()).split() for s in doc_sent_list]
     n = len(sents)
     evaluated_1grams = [_get_word_ngrams(1, [sent]) for sent in sents]
     reference_1grams = _get_word_ngrams(1, [abstract])
@@ -712,7 +745,9 @@ def gain_selection(doc_sent_list, abstract_sent_list, summary_size):
             curr_summary_2grams = curr_summary_2grams.union(evaluated_2grams[best_idx])
         else:
             break
-    return sorted(max_idxs), best_rouges
+    if sort:
+        max_idxs = list(sorted(max_idxs))
+    return max_idxs, best_rouges
 
 
 def greedy_selection(doc_sent_list, abstract_sent_list, summary_size):

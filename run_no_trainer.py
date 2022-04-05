@@ -22,12 +22,15 @@ import argparse
 import logging
 import math
 import os
+import regex as re
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 import random
 from pathlib import Path
 
 import datasets
 import nltk
 import numpy as np
+import spacy
 import torch
 from datasets import load_dataset, load_metric
 from torch.utils.data import DataLoader
@@ -37,10 +40,12 @@ import transformers
 from accelerate import Accelerator
 from filelock import FileLock
 from huggingface_hub import Repository
+from torch.optim import AdamW
 from transformers import (
     CONFIG_MAPPING,
     MODEL_MAPPING,
-    AdamW,
+    # AdamW,
+    Adafactor,
     AutoConfig,
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
@@ -49,9 +54,12 @@ from transformers import (
     get_scheduler,
     set_seed,
 )
+from transformers.trainer_pt_utils import LabelSmoother
 # from transformers.utils import get_full_repo_name, is_offline_mode
 from transformers.utils.versions import require_version
 
+from convert_abstractive_to_extractive import gain_selection, tokenize_for_oracle, tokenize as normal_tokenize
+from constants import summarization_name_mapping
 
 logger = logging.getLogger(__name__)
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/summarization/requirements.txt")
@@ -71,21 +79,6 @@ except (LookupError, OSError):
         nltk.download("punkt", quiet=True)
 
 
-summarization_name_mapping = {
-    "amazon_reviews_multi": ("review_body", "review_title"),
-    "big_patent": ("description", "abstract"),
-    "cnn_dailymail": ("article", "highlights"),
-    "orange_sum": ("text", "summary"),
-    "pn_summary": ("article", "summary"),
-    "psc": ("extract_text", "summary_text"),
-    "samsum": ("dialogue", "summary"),
-    "thaisum": ("body", "summary"),
-    "xglue": ("news_body", "news_title"),
-    "xsum": ("document", "summary"),
-    "wiki_summary": ("article", "highlights"),
-}
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a summarization task")
     parser.add_argument(
@@ -94,6 +87,7 @@ def parse_args():
         default=None,
         help="The name of the dataset to use (via the datasets library).",
     )
+    parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument(
         "--dataset_config_name",
         type=str,
@@ -240,6 +234,15 @@ def parse_args():
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument(
+        "--oracle_n_process",
+        type=int,
+        default=32,
+        help="number of processes for multithreading",
+    )
+    parser.add_argument(
+        "--oracle_batch_size", type=int, default=50, help="number of batches for tokenization"
+    )
+    parser.add_argument(
         "--lr_scheduler_type",
         type=SchedulerType,
         default="linear",
@@ -258,7 +261,6 @@ def parse_args():
         help="Model type to use if training from scratch.",
         choices=MODEL_TYPES,
     )
-    parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument(
         "--hub_model_id", type=str, help="The name of the repository to keep in sync with the local `output_dir`."
     )
@@ -275,9 +277,6 @@ def parse_args():
         if args.validation_file is not None:
             extension = args.validation_file.split(".")[-1]
             assert extension in ["csv", "json"], "`validation_file` should be a csv or a json file."
-
-    if args.push_to_hub:
-        assert args.output_dir is not None, "Need an `output_dir` to create a repo when `--push_to_hub` is passed."
 
     return args
 
@@ -322,14 +321,7 @@ def main():
 
     # Handle the repository creation
     if accelerator.is_main_process:
-        if args.push_to_hub:
-            pass
-            # if args.hub_model_id is None:
-            #     repo_name = get_full_repo_name(Path(args.output_dir).name, token=args.hub_token)
-            # else:
-            #     repo_name = args.hub_model_id
-            # repo = Repository(args.output_dir, clone_from=repo_name)
-        elif args.output_dir is not None:
+        if args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
     accelerator.wait_for_everyone()
 
@@ -378,6 +370,12 @@ def main():
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
+    args.add_sent_toks = True
+    if args.add_sent_toks:
+        add_tokens = [f'<s{i}>' for i in range(100)]
+        special_tokens_dict = {'additional_special_tokens': add_tokens}
+        tokenizer.add_special_tokens(special_tokens_dict)
+
     if args.model_name_or_path:
         model = AutoModelForSeq2SeqLM.from_pretrained(
             args.model_name_or_path,
@@ -420,16 +418,52 @@ def main():
     # Temporarily set max_target_length for training.
     max_target_length = args.max_target_length
     padding = 'max_length' if args.pad_to_max_length else False
+    nlp = spacy.load('en_core_web_sm')
 
     def preprocess_function(examples):
         inputs = examples[text_column]
         targets = examples[summary_column]
         inputs = [prefix + inp for inp in inputs]
-        model_inputs = tokenizer(inputs, max_length=args.max_source_length, padding=padding, truncation=True)
+
+        source_docs_sent = list(tokenize_for_oracle(
+            nlp,
+            inputs,
+            args.oracle_n_process,
+            args.oracle_batch_size,
+            tokenizer_log_interval=0.1,
+        ))
+
+        source_docs_tokenized = list(
+            [[str(token.text) for token in sentence] for sentence in doc] for doc in source_docs_sent
+        )
+
+        target_docs_tokenized = list(normal_tokenize(
+            nlp,
+            targets,
+            args.oracle_n_process,
+            args.oracle_batch_size,
+            tokenizer_log_interval=0.1,
+        ))
+
+        source_annotated = [
+            ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)]) for source_sents in source_docs_sent
+        ]
+        model_inputs = tokenizer(source_annotated, max_length=args.max_source_length, padding=padding, truncation=True)
+        oracles = [
+            gain_selection(sd, td, 5, lower=True) for sd, td in zip(source_docs_tokenized, target_docs_tokenized)
+        ]
+
+        target_prefix = [
+            ''.join([f'<s{i}>' for i in oracle[0]]).strip() for oracle in oracles
+        ]
+
+        target_annotated = [
+            f'{extract}:{abstract}' for extract, abstract in zip(target_prefix, targets)
+        ]
 
         # Setup the tokenizer for targets
         with tokenizer.as_target_tokenizer():
-            labels = tokenizer(targets, max_length=max_target_length, padding=padding, truncation=True)
+            labels = tokenizer(target_annotated, max_length=max_target_length, padding=padding, truncation=True)
 
         # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
         # padding in the loss.
@@ -440,6 +474,15 @@ def main():
 
         model_inputs['labels'] = labels['input_ids']
         return model_inputs
+
+    if args.debug:
+        debug_n = 32
+        args.oracle_n_process = 1
+        args.preprocessing_num_workers = 1
+        print(f'Debug Mode: Taking First {debug_n} Train / Validation / Test Examples.')
+        raw_datasets['train'] = raw_datasets['validation'].select(np.arange(debug_n))
+        raw_datasets['validation'] = raw_datasets['validation'].select(np.arange(debug_n))
+        raw_datasets['test'] = raw_datasets['test'].select(np.arange(debug_n))
 
     with accelerator.main_process_first():
         processed_datasets = raw_datasets.map(
@@ -466,14 +509,16 @@ def main():
         pad_to_multiple_of=8 if accelerator.use_fp16 else None,
     )
 
-    def postprocess_text(preds, labels):
+    def postprocess_text(preds, labels, extractive=None):
         preds = [pred.strip() for pred in preds]
         labels = [label.strip() for label in labels]
 
         # rougeLSum expects newline after each sentence
         preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
         labels = ["\n".join(nltk.sent_tokenize(label)) for label in labels]
-
+        if extractive is not None:
+            extractive = ["\n".join(nltk.sent_tokenize(extract)) for extract in extractive]
+            return preds, labels, extractive
         return preds, labels
 
     train_dataloader = DataLoader(
@@ -494,6 +539,13 @@ def main():
             "weight_decay": 0.0,
         },
     ]
+
+    # if 'pegasus' in args.model_name_or_path:
+    #     optimizer = Adafactor(
+    #         optimizer_grouped_parameters, scale_parameter=True, relative_step=True, warmup_init=True, lr=None
+    #     )
+    # else:
+    #     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
 
     # Prepare everything with our `accelerator`.
@@ -519,7 +571,9 @@ def main():
     )
 
     # Metric
-    metric = load_metric("rouge")
+    metric = load_metric('rouge')
+    extractive_metric = load_metric('rouge')
+    label_smoother = LabelSmoother(epsilon=0.1)
 
     # Train!
     total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -535,13 +589,15 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
 
+    best_avg_rouge = 0.0
     for epoch in range(args.num_train_epochs):
         model.train()
         for step, batch in enumerate(train_dataloader):
             outputs = model(**batch)
             loss = outputs.loss
-            loss = loss / args.gradient_accumulation_steps
-            accelerator.backward(loss)
+            smooth_loss = label_smoother(outputs, batch['labels'])
+            smooth_loss = smooth_loss / args.gradient_accumulation_steps
+            accelerator.backward(smooth_loss)
             if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                 optimizer.step()
                 lr_scheduler.step()
@@ -557,24 +613,23 @@ def main():
             args.val_max_target_length = args.max_target_length
 
         gen_kwargs = {
-            "max_length": args.val_max_target_length if args is not None else config.max_length,
-            "num_beams": args.num_beams,
+            'max_length': args.val_max_target_length if args is not None else config.max_length,
+            'num_beams': args.num_beams,
         }
         for step, batch in enumerate(eval_dataloader):
             with torch.no_grad():
                 generated_tokens = accelerator.unwrap_model(model).generate(
-                    batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
+                    batch['input_ids'],
+                    attention_mask=batch['attention_mask'],
                     **gen_kwargs,
                 )
-
                 generated_tokens = accelerator.pad_across_processes(
                     generated_tokens, dim=1, pad_index=tokenizer.pad_token_id
                 )
-                labels = batch["labels"]
+                labels = batch['labels']
                 if not args.pad_to_max_length:
                     # If we did not pad to max length, we need to pad the labels too
-                    labels = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
+                    labels = accelerator.pad_across_processes(batch['labels'], dim=1, pad_index=tokenizer.pad_token_id)
 
                 generated_tokens = accelerator.gather(generated_tokens).cpu().numpy()
                 labels = accelerator.gather(labels).cpu().numpy()
@@ -585,38 +640,48 @@ def main():
                 if isinstance(generated_tokens, tuple):
                     generated_tokens = generated_tokens[0]
                 decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+                decoded_sent_preds = [
+                    re.findall(r'(<s\d+>)', x) for x in
+                    tokenizer.batch_decode(generated_tokens, skip_special_tokens=False)
+                ]
+
+                decoded_inputs = tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
+                predicted_extractives = []
+                for example_idx, decoded_input in enumerate(decoded_inputs):
+                    source_sent_tps = re.split(r'(<s\d+>)', decoded_input)
+                    first_sent = source_sent_tps[2]
+                    predicted_extractive_summary = []
+                    for sent_idx, tp in enumerate(source_sent_tps):
+                        if tp in decoded_sent_preds[example_idx]:
+                            predicted_extractive_summary.append(source_sent_tps[sent_idx + 1].strip())
+                    if len(predicted_extractive_summary) == 0:
+                        predicted_extractives.append(first_sent)
+                    else:
+                        predicted_extractives.append(' '.join(predicted_extractive_summary))
+
                 decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-                decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
-
+                decoded_preds, decoded_labels, predicted_extractives = postprocess_text(
+                    decoded_preds, decoded_labels, predicted_extractives
+                )
                 metric.add_batch(predictions=decoded_preds, references=decoded_labels)
+                extractive_metric.add_batch(predictions=predicted_extractives, references=decoded_labels)
         result = metric.compute(use_stemmer=True)
-        # Extract a few results from ROUGE
         result = {key: value.mid.fmeasure * 100 for key, value in result.items()}
-
+        extractive_result = extractive_metric.compute(use_stemmer=True)
+        extractive_result = {f'extract_{key}': round(value.mid.fmeasure * 100, 4) for key, value in extractive_result.items()}
+        avg_rouge = np.mean(list(result.values()))
         result = {k: round(v, 4) for k, v in result.items()}
-
+        result.update(extractive_result)
         logger.info(result)
-
-        if args.push_to_hub and epoch < args.num_train_epochs - 1:
+        if avg_rouge >= best_avg_rouge:
+            logger.info(f'Average ROUGE improved from {best_avg_rouge} to {avg_rouge}')
             accelerator.wait_for_everyone()
             unwrapped_model = accelerator.unwrap_model(model)
             unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
             if accelerator.is_main_process:
                 tokenizer.save_pretrained(args.output_dir)
-                repo.push_to_hub(
-                    commit_message=f"Training in progress epoch {epoch}", blocking=False, auto_lfs_prune=True
-                )
-
-    if args.output_dir is not None:
-        accelerator.wait_for_everyone()
-        unwrapped_model = accelerator.unwrap_model(model)
-        unwrapped_model.save_pretrained(args.output_dir, save_function=accelerator.save)
-        if accelerator.is_main_process:
-            tokenizer.save_pretrained(args.output_dir)
-            if args.push_to_hub:
-                repo.push_to_hub(commit_message="End of training", auto_lfs_prune=True)
+            best_avg_rouge = avg_rouge
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

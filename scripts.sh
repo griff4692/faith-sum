@@ -1,0 +1,11 @@
+python run_no_trainer.py \
+  --output_dir /nlp/projects/faithsum/cnn_dailymail/ft \
+  --model_name_or_path google/pegasus-cnn_dailymail \
+  --preprocessing_num_workers 8 \
+  --dataset_name cnn_dailymail \
+  --dataset_config_name 3.0.0 \
+  -debug \
+  --per_device_train_batch_size 1 \
+  --gradient_accumulation_steps 8 \
+  --max_train_steps 100000 \
+  --num_warmup_steps 200 \
