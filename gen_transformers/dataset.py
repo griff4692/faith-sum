@@ -51,7 +51,7 @@ class SummaryDataModule(pl.LightningDataModule):
         kwargs = {
             'batch_size': self.per_device_train_batch_size if split == 'train' else self.per_device_eval_batch_size,
             'shuffle': split == 'train',
-            'num_workers': 1 if self.debug else self.num_workers,
+            'num_workers': 0 if self.debug else self.num_workers,
             'collate_fn': collate_fn
         }
         return DataLoader(split_dataset_pl, **kwargs)
@@ -96,7 +96,7 @@ class SummarizationDataset(Dataset):
             # Sort oracle order or not
             oracle = gain_selection(source_sents_tok, target_sents_tok, 5, lower=True, sort=True)
             target_prefix = ''.join([f'<s{i}>' for i in oracle[0]]).strip()
-            target_annotated = f'{target_prefix}<sep>{target}'  # <sep>
+            target_annotated = f'{target_prefix}<sep>{target}'
         return {
             'source': source_annotated,
             'target': target_annotated

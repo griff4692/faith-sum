@@ -4,7 +4,6 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
 import pandas as pd
-import spacy
 from tqdm import tqdm
 import torch
 from transformers import AutoTokenizer
@@ -17,13 +16,22 @@ from global_utils import get_free_gpus
 GEN_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
-        # 'num_beams': 4,
+        'num_beams': 4,
         'length_penalty': 4.0,
         'max_length': 142,
         'min_length': 56,
-        # 'top_p': 0.92,
-        # 'top_k': 0,
-        # 'do_sample': True,
+    },
+}
+
+SAMPLE_KWARGS = {
+    'cnn_dailymail': {
+        # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
+        'length_penalty': 4.0,
+        'max_length': 142,
+        'min_length': 56,
+        'top_p': 0.92,
+        'top_k': 0,
+        'do_sample': True,
     },
 }
 
@@ -54,6 +62,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu_device', default=None, type=int)
     parser.add_argument('--max_examples', default=None, type=int)
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    parser.add_argument('-sample_gen', default=False, action='store_true')
 
     parser = TransformerSummarizer.add_model_specific_args(parser)
 
@@ -86,7 +95,7 @@ if __name__ == '__main__':
     model.on_predict_start()
     dataloader = datamodule.test_dataloader(max_examples=args.max_examples)
     outputs = []
-    gen_kwargs = GEN_KWARGS[args.dataset]
+    gen_kwargs = SAMPLE_KWARGS[args.dataset] if args.sample_gen else GEN_KWARGS[args.dataset]
     for batch in tqdm(dataloader, total=len(dataloader)):
         batch = {k: v.to(gpu) if type(v) == torch.Tensor else v for k, v in batch.items()}
         with torch.no_grad():

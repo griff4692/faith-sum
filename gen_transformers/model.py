@@ -4,10 +4,12 @@ from datasets import load_metric
 import pytorch_lightning as pl
 import nltk
 import numpy as np
+import spacy
 import torch
 from transformers import AutoModelForSeq2SeqLM
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
+from convert_abstractive_to_extractive import gain_selection
 
 
 def postprocess_text(texts):
@@ -29,6 +31,7 @@ class TransformerSummarizer(pl.LightningModule):
         self.train_size = None
         self.rouge = load_metric('rouge')
         self.label_smoother = LabelSmoother(epsilon=0.1)
+        self.nlp = spacy.load('en_core_web_sm')
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -74,6 +77,7 @@ class TransformerSummarizer(pl.LightningModule):
             'max_length': self.hparams.max_output_length,
             'no_repeat_ngram_size': 3,
             'early_stopping': True,
+            'output_scores': True
         }
         kwargs.update(gen_kwargs)
         generated_ids = self.model.generate(**kwargs)
@@ -82,7 +86,7 @@ class TransformerSummarizer(pl.LightningModule):
         output_ids = batch['labels']
         output_ids[torch.where(batch['labels'] == -100)] = 1
         gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True)
-        # TODO remove when this becomes special token
+        # TODO: remove when this becomes special token (won't be necessary with skip_special_tokens=True)
         gold_str = list(map(lambda x: x.replace('<sep>', '').strip(), gold_str))
         predicted_extracts = None
         if self.hparams.add_sent_toks:
@@ -91,21 +95,27 @@ class TransformerSummarizer(pl.LightningModule):
                 self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=False)
             ]
             decoded_inputs = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
+            decoded_inputs = np.repeat(decoded_inputs, kwargs['num_return_sequences'])
+            assert len(decoded_inputs) == len(decoded_sent_preds)
             predicted_extracts = []
             for example_idx, decoded_input in enumerate(decoded_inputs):
                 source_sent_tps = re.split(r'(<s\d+>)', decoded_input)
-                first_sent = source_sent_tps[2]
+                first_sent = source_sent_tps[2]  # normally, empty space, '<s0>, {body first sentence}
                 predicted_extractive_summary = []
                 for sent_idx, tp in enumerate(source_sent_tps):
                     if tp in decoded_sent_preds[example_idx]:
                         predicted_extractive_summary.append(source_sent_tps[sent_idx + 1].strip())
                 if len(predicted_extractive_summary) == 0:  # Default to LEAD-1 if none predicted
-                    predicted_extracts.append(first_sent)
+                    assert '<s' not in first_sent
+                    predicted_extracts.append({'idxs': '<s0>', 'summary': first_sent})
                 else:
-                    predicted_extracts.append(' '.join(predicted_extractive_summary))
-            predicted_extracts = postprocess_text(predicted_extracts)
-        generated_str = postprocess_text(generated_str)
+                    predicted_extracts.append({
+                        'idxs': decoded_sent_preds[example_idx],
+                        'summary': postprocess_text([' '.join(predicted_extractive_summary)])[0]
+                    })
+        generated_str = postprocess_text(generated_str)  # Just take the first generated
         gold_str = postprocess_text(gold_str)
+        # Might be over-generated predicted extracts
         return generated_str, gold_str, predicted_extracts
 
     def validation_step(self, batch, batch_idx):
@@ -113,6 +123,7 @@ class TransformerSummarizer(pl.LightningModule):
         loss = output.loss
         validation_kwargs = {
             'num_beams': 1,
+            'num_return_sequences': 1,
         }
 
         generated_str, gold_str, extracted_str = self.shared_generate(batch, **validation_kwargs)
@@ -165,19 +176,57 @@ class TransformerSummarizer(pl.LightningModule):
         return [optimizer], [lr_scheduler]
 
     def predict_step(self, batch, batch_idx=None, **gen_kwargs):
+        add_kwargs = {'num_return_sequences': 4}
+        gen_kwargs.update(add_kwargs)
         generated_str, gold_str, extracted_str = self.shared_generate(batch, **gen_kwargs)
+        # Take first abstractively generated sentence for now
+        generated_str = generated_str[0]
         source = self.tokenizer.batch_decode(batch['input_ids'].tolist(), skip_special_tokens=True)
-        outputs = self.rouge_metrics(generated_str, gold_str)
+        outputs = self.rouge_metrics([generated_str], gold_str)
+
         outputs['source'] = source
         outputs['prediction'] = generated_str
         outputs['target'] = gold_str
+
+        source_sents = list(self.nlp(source[0]).sents)
+        source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
+        pred_sents = list(self.nlp(generated_str).sents)
+        pred_sents_tok = [[str(token.text) for token in sentence] for sentence in pred_sents]
+        implied_oracle_idxs = gain_selection(source_sents_tok, pred_sents_tok, 5, lower=True, sort=True)[0]
+        implied_oracle = ' '.join([str(source_sents[i]) for i in implied_oracle_idxs])
+
+        implied_rouge = self.rouge_metrics([implied_oracle], gold_str)
+        for k, v in implied_rouge.items():
+            outputs[f'implied_{k}'] = v
+
         if extracted_str is not None:
-            outputs['extracted_str'] = extracted_str
-            extracted_metrics = self.rouge_metrics(extracted_str, gold_str)
-            for k, v in extracted_metrics.items():
+            all_metrics = []
+            predicted_tags = extracted_str[0]['idxs']
+            idxs = set([int(re.findall(r'\d+', tag)[0]) for tag in predicted_tags])
+            intersection = set(implied_oracle_idxs).intersection(idxs)
+            print(implied_oracle_idxs, sorted(list(idxs)))
+            overlap_p = len(intersection) / len(idxs)
+            overlap_r = len(intersection) / len(implied_oracle_idxs)
+            overlap_f1 = 0.0 if max(overlap_p, overlap_r) == 0 else 2 * overlap_p * overlap_r / (overlap_p + overlap_r)
+            outputs['implied_oracle_recall'] = overlap_r
+            outputs['implied_oracle_precision'] = overlap_p
+            outputs['implied_oracle_f1'] = overlap_f1
+            extracted_str_no_dup = list(set([sum['summary'] for sum in extracted_str]))
+            for extraction in extracted_str_no_dup:
+                all_metrics.append(self.rouge_metrics([extraction], gold_str))
+            avg_metrics = [np.mean(list(x.values())) for x in all_metrics]
+            best_idx = np.argmax(avg_metrics)
+            keys = list(all_metrics[0].keys())
+            avg_metrics = {k: np.mean([x[k] for x in all_metrics]) for k in keys}
+            best_metrics = all_metrics[best_idx]
+            for k, v in avg_metrics.items():
                 if v is None:
                     continue
-                outputs[f'extract_{k}'] = v
+                outputs[f'extract_avg_{k}'] = v
+            for k, v in best_metrics.items():
+                if v is None:
+                    continue
+                outputs[f'extract_best_{k}'] = v
         return outputs
 
     def get_progress_bar_dict(self):
