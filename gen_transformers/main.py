@@ -57,6 +57,7 @@ def run(args):
         add_tokens.append('<sep>')
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
+    tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
     tokenizer.save_pretrained(experiment_dir)
     if args.pretrained_path is None:
         model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model)
@@ -124,7 +125,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_gpus', default=1, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-no_schedule', default=False, action='store_true')
-    parser.add_argument('--max_steps', default=50000, type=int)
+    parser.add_argument('--max_steps', default=100000, type=int)
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-find_lr', default=False, action='store_true')
     parser.add_argument('-offline', default=False, action='store_true')
@@ -133,6 +134,7 @@ if __name__ == '__main__':
     parser.add_argument('-cpu', default=False, action='store_true')
     parser.add_argument('--gpu_device', default=None, type=int)
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    parser.add_argument('--plan_lambda', default=1.0, type=float)
 
     parser = TransformerSummarizer.add_model_specific_args(parser)
 

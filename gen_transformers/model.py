@@ -33,6 +33,9 @@ class TransformerSummarizer(pl.LightningModule):
         self.label_smoother = LabelSmoother(epsilon=0.1)
         self.nlp = spacy.load('en_core_web_sm')
 
+        # Pull out from regular NLL
+        self.special_id_cutoff = min(self.tokenizer.additional_special_tokens_ids)
+
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group('Summarization Finetuning')
@@ -45,6 +48,7 @@ class TransformerSummarizer(pl.LightningModule):
         parser.add_argument('--max_input_length', type=int, default=1024)
         parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
             'facebook/bart-base',
+            'facebook/bart-large',
         ])
         return parent_parser
 
@@ -52,8 +56,19 @@ class TransformerSummarizer(pl.LightningModule):
         output = self.model(**batch, use_cache=False)
         loss = output.loss
         self.log('train_loss', loss, on_epoch=False, on_step=True, prog_bar=True)
+
         smooth_loss = self.label_smoother(output, batch['labels'])
         return smooth_loss
+
+        # TODO workshop
+        # lm_mask = batch['labels'].le(self.special_id_cutoff - 1)
+        # plan_mask = batch['labels'].ge(self.special_id_cutoff)
+        # lm_loss = self.label_smoother(output, batch['labels'].masked_fill(plan_mask, -100))
+        # plan_loss = self.label_smoother(output, batch['labels'].masked_fill(lm_mask, -100))
+        # self.log('plan_loss', plan_loss, on_epoch=False, on_step=True, prog_bar=True)
+        # self.log('lm_loss', lm_loss, on_epoch=False, on_step=True, prog_bar=True)
+        # joint_loss = lm_loss + self.hparams.plan_lambda * plan_loss
+        # return joint_loss
 
     def rouge_metrics(self, generated, gold):
         rouge_types = ['rouge1', 'rouge2', 'rougeL']
@@ -107,7 +122,7 @@ class TransformerSummarizer(pl.LightningModule):
                         predicted_extractive_summary.append(source_sent_tps[sent_idx + 1].strip())
                 if len(predicted_extractive_summary) == 0:  # Default to LEAD-1 if none predicted
                     assert '<s' not in first_sent
-                    predicted_extracts.append({'idxs': '<s0>', 'summary': first_sent})
+                    predicted_extracts.append({'idxs': ['<s0>'], 'summary': first_sent})
                 else:
                     predicted_extracts.append({
                         'idxs': decoded_sent_preds[example_idx],
@@ -134,7 +149,47 @@ class TransformerSummarizer(pl.LightningModule):
             self.log(k, v, on_epoch=True, on_step=False, prog_bar=True)
 
         if extracted_str is not None:
-            extracted_metrics = self.rouge_metrics(extracted_str, gold_str)
+            source = self.tokenizer.batch_decode(batch['input_ids'].tolist(), skip_special_tokens=True)
+            source_docs = [list(self.nlp(x).sents) for x in source]
+            source_doc_sents_tok = [[[
+                str(token.text) for token in sentence] for sentence in doc] for doc in source_docs]
+            pred_sents = [list(self.nlp(x).sents) for x in generated_str]
+            pred_sents_tok = [[[
+                str(token.text) for token in sentence] for sentence in pred_sent] for pred_sent in pred_sents]
+            implied_oracles = []
+            implied_oracle_idxs = []
+            for batch_idx in range(len(source)):
+                implied_oracle_idx = gain_selection(
+                    source_doc_sents_tok[batch_idx], pred_sents_tok[batch_idx], 5, lower=True, sort=True
+                )[0]
+                implied_oracle = ' '.join([str(source_docs[batch_idx][i]) for i in implied_oracle_idx])
+                implied_oracles.append(implied_oracle)
+                implied_oracle_idxs.append(implied_oracle_idx)
+
+            implied_rouge = self.rouge_metrics(implied_oracles, gold_str)
+            for k, v in implied_rouge.items():
+                self.log(f'implied_{k}', v, on_epoch=True, on_step=False, prog_bar=True)
+            predicted_plan_idxs = [x['idxs'] for x in extracted_str]
+            for plan_tags, implied_idxs in zip(predicted_plan_idxs, implied_oracle_idxs):
+                idxs = set([int(re.findall(r'\d+', tag)[0]) for tag in plan_tags])
+                intersection = set(implied_idxs).intersection(idxs)
+                # print(implied_oracle_idxs, sorted(list(idxs)))
+                overlap_p = len(intersection) / len(idxs)
+                overlap_r = len(intersection) / len(implied_oracle_idxs)
+                overlap_f1 = 0.0 if max(overlap_p, overlap_r) == 0 else 2 * overlap_p * overlap_r / (
+                            overlap_p + overlap_r)
+                self.log('implied_oracle_recall', overlap_r, on_epoch=True, on_step=False, prog_bar=True)
+                self.log('implied_oracle_precision', overlap_p, on_epoch=True, on_step=False, prog_bar=True)
+                self.log('implied_oracle_f1', overlap_f1, on_epoch=True, on_step=False, prog_bar=True)
+
+            predicted_extract_summaries = [x['summary'] for x in extracted_str]
+            extracted_metrics = self.rouge_metrics(predicted_extract_summaries, gold_str)
+            plan_abstract_overlap = self.rouge_metrics(predicted_extract_summaries, generated_str)
+            self.log(
+                'extract_abstract_f1_overlap', plan_abstract_overlap['rouge1_f1'], on_epoch=True, on_step=False,
+                prog_bar=True
+            )
+
             for k, v in extracted_metrics.items():
                 if v is None:
                     continue
@@ -202,15 +257,20 @@ class TransformerSummarizer(pl.LightningModule):
         if extracted_str is not None:
             all_metrics = []
             predicted_tags = extracted_str[0]['idxs']
+            first_predicted_extract = extracted_str[0]['summary']
             idxs = set([int(re.findall(r'\d+', tag)[0]) for tag in predicted_tags])
             intersection = set(implied_oracle_idxs).intersection(idxs)
-            print(implied_oracle_idxs, sorted(list(idxs)))
+            # print(implied_oracle_idxs, sorted(list(idxs)))
             overlap_p = len(intersection) / len(idxs)
             overlap_r = len(intersection) / len(implied_oracle_idxs)
             overlap_f1 = 0.0 if max(overlap_p, overlap_r) == 0 else 2 * overlap_p * overlap_r / (overlap_p + overlap_r)
             outputs['implied_oracle_recall'] = overlap_r
             outputs['implied_oracle_precision'] = overlap_p
             outputs['implied_oracle_f1'] = overlap_f1
+
+            plan_abstract_overlap = self.rouge_metrics([first_predicted_extract], [generated_str])
+            outputs['extract_abstract_f1_overlap'] = plan_abstract_overlap['rouge1_f1']
+
             extracted_str_no_dup = list(set([sum['summary'] for sum in extracted_str]))
             for extraction in extracted_str_no_dup:
                 all_metrics.append(self.rouge_metrics([extraction], gold_str))
