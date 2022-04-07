@@ -231,7 +231,7 @@ class TransformerSummarizer(pl.LightningModule):
         return [optimizer], [lr_scheduler]
 
     def predict_step(self, batch, batch_idx=None, **gen_kwargs):
-        add_kwargs = {'num_return_sequences': 4}
+        add_kwargs = {'num_return_sequences': 10}
         gen_kwargs.update(add_kwargs)
         generated_str, gold_str, extracted_str = self.shared_generate(batch, **gen_kwargs)
         # Take first abstractively generated sentence for now

@@ -58,7 +58,7 @@ def run(args):
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
-    tokenizer.save_pretrained(experiment_dir)
+    tokenizer.save_pretrained(tokenizer_dir)
     if args.pretrained_path is None:
         model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model)
     else:
@@ -101,7 +101,7 @@ def run(args):
         val_check_interval=1.0 if args.debug else 0.25,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
         num_sanity_val_steps=2,
-        log_every_n_steps=2,
+        log_every_n_steps=25,
         max_steps=args.max_steps,
         plugins=plugins
     )
