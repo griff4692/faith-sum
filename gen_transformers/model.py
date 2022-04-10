@@ -257,8 +257,12 @@ class TransformerSummarizer(pl.LightningModule):
             abstracts = pred_str
         elif self.hparams.summary_style == 'hybrid_control':
             preds = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=False)
-            is_extractive = ['<extract>' in p for p in preds]
-            extracts = [preds[i] for i in range(len(is_extractive)) if is_extractive[i]]
+            source_special = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=False)
+            is_extractive = ['<extract>' in p for p in source_special]
+            extracts = [self.ensure_extract(
+                preds[i], source_docs[i], source_doc_sents_tok[i]) for i in range(len(is_extractive))
+                if is_extractive[i]
+            ]
             abstracts = [preds[i] for i in range(len(is_extractive)) if not is_extractive[i]]
             if len(extracts) == 0:
                 extracts = None
