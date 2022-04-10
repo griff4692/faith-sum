@@ -30,6 +30,7 @@ class SummaryDataModule(pl.LightningDataModule):
         self.add_sent_toks = args.add_sent_toks
         self.per_device_train_batch_size = args.per_device_train_batch_size
         self.per_device_eval_batch_size = args.per_device_eval_batch_size
+        self.summary_style = args.summary_style
 
     def get_split(self, split, max_examples=None):
         split_dataset = self.dataset[split]
@@ -41,12 +42,16 @@ class SummaryDataModule(pl.LightningDataModule):
             split_dataset = split_dataset.select(rand_idxs)
         split_dataset_pl = SummarizationDataset(
             split_dataset, split, self.nlp, self.max_input_length, dataset_name=self.name,
-            add_sent_toks=self.add_sent_toks
+            add_sent_toks=self.add_sent_toks, summary_style=self.summary_style
         )
+        add_cols = []
+        if split != 'train' and self.summary_style == 'plan':
+            add_cols.append('reference')
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.max_input_length,
             max_output_length=self.max_output_length,
+            add_cols=add_cols
         )
         kwargs = {
             'batch_size': self.per_device_train_batch_size if split == 'train' else self.per_device_eval_batch_size,
@@ -67,7 +72,8 @@ class SummaryDataModule(pl.LightningDataModule):
 
 
 class SummarizationDataset(Dataset):
-    def __init__(self, dataset, split, nlp, max_input_length, add_cols=None, dataset_name=None, add_sent_toks=False):
+    def __init__(self, dataset, split, nlp, max_input_length, add_cols=None, dataset_name=None, add_sent_toks=False,
+                 summary_style='abstract'):
         super(SummarizationDataset, self).__init__()
         self.nlp = nlp
         self.dataset = dataset
@@ -76,6 +82,8 @@ class SummarizationDataset(Dataset):
         self.add_cols = [] if add_cols is None else add_cols
         self.input_col, self.target_col = summarization_name_mapping[dataset_name]
         self.add_sent_toks = add_sent_toks
+        self.summary_style = summary_style
+        self.oracle_cutoff = 0.75  # TODO treat as hyper-parameter
 
     def __len__(self):
         return len(self.dataset)
@@ -86,18 +94,49 @@ class SummarizationDataset(Dataset):
         inputs = example[self.input_col]
         target = example[self.target_col]
 
-        source_annotated, target_annotated = inputs, target
+        source_annotated = inputs
+        if self.summary_style == 'abstract':
+            target_annotated = target
+            return {
+                'source': source_annotated,
+                'target': target_annotated
+            }
+
+        source_sents = list(self.nlp(inputs).sents)
+        source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
         if self.add_sent_toks:
-            source_sents = list(self.nlp(inputs).sents)
-            source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
-            target_sents = list(self.nlp(target).sents)
-            target_sents_tok = [[str(token.text) for token in sentence] for sentence in target_sents]
             source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
-            # Sort oracle order or not
-            oracle = gain_selection(source_sents_tok, target_sents_tok, 5, lower=True, sort=True)
-            target_prefix = ''.join([f'<s{i}>' for i in oracle[0]]).strip()
+        target_sents = list(self.nlp(target).sents)
+        target_sents_tok = [[str(token.text) for token in sentence] for sentence in target_sents]
+        # Sort oracle order or not
+        oracle = gain_selection(source_sents_tok, target_sents_tok, 5, lower=True, sort=True)
+        oracle_idxs = oracle[0]
+        target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs]).strip()
+        oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs])
+        if self.summary_style == 'extract':
+            if self.split == 'train':
+                target_annotated = oracle_summary
+            else:
+                target_annotated = target  # We are evaluating on the abstractive summary
+        elif self.summary_style == 'plan':
+            target_annotated = target_prefix
+        elif self.summary_style == 'plan_abstract':
             target_annotated = f'{target_prefix}<sep>{target}'
-        return {
+        elif self.summary_style == 'abstract_plan':
+            target_annotated = f'{target}<sep>{target_prefix}'
+        elif self.summary_style == 'hybrid_control':
+            good_oracle = oracle[1]['rouge_1'] >= self.oracle_cutoff
+            if self.split == 'train':
+                prefix = '<extract>' if good_oracle else '<abstract>'
+            else:
+                # TODO We can do better than this ultimately for evaluation
+                prefix = str(np.random.choice(['<abstract>', '<extract'], size=(1, ))[0])
+            target_annotated = oracle_summary if prefix == '<extract>' else target
+            source_annotated = prefix + source_annotated
+        output = {
             'source': source_annotated,
-            'target': target_annotated
+            'target': target_annotated,
         }
+        if self.split != 'train' and self.summary_style == 'plan':
+            output['reference'] = target
+        return output

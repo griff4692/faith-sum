@@ -1,6 +1,7 @@
 import regex as re
 
 from datasets import load_metric
+import pandas as pd
 import pytorch_lightning as pl
 import nltk
 import numpy as np
@@ -16,11 +17,21 @@ def postprocess_text(texts):
     return ['\n'.join(nltk.sent_tokenize(text.strip())) for text in texts]
 
 
+def source_from_ids(input_ids, nlp, tokenizer):
+    source = tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
+    source_docs = [list(nlp(x).sents) for x in source]
+    source_doc_sents_tok = [
+        [[str(token.text) for token in sentence] for sentence in doc] for doc in source_docs
+    ]
+    return {
+        'text': source,
+        'sents': source_docs,
+        'sent_toks': source_doc_sents_tok
+    }
+
+
 class TransformerSummarizer(pl.LightningModule):
     def __init__(self, args, tokenizer, hf_model):
-        """
-        bart_model -> can load in pre-trained bart weights outside of this function
-        """
         super().__init__()
         self.save_hyperparameters(args)
         self.tokenizer = tokenizer
@@ -34,7 +45,7 @@ class TransformerSummarizer(pl.LightningModule):
         self.nlp = spacy.load('en_core_web_sm')
 
         # Pull out from regular NLL
-        self.special_id_cutoff = min(self.tokenizer.additional_special_tokens_ids)
+        # self.special_id_cutoff = min(self.tokenizer.additional_special_tokens_ids)
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -49,6 +60,7 @@ class TransformerSummarizer(pl.LightningModule):
         parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
             'facebook/bart-base',
             'facebook/bart-large',
+            'Yale-LILY/brio-cnndm-uncased',
         ])
         return parent_parser
 
@@ -60,7 +72,7 @@ class TransformerSummarizer(pl.LightningModule):
         smooth_loss = self.label_smoother(output, batch['labels'])
         return smooth_loss
 
-        # TODO workshop
+        # TODO workshop ~ didn't seem to be working well
         # lm_mask = batch['labels'].le(self.special_id_cutoff - 1)
         # plan_mask = batch['labels'].ge(self.special_id_cutoff)
         # lm_loss = self.label_smoother(output, batch['labels'].masked_fill(plan_mask, -100))
@@ -70,19 +82,89 @@ class TransformerSummarizer(pl.LightningModule):
         # joint_loss = lm_loss + self.hparams.plan_lambda * plan_loss
         # return joint_loss
 
-    def rouge_metrics(self, generated, gold):
-        rouge_types = ['rouge1', 'rouge2', 'rougeL']
-        rouge_output = self.rouge.compute(predictions=generated, references=gold, rouge_types=rouge_types)
+    def validation_step(self, batch, batch_idx):
+        validation_kwargs = {
+            'num_beams': 1,
+            'num_return_sequences': 1,  # Don't over-generate for validation
+            'references': batch.pop('reference', None),
+        }
+        output = self.model(**batch)
+        loss = output.loss
 
-        stats = {}
-        f1s = []
-        for rouge_type in rouge_types:
-            stats[f'{rouge_type}_precision'] = rouge_output[rouge_type].mid.precision
-            stats[f'{rouge_type}_recall'] = rouge_output[rouge_type].mid.recall
-            stats[f'{rouge_type}_f1'] = rouge_output[rouge_type].mid.fmeasure
-            f1s.append(rouge_output[rouge_type].mid.fmeasure)
-        stats['mean_f1'] = np.array(f1s).mean()
-        return stats
+        all_metrics = {'val_loss': loss}
+        gen_output = self.shared_generate(batch, **validation_kwargs)
+        # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
+        if gen_output['abstracts'] is not None:
+            all_metrics.update(self.rouge_metrics(gen_output['abstracts'], gen_output['references']))
+            implied_extracts = [x['summary'] for x in gen_output['implied_extracts']]
+            all_metrics.update(self.rouge_metrics(implied_extracts, gen_output['references'], prefix='implied_'))
+
+        if gen_output['extracts'] is not None:
+            all_metrics.update(self.rouge_metrics(gen_output['extracts'], gen_output['references'], prefix='extract_'))
+
+        # Measure consistency between abstract (and implied extract) and generated extract
+        if gen_output['abstracts'] is not None and gen_output['extracts'] is not None:
+            all_metrics.update(self.measure_plan_abstract_consistency(gen_output))
+            # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
+            # If the plan is working, this should be very high (the abstract should follow the plan)
+            all_metrics.update(
+                self.rouge_metrics(gen_output['extracts'], gen_output['abstracts'], prefix='extract_gen_')
+            )
+
+        for k, v in all_metrics.items():
+            self.log(k, v, on_step=False, on_epoch=True, prog_bar=True)
+
+        return loss
+
+    def predict_step(self, batch, batch_idx=None, **gen_kwargs):
+        gen_kwargs.update({
+            'references': batch.pop('reference', None),
+        })
+        output = self.model(**batch)
+        loss = output.loss
+        gen_output = self.shared_generate(batch, **gen_kwargs)
+        reference = gen_output['references']
+        assert len(reference) == 1  # TODO - add support for multi-batch outputs
+
+        abstract_flat = '' if gen_output['abstracts'] is None else '<cand>'.join(gen_output['abstracts'])
+        extract_flat = '' if gen_output['extracts'] is None else '<cand>'.join(
+            [x['summary'] for x in gen_output['extracts']])
+        extract_idx_flat = '' if gen_output['extracts'] is None else '<cand>'.join(
+            [','.join(map(str, x['idxs'])) for x in gen_output['extracts']])
+        implied_extract_flat = '' if gen_output['implied_extracts'] is None else '<cand>'.join(
+            [x['summary'] for x in gen_output['implied_extracts']])
+        implied_extract_idx_flat = '' if gen_output['implied_extracts'] is None else '<cand>'.join(
+            [','.join(map(str, x['idxs'])) for x in gen_output['implied_extracts']])
+
+        save_out = {
+            'abstract': abstract_flat, 'extract': extract_flat, 'implied_extract': implied_extract_flat,
+            'reference': reference[0], 'source': gen_output['source']['text'][0],
+            'extract_idx': extract_idx_flat, 'implied_extract_idx': implied_extract_idx_flat, 'loss': loss,
+        }
+
+        # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
+        if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
+            save_out.update(self.rouge_metrics(gen_output['abstracts'][:1], gen_output['references'][:1]))
+            implied_extracts = [x['summary'] for x in gen_output['implied_extracts'][:1]]
+            save_out.update(self.rouge_metrics(implied_extracts, reference, prefix='implied_'))
+
+        if gen_output['extracts'] is not None:
+            extracts = [x['summary'] for x in gen_output['extracts']]
+            save_out.update(self.rouge_metrics(extracts[:1], reference, prefix='extract_'))
+            cand_metrics = [self.rouge_metrics([extract], reference, prefix='best_extract_') for extract in extracts]
+            best_metric = sorted(cand_metrics, key=lambda x: x['best_extract_mean_f1'])[-1]
+            save_out.update(best_metric)
+
+        # Measure consistency between abstract (and implied extract) and generated extract
+        if gen_output['abstracts'] is not None and gen_output['extracts'] is not None:
+            save_out.update(self.measure_plan_abstract_consistency(gen_output))
+            # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
+            # If the plan is working, this should be very high (the abstract should follow the plan)
+            save_out.update(
+                self.rouge_metrics(gen_output['extracts'], gen_output['abstracts'], prefix='extract_gen_')
+            )
+
+        return save_out
 
     def shared_generate(self, batch, **gen_kwargs):
         kwargs = {
@@ -94,25 +176,60 @@ class TransformerSummarizer(pl.LightningModule):
             'early_stopping': True,
             'output_scores': True
         }
+        references = gen_kwargs.pop('references', None)
         kwargs.update(gen_kwargs)
-        generated_ids = self.model.generate(**kwargs)
-        generated_str = self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=True)
-        generated_str = list(map(lambda x: x.strip(':'), generated_str))
-        output_ids = batch['labels']
-        output_ids[torch.where(batch['labels'] == -100)] = 1
-        gold_str = self.tokenizer.batch_decode(output_ids.tolist(), skip_special_tokens=True)
-        # TODO: remove when this becomes special token (won't be necessary with skip_special_tokens=True)
-        gold_str = list(map(lambda x: x.replace('<sep>', '').strip(), gold_str))
-        predicted_extracts = None
-        if self.hparams.add_sent_toks:
+        pred_ids = self.model.generate(**kwargs)
+        gold_ids = batch['labels']
+        gold_ids[torch.where(batch['labels'] == -100)] = 1
+        input_ids = batch['input_ids']
+        outputs = self.parse_output(pred_ids, gold_ids, input_ids, references=references)
+        return outputs
+
+    def ensure_extract(self, pred_str, source_sents, source_sent_toks):
+        extractive = []
+        idxs = []
+        for sent in list(self.nlp(pred_str).sents):
+            sent_toks = [str(token.text).strip() for token in sent if len(str(token.text).strip()) > 0]
+            max_intersect = 0
+            closest_sent = ''
+            best_idx = -1
+            for source_idx in range(len(source_sents)):
+                num_intersect = len(set(source_sent_toks[source_idx]).intersection(set(sent_toks)))
+                if num_intersect >= max_intersect:
+                    closest_sent = source_sents[source_idx]
+                    max_intersect = num_intersect
+                    best_idx = source_idx
+            idxs.append(best_idx)
+            extractive.append(str(closest_sent))
+        return {'summary': ' '.join(extractive), 'idxs': idxs}
+
+    def parse_output(self, pred_ids, gold_ids, input_ids, references=None):
+        if references is None:
+            references = self.tokenizer.batch_decode(gold_ids.tolist(), skip_special_tokens=True)
+        pred_str = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
+        batch_size = len(input_ids)
+
+        source_raw = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
+        source_docs = [list(self.nlp(x).sents) for x in source_raw]
+        source_doc_sents_tok = [
+            [[str(token.text).strip() for token in sentence if len(str(token.text).strip()) > 0] for sentence in doc]
+            for doc in source_docs
+        ]
+        source = {
+            'text': source_raw,
+            'sents': source_docs,
+            'sent_toks': source_doc_sents_tok
+        }
+
+        if 'plan' in self.hparams.summary_style:
             decoded_sent_preds = [
                 re.findall(r'(<s\d+>)', x) for x in
-                self.tokenizer.batch_decode(generated_ids.tolist(), skip_special_tokens=False)
+                self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=False)
             ]
-            decoded_inputs = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
-            decoded_inputs = np.repeat(decoded_inputs, kwargs['num_return_sequences'])
+            decoded_inputs = self.tokenizer.batch_decode(input_ids, skip_special_tokens=False)
+            decoded_inputs = list(np.repeat(decoded_inputs, len(decoded_sent_preds) // len(decoded_inputs)))
             assert len(decoded_inputs) == len(decoded_sent_preds)
-            predicted_extracts = []
+            extracts = []  # Get them from the plan
             for example_idx, decoded_input in enumerate(decoded_inputs):
                 source_sent_tps = re.split(r'(<s\d+>)', decoded_input)
                 first_sent = source_sent_tps[2]  # normally, empty space, '<s0>, {body first sentence}
@@ -120,82 +237,95 @@ class TransformerSummarizer(pl.LightningModule):
                 for sent_idx, tp in enumerate(source_sent_tps):
                     if tp in decoded_sent_preds[example_idx]:
                         predicted_extractive_summary.append(source_sent_tps[sent_idx + 1].strip())
+                #  (should only happen before training starts)
                 if len(predicted_extractive_summary) == 0:  # Default to LEAD-1 if none predicted
                     assert '<s' not in first_sent
-                    predicted_extracts.append({'idxs': ['<s0>'], 'summary': first_sent})
+                    extracts.append({'idxs': ['<s0>'], 'summary': first_sent})
                 else:
-                    predicted_extracts.append({
+                    extracts.append({
                         'idxs': decoded_sent_preds[example_idx],
                         'summary': postprocess_text([' '.join(predicted_extractive_summary)])[0]
                     })
-        generated_str = postprocess_text(generated_str)  # Just take the first generated
-        gold_str = postprocess_text(gold_str)
-        # Might be over-generated predicted extracts
-        return generated_str, gold_str, predicted_extracts
+            abstracts = None if self.hparams.summary_style == 'plan' else pred_str
+        elif self.hparams.summary_style == 'extract':  # Our abstractive generation is actually an extract
+            extracts = list(map(
+                lambda i: self.ensure_extract(pred_str[i], source_docs[i], source_doc_sents_tok[i]), range(batch_size)
+            ))
+            abstracts = None
+        elif self.hparams.summary_style == 'abstract':
+            extracts = None
+            abstracts = pred_str
+        elif self.hparams.summary_style == 'hybrid_control':
+            preds = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=False)
+            is_extractive = ['<extract>' in p for p in preds]
+            extracts = [preds[i] for i in range(len(is_extractive)) if is_extractive[i]]
+            abstracts = [preds[i] for i in range(len(is_extractive)) if not is_extractive[i]]
+            if len(extracts) == 0:
+                extracts = None
+            if len(abstracts) == 0:
+                abstracts = None
+        else:
+            raise Exception(f'Unrecognized summary style -> {self.hparams.summary_style}')
 
-    def validation_step(self, batch, batch_idx):
-        output = self.model(**batch)
-        loss = output.loss
-        validation_kwargs = {
-            'num_beams': 1,
-            'num_return_sequences': 1,
+        implied_extracts = None
+        if abstracts is not None:
+            implied_extracts = []
+            abstract_sents = [list(self.nlp(x).sents) for x in abstracts]
+            abstract_sents_tok = [[[
+                str(token.text) for token in sentence] for sentence in abstract_sent] for abstract_sent in
+                abstract_sents]
+            for batch_idx in range(batch_size):
+                source_toks = source['sent_toks'][batch_idx]
+                implied_oracle_idx = gain_selection(
+                    source_toks, abstract_sents_tok[batch_idx], 5, lower=True, sort=True
+                )[0]
+                implied_oracle = ' '.join([str(source_toks[i]) for i in implied_oracle_idx])
+                implied_extracts.append({
+                    'idxs': implied_oracle_idx,
+                    'summary': implied_oracle,
+                })
+
+        # Extracts are represented as a dictionary of 'idxs' (indices of source sentences extracted)
+        # and 'summary' (actual text)
+        return {
+            'source': source,
+            'abstracts': abstracts,
+            'extracts': extracts,
+            'implied_extracts': implied_extracts,
+            'references': references,
         }
 
-        generated_str, gold_str, extracted_str = self.shared_generate(batch, **validation_kwargs)
-        metrics = self.rouge_metrics(generated_str, gold_str)
-        for k, v in metrics.items():
-            if v is None:
-                continue
-            self.log(k, v, on_epoch=True, on_step=False, prog_bar=True)
+    def measure_plan_abstract_consistency(self, outputs):
+        extract_idxs = [x['idxs'] for x in outputs['extracts']]
+        implied_extract_idxs = [x['idxs'] for x in outputs['implied_extracts']]
+        overlaps = []
+        for extract_idx, implied_idx in zip(extract_idxs, implied_extract_idxs):
+            idxs = set([int(re.findall(r'\d+', tag)[0]) for tag in extract_idx])
+            intersection = set(implied_idx).intersection(idxs)
+            overlap_p = len(intersection) / len(idxs)
+            overlap_r = len(intersection) / len(implied_idx)
+            overlap_f1 = 0.0 if max(overlap_p, overlap_r) == 0 else 2 * overlap_p * overlap_r / (
+                    overlap_p + overlap_r)
+            overlaps.append({
+                'extract_implied_sent_precision': overlap_p,
+                'extract_implied_sent_recall': overlap_r,
+                'extract_implied_sent_f1': overlap_f1
+            })
+        df = pd.DataFrame(overlaps)
+        return {k: df[k].mean() for k in df.columns}
 
-        if extracted_str is not None:
-            source = self.tokenizer.batch_decode(batch['input_ids'].tolist(), skip_special_tokens=True)
-            source_docs = [list(self.nlp(x).sents) for x in source]
-            source_doc_sents_tok = [[[
-                str(token.text) for token in sentence] for sentence in doc] for doc in source_docs]
-            pred_sents = [list(self.nlp(x).sents) for x in generated_str]
-            pred_sents_tok = [[[
-                str(token.text) for token in sentence] for sentence in pred_sent] for pred_sent in pred_sents]
-            implied_oracles = []
-            implied_oracle_idxs = []
-            for batch_idx in range(len(source)):
-                implied_oracle_idx = gain_selection(
-                    source_doc_sents_tok[batch_idx], pred_sents_tok[batch_idx], 5, lower=True, sort=True
-                )[0]
-                implied_oracle = ' '.join([str(source_docs[batch_idx][i]) for i in implied_oracle_idx])
-                implied_oracles.append(implied_oracle)
-                implied_oracle_idxs.append(implied_oracle_idx)
-
-            implied_rouge = self.rouge_metrics(implied_oracles, gold_str)
-            for k, v in implied_rouge.items():
-                self.log(f'implied_{k}', v, on_epoch=True, on_step=False, prog_bar=True)
-            predicted_plan_idxs = [x['idxs'] for x in extracted_str]
-            for plan_tags, implied_idxs in zip(predicted_plan_idxs, implied_oracle_idxs):
-                idxs = set([int(re.findall(r'\d+', tag)[0]) for tag in plan_tags])
-                intersection = set(implied_idxs).intersection(idxs)
-                # print(implied_oracle_idxs, sorted(list(idxs)))
-                overlap_p = len(intersection) / len(idxs)
-                overlap_r = len(intersection) / len(implied_oracle_idxs)
-                overlap_f1 = 0.0 if max(overlap_p, overlap_r) == 0 else 2 * overlap_p * overlap_r / (
-                            overlap_p + overlap_r)
-                self.log('implied_oracle_recall', overlap_r, on_epoch=True, on_step=False, prog_bar=True)
-                self.log('implied_oracle_precision', overlap_p, on_epoch=True, on_step=False, prog_bar=True)
-                self.log('implied_oracle_f1', overlap_f1, on_epoch=True, on_step=False, prog_bar=True)
-
-            predicted_extract_summaries = [x['summary'] for x in extracted_str]
-            extracted_metrics = self.rouge_metrics(predicted_extract_summaries, gold_str)
-            plan_abstract_overlap = self.rouge_metrics(predicted_extract_summaries, generated_str)
-            self.log(
-                'extract_abstract_f1_overlap', plan_abstract_overlap['rouge1_f1'], on_epoch=True, on_step=False,
-                prog_bar=True
-            )
-
-            for k, v in extracted_metrics.items():
-                if v is None:
-                    continue
-                self.log(f'extract_{k}', v, on_epoch=True, on_step=False, prog_bar=True)
-        self.log('val_loss', loss, on_epoch=True, on_step=False, prog_bar=True)
-        return loss
+    def rouge_metrics(self, generated, gold, prefix=''):
+        rouge_types = ['rouge1', 'rouge2', 'rougeL']
+        rouge_output = self.rouge.compute(predictions=generated, references=gold, rouge_types=rouge_types)
+        stats = {}
+        f1s = []
+        for rouge_type in rouge_types:
+            stats[f'{prefix}{rouge_type}_precision'] = rouge_output[rouge_type].mid.precision
+            stats[f'{prefix}{rouge_type}_recall'] = rouge_output[rouge_type].mid.recall
+            stats[f'{prefix}{rouge_type}_f1'] = rouge_output[rouge_type].mid.fmeasure
+            f1s.append(rouge_output[rouge_type].mid.fmeasure)
+        stats[f'{prefix}mean_f1'] = np.array(f1s).mean()
+        return stats
 
     def configure_optimizers(self):
         no_decay = ['bias', 'LayerNorm.weight']
@@ -229,65 +359,6 @@ class TransformerSummarizer(pl.LightningModule):
         }
 
         return [optimizer], [lr_scheduler]
-
-    def predict_step(self, batch, batch_idx=None, **gen_kwargs):
-        add_kwargs = {'num_return_sequences': 10}
-        gen_kwargs.update(add_kwargs)
-        generated_str, gold_str, extracted_str = self.shared_generate(batch, **gen_kwargs)
-        # Take first abstractively generated sentence for now
-        generated_str = generated_str[0]
-        source = self.tokenizer.batch_decode(batch['input_ids'].tolist(), skip_special_tokens=True)
-        outputs = self.rouge_metrics([generated_str], gold_str)
-
-        outputs['source'] = source
-        outputs['prediction'] = generated_str
-        outputs['target'] = gold_str
-
-        source_sents = list(self.nlp(source[0]).sents)
-        source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
-        pred_sents = list(self.nlp(generated_str).sents)
-        pred_sents_tok = [[str(token.text) for token in sentence] for sentence in pred_sents]
-        implied_oracle_idxs = gain_selection(source_sents_tok, pred_sents_tok, 5, lower=True, sort=True)[0]
-        implied_oracle = ' '.join([str(source_sents[i]) for i in implied_oracle_idxs])
-
-        implied_rouge = self.rouge_metrics([implied_oracle], gold_str)
-        for k, v in implied_rouge.items():
-            outputs[f'implied_{k}'] = v
-
-        if extracted_str is not None:
-            all_metrics = []
-            predicted_tags = extracted_str[0]['idxs']
-            first_predicted_extract = extracted_str[0]['summary']
-            idxs = set([int(re.findall(r'\d+', tag)[0]) for tag in predicted_tags])
-            intersection = set(implied_oracle_idxs).intersection(idxs)
-            # print(implied_oracle_idxs, sorted(list(idxs)))
-            overlap_p = len(intersection) / len(idxs)
-            overlap_r = len(intersection) / len(implied_oracle_idxs)
-            overlap_f1 = 0.0 if max(overlap_p, overlap_r) == 0 else 2 * overlap_p * overlap_r / (overlap_p + overlap_r)
-            outputs['implied_oracle_recall'] = overlap_r
-            outputs['implied_oracle_precision'] = overlap_p
-            outputs['implied_oracle_f1'] = overlap_f1
-
-            plan_abstract_overlap = self.rouge_metrics([first_predicted_extract], [generated_str])
-            outputs['extract_abstract_f1_overlap'] = plan_abstract_overlap['rouge1_f1']
-
-            extracted_str_no_dup = list(set([sum['summary'] for sum in extracted_str]))
-            for extraction in extracted_str_no_dup:
-                all_metrics.append(self.rouge_metrics([extraction], gold_str))
-            avg_metrics = [np.mean(list(x.values())) for x in all_metrics]
-            best_idx = np.argmax(avg_metrics)
-            keys = list(all_metrics[0].keys())
-            avg_metrics = {k: np.mean([x[k] for x in all_metrics]) for k in keys}
-            best_metrics = all_metrics[best_idx]
-            for k, v in avg_metrics.items():
-                if v is None:
-                    continue
-                outputs[f'extract_avg_{k}'] = v
-            for k, v in best_metrics.items():
-                if v is None:
-                    continue
-                outputs[f'extract_best_{k}'] = v
-        return outputs
 
     def get_progress_bar_dict(self):
         # don't show the version number

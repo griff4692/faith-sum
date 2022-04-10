@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, Mode
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.plugins import DDPPlugin
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, BartTokenizer
 
 from gen_transformers.dataset import SummaryDataModule
 from gen_transformers.model import TransformerSummarizer
@@ -50,15 +50,23 @@ def run(args):
     precision = 16 if args.num_gpus is not None else 32
     experiment_dir = os.path.join(args.weight_dir, args.experiment)
     os.makedirs(os.path.join(experiment_dir, 'wandb'), exist_ok=True)  # Only way to make sure it's writable
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
+    if 'brio' in args.hf_model:
+        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
 
     if args.add_sent_toks:
         add_tokens = [f'<s{i}>' for i in range(100)]
         add_tokens.append('<sep>')
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
+
+    if args.summary_style == 'hybrid_control':
+        special_tokens_dict = {'additional_special_tokens': ['<extract>', '<abstract>']}
+        tokenizer.add_special_tokens(special_tokens_dict)
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
-    tokenizer.save_pretrained(tokenizer_dir)
+    if not args.debug:
+        tokenizer.save_pretrained(tokenizer_dir)
     if args.pretrained_path is None:
         model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model)
     else:
@@ -125,7 +133,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_gpus', default=1, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-no_schedule', default=False, action='store_true')
-    parser.add_argument('--max_steps', default=100000, type=int)
+    parser.add_argument('--max_steps', default=150000, type=int)
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-find_lr', default=False, action='store_true')
     parser.add_argument('-offline', default=False, action='store_true')
@@ -133,16 +141,31 @@ if __name__ == '__main__':
     parser.add_argument('--max_val_num', default=1024, type=int)
     parser.add_argument('-cpu', default=False, action='store_true')
     parser.add_argument('--gpu_device', default=None, type=int)
-    parser.add_argument('-add_sent_toks', default=False, action='store_true')
     parser.add_argument('--plan_lambda', default=1.0, type=float)
+    parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
+    parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    parser.add_argument(
+        '--summary_style',
+        default='plan_abstract',
+        choices=[
+            'plan_abstract',
+            'abstract_plan',
+            'extract',
+            'plan',
+            'abstract',
+            'hybrid_control',
+        ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
+                'abstract is original reference'
+    )
 
     parser = TransformerSummarizer.add_model_specific_args(parser)
 
     args = parser.parse_args()
+
+    # If we are generating a sentence plan, we need to include <s{idx}> tokens in the source input
+    args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
     args.weight_dir = os.path.join(args.data_dir, 'weights')
     os.makedirs(args.weight_dir, exist_ok=True)
-
-    args.pretrained_path = None
 
     # Set same random seed for each run
     set_same_seed(args.seed)

@@ -43,7 +43,7 @@ SAMPLE_KWARGS = {
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Experiment with Models.')
-    parser.add_argument('--wandb_name', default='cnn_bart_extract_prefix')
+    parser.add_argument('--wandb_name', default='v2')
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-cpu', default=False, action='store_true')
@@ -51,6 +51,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_examples', default=None, type=int)
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
     parser.add_argument('-sample_gen', default=False, action='store_true')
+    parser.add_argument('--summary_style', default='plan_abstract')
 
     parser = TransformerSummarizer.add_model_specific_args(parser)
 
@@ -58,6 +59,7 @@ if __name__ == '__main__':
 
     # TODO Support batches for predictions (simple fix)
     args.per_device_eval_batch_size = 1
+    args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
 
     free_gpus = get_free_gpus()
     gpu = free_gpus[0] if args.gpu_device is None else args.gpu_device
@@ -115,6 +117,7 @@ if __name__ == '__main__':
     # 'min_length': 56,
     with torch.no_grad():
         outputs = model.generate(
-
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            **SAMPLE_KWARGS[args.dataset]
         )
-

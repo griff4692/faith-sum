@@ -16,7 +16,8 @@ from global_utils import get_free_gpus
 GEN_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
-        'num_beams': 4,
+        'num_beams': 5,
+        'num_return_sequences': 5,
         'length_penalty': 4.0,
         'max_length': 142,
         'min_length': 56,
@@ -32,6 +33,7 @@ SAMPLE_KWARGS = {
         'top_p': 0.92,
         'top_k': 0,
         'do_sample': True,
+        'num_return_sequences': 10  # Overgenerate to get upper bound
     },
 }
 
@@ -61,12 +63,27 @@ if __name__ == '__main__':
     parser.add_argument('-cpu', default=False, action='store_true')
     parser.add_argument('--gpu_device', default=None, type=int)
     parser.add_argument('--max_examples', default=None, type=int)
-    parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    # Beam Search or Nucleus Sampling (more diverse)
     parser.add_argument('-sample_gen', default=False, action='store_true')
+    parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    parser.add_argument(
+        '--summary_style',
+        default='plan_abstract',
+        choices=[
+            'plan_abstract',
+            'abstract_plan',
+            'extract',
+            'plan',
+            'abstract',
+            'hybrid_control',
+        ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
+                'abstract is original reference'
+    )
 
     parser = TransformerSummarizer.add_model_specific_args(parser)
 
     args = parser.parse_args()
+    args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
 
     # TODO Support batches for predictions (simple fix)
     args.per_device_eval_batch_size = 1
@@ -91,6 +108,8 @@ if __name__ == '__main__':
     print(f'Loading model from {ckpt_path}...')
     model = TransformerSummarizer.load_from_checkpoint(
         checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(gpu).eval()
+    # TODO why do we need this
+    model.hparams.summary_style = args.summary_style
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
     dataloader = datamodule.test_dataloader(max_examples=args.max_examples)
@@ -112,3 +131,15 @@ if __name__ == '__main__':
     num_col = outputs.select_dtypes('number')
     for col in list(num_col.columns):
         print(f'{col}: {num_col[col].dropna().mean()}')
+
+    table_cols = [
+        'abstract_rouge_f1',
+        'abstract_rouge2_f1',
+        'abstract_rougeL_f1',
+        'extract_rouge1_f1',
+        'extract_rouge2_f1',
+        'extract_rougeL_f1',
+        'implied_extract_rouge1_f1',
+        'implied_extract_rouge2_f1',
+        'implied_extract_rougeL_f1',
+    ]
