@@ -17,7 +17,7 @@ GEN_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
         'num_beams': 5,
-        'num_return_sequences': 5,
+        'num_return_sequences': 1,
         'length_penalty': 4.0,
         'max_length': 142,
         'min_length': 56,

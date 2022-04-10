@@ -51,6 +51,7 @@ class TransformerSummarizer(pl.LightningModule):
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group('Summarization Finetuning')
         parser.add_argument('--lr', type=float, default=2.2e-4)
+        parser.add_argument('--warmup_steps', type=int, default=200)
         parser.add_argument('--target_batch_size', type=int, default=16)
         parser.add_argument('--per_device_train_batch_size', type=int, default=8)
         parser.add_argument('--per_device_eval_batch_size', type=int, default=16)
@@ -188,7 +189,8 @@ class TransformerSummarizer(pl.LightningModule):
     def ensure_extract(self, pred_str, source_sents, source_sent_toks):
         extractive = []
         idxs = []
-        for sent in list(self.nlp(pred_str).sents):
+        pred_sents = list(self.nlp(pred_str).sents)
+        for sent in pred_sents:
             sent_toks = [str(token.text).strip() for token in sent if len(str(token.text).strip()) > 0]
             max_intersect = 0
             closest_sent = ''
@@ -221,6 +223,7 @@ class TransformerSummarizer(pl.LightningModule):
             'sent_toks': source_doc_sents_tok
         }
 
+        # abstract_idxs = list(range(batch_size))
         if 'plan' in self.hparams.summary_style:
             decoded_sent_preds = [
                 re.findall(r'(<s\d+>)', x) for x in
@@ -256,14 +259,14 @@ class TransformerSummarizer(pl.LightningModule):
             extracts = None
             abstracts = pred_str
         elif self.hparams.summary_style == 'hybrid_control':
-            preds = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=False)
             source_special = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=False)
             is_extractive = ['<extract>' in p for p in source_special]
             extracts = [self.ensure_extract(
-                preds[i], source_docs[i], source_doc_sents_tok[i]) for i in range(len(is_extractive))
+                pred_str[i], source_docs[i], source_doc_sents_tok[i]) for i in range(len(is_extractive))
                 if is_extractive[i]
             ]
-            abstracts = [preds[i] for i in range(len(is_extractive)) if not is_extractive[i]]
+            abstracts = [pred_str[i] for i in range(len(is_extractive)) if not is_extractive[i]]
+            # abstract_idxs = [i for i in abstract_idxs if not is_extractive[i]]
             if len(extracts) == 0:
                 extracts = None
             if len(abstracts) == 0:
@@ -278,11 +281,9 @@ class TransformerSummarizer(pl.LightningModule):
             abstract_sents_tok = [[[
                 str(token.text) for token in sentence] for sentence in abstract_sent] for abstract_sent in
                 abstract_sents]
-            for batch_idx in range(batch_size):
-                source_toks = source['sent_toks'][batch_idx]
-                implied_oracle_idx = gain_selection(
-                    source_toks, abstract_sents_tok[batch_idx], 5, lower=True, sort=True
-                )[0]
+            for idx in range(batch_size):
+                source_toks = source['sent_toks'][idx]
+                implied_oracle_idx = gain_selection(source_toks, abstract_sents_tok[idx], 5, lower=True, sort=True)[0]
                 implied_oracle = ' '.join([str(source_toks[i]) for i in implied_oracle_idx])
                 implied_extracts.append({
                     'idxs': implied_oracle_idx,
@@ -351,10 +352,8 @@ class TransformerSummarizer(pl.LightningModule):
 
         # 6% is somewhat standard for fine-tuning Transformers (can be a tunable hyper-parameter as well)
         # nonzero warmup helps mitigate risk of catastrophic forgetting from pre-training (big risk bc/ of new domain)
-        # warmup = round(0.06 * self.hparams.max_steps)
-        warmup = 200
         scheduler = get_linear_schedule_with_warmup(
-            optimizer, num_warmup_steps=warmup, num_training_steps=self.hparams.max_steps)
+            optimizer, num_warmup_steps=self.hparams.warmup_steps, num_training_steps=self.hparams.max_steps)
 
         lr_scheduler = {
             'scheduler': scheduler,
