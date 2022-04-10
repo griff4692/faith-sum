@@ -130,7 +130,7 @@ class SummarizationDataset(Dataset):
                 prefix = '<extract>' if good_oracle else '<abstract>'
             else:
                 # TODO We can do better than this ultimately for evaluation
-                prefix = str(np.random.choice(['<abstract>', '<extract'], size=(1, ))[0])
+                prefix = str(np.random.choice(['<abstract>', '<extract>'], size=(1, ))[0])
             target_annotated = oracle_summary if prefix == '<extract>' else target
             source_annotated = prefix + source_annotated
         output = {

@@ -27,13 +27,19 @@ GEN_KWARGS = {
 SAMPLE_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
-        'length_penalty': 4.0,
+        # 'length_penalty': 4.0,
         'max_length': 142,
         'min_length': 56,
-        'top_p': 0.92,
-        'top_k': 0,
-        'do_sample': True,
-        'num_return_sequences': 10  # Overgenerate to get upper bound
+        # 'top_p': 0.92,
+        # 'top_k': 0,
+        # 'do_sample': True,
+        # 'num_return_sequences': 10  # Over-generate to get upper bound
+        # https://github.com/andrejmiscic/simcls-pytorch/blob/2f0f8e00636f3eeebe2d41b4d318744a89602959/src/model.py
+        'num_return_sequences': 16,
+        'num_beam_groups': 16,
+        'num_beams': 16,
+        'diversity_penalty': 1.0,
+        'length_penalty': 2.,
     },
 }
 

@@ -167,7 +167,7 @@ class TransformerSummarizer(pl.LightningModule):
         return save_out
 
     def shared_generate(self, batch, **gen_kwargs):
-        kwargs = {
+        default_kwargs = {  # These may get overridden by gen_kwargs
             'input_ids': batch['input_ids'],
             'attention_mask': batch['attention_mask'],
             'num_return_sequences': 1,
@@ -177,8 +177,8 @@ class TransformerSummarizer(pl.LightningModule):
             'output_scores': True
         }
         references = gen_kwargs.pop('references', None)
-        kwargs.update(gen_kwargs)
-        pred_ids = self.model.generate(**kwargs)
+        default_kwargs.update(gen_kwargs)
+        pred_ids = self.model.generate(**default_kwargs)
         gold_ids = batch['labels']
         gold_ids[torch.where(batch['labels'] == -100)] = 1
         input_ids = batch['input_ids']
