@@ -47,24 +47,6 @@ class TransformerSummarizer(pl.LightningModule):
         # Pull out from regular NLL
         # self.special_id_cutoff = min(self.tokenizer.additional_special_tokens_ids)
 
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = parent_parser.add_argument_group('Summarization Finetuning')
-        parser.add_argument('--lr', type=float, default=2.2e-4)
-        parser.add_argument('--warmup_steps', type=int, default=200)
-        parser.add_argument('--target_batch_size', type=int, default=16)
-        parser.add_argument('--per_device_train_batch_size', type=int, default=8)
-        parser.add_argument('--per_device_eval_batch_size', type=int, default=16)
-        parser.add_argument('--weight_decay', type=float, default=5e-5)
-        parser.add_argument('--max_output_length', type=int, default=256)
-        parser.add_argument('--max_input_length', type=int, default=1024)
-        parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
-            'facebook/bart-base',
-            'facebook/bart-large',
-            'Yale-LILY/brio-cnndm-uncased',
-        ])
-        return parent_parser
-
     def training_step(self, batch, batch_idx):
         output = self.model(**batch, use_cache=False)
         loss = output.loss
@@ -192,6 +174,8 @@ class TransformerSummarizer(pl.LightningModule):
         pred_sents = list(self.nlp(pred_str).sents)
         for sent in pred_sents:
             sent_toks = [str(token.text).strip() for token in sent if len(str(token.text).strip()) > 0]
+            if len(sent_toks) <= 1:
+                continue
             max_intersect = 0
             closest_sent = ''
             best_idx = -1
@@ -208,7 +192,21 @@ class TransformerSummarizer(pl.LightningModule):
     def parse_output(self, pred_ids, gold_ids, input_ids, references=None):
         if references is None:
             references = self.tokenizer.batch_decode(gold_ids.tolist(), skip_special_tokens=True)
-        pred_str = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
+
+        if self.hparams.fragments:  # Remove the pre-pended predicted extractive fragments
+            pred_str = []
+            for pred_id in pred_ids:
+                # Find <sep> token and only take everything after
+                idx = torch.where(pred_id == self.tokenizer.encode('<sep>', include_special_tokens=False)[0])
+                sep_id = self.tokenizer.encode('<sep>', include_special_tokens=False)[0]
+                try:
+                    decode_start_idx = int(torch.where(pred_id == sep_id)[0].item()) + 1
+                except:
+                    print('No predicted <sep> token...')
+                    decode_start_idx = 0
+                pred_str.append(self.tokenizer.decode(pred_id[decode_start_idx:], skip_special_tokens=True))
+        else:
+            pred_str = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
         batch_size = len(input_ids)
 
         source_raw = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
@@ -321,6 +319,12 @@ class TransformerSummarizer(pl.LightningModule):
 
     def rouge_metrics(self, generated, gold, prefix=''):
         rouge_types = ['rouge1', 'rouge2', 'rougeL']
+
+        # Tokenize and lowercase? -- doesn't seem to change scores.
+        # from nltk import word_tokenize
+        # generated = [' '.join(word_tokenize(x.lower())) for x in generated]
+        # gold = [' '.join(word_tokenize(x.lower())) for x in gold]
+
         rouge_output = self.rouge.compute(predictions=generated, references=gold, rouge_types=rouge_types)
         stats = {}
         f1s = []

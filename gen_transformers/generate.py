@@ -6,7 +6,7 @@ import argparse
 import pandas as pd
 from tqdm import tqdm
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, BartTokenizer
 
 from gen_transformers.dataset import SummaryDataModule
 from gen_transformers.model import TransformerSummarizer
@@ -72,6 +72,7 @@ if __name__ == '__main__':
     # Beam Search or Nucleus Sampling (more diverse)
     parser.add_argument('-sample_gen', default=False, action='store_true')
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    parser.add_argument('-fragments', default=False, action='store_true')
     parser.add_argument(
         '--summary_style',
         default='plan_abstract',
@@ -85,8 +86,11 @@ if __name__ == '__main__':
         ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
                 'abstract is original reference'
     )
-
-    parser = TransformerSummarizer.add_model_specific_args(parser)
+    parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
+        'facebook/bart-base',
+        'facebook/bart-large',
+        'Yale-LILY/brio-cnndm-uncased',
+    ])
 
     args = parser.parse_args()
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
@@ -107,15 +111,24 @@ if __name__ == '__main__':
         print(f'Warning! Youve selected a GPU that is not available.  Putting the model on {free_gpus[0]} instead.')
         gpu = free_gpus[0]
 
-    print(f'Loading tokenizer from {args.hf_model}...')
     tokenizer_dir = os.path.join(weight_dir, args.wandb_name, 'tokenizer')
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
+    print(f'Loading tokenizer from {tokenizer_dir}...')
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
+    except:  # BRIO model doesn't load from AutoTokenizer
+        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
 
     print(f'Loading model from {ckpt_path}...')
     model = TransformerSummarizer.load_from_checkpoint(
         checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(gpu).eval()
+
+    # TODO remove
+    # tokenizer = BartTokenizer.from_pretrained('Yale-LILY/brio-cnndm-uncased')
+    # model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model='Yale-LILY/brio-cnndm-uncased').to(gpu).eval()
+
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style
+    model.hparams.fragments = args.fragments
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
     dataloader = datamodule.test_dataloader(max_examples=args.max_examples)
@@ -149,3 +162,14 @@ if __name__ == '__main__':
         'implied_extract_rouge2_f1',
         'implied_extract_rougeL_f1',
     ]
+
+    out_str = ''
+    for col in table_cols:
+        try:
+            v = outputs[col].dropna().mean()
+            out_str += f'{round(v, 3)},'
+        except:  # If the column doesn't exist (i.e., we are generating for an abstractive model, extract_ won't exist)
+            out_str += ','
+    out_str.strip(',')
+    print(','.join(table_cols))
+    print(out_str)

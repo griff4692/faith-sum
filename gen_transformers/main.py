@@ -43,9 +43,9 @@ def run(args):
 
     args.num_gpus = None if gpus is None else len(gpus)
     num_machine = 1 if args.num_gpus is None else args.num_gpus
-    denom = args.per_device_train_batch_size * num_machine
+    denom = args.per_device_train_bs * num_machine
     assert args.target_batch_size % denom == 0
-    args.grad_accum = int(denom / (args.per_device_train_batch_size * num_machine))
+    args.grad_accum = int(denom / (args.per_device_train_bs * num_machine))
     print('Num GPUs --> {}'.format(args.num_gpus))
     precision = 16 if args.num_gpus is not None else 32
     experiment_dir = os.path.join(args.weight_dir, args.experiment)
@@ -61,6 +61,10 @@ def run(args):
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
+    if args.fragments:
+        special_tokens_dict = {'additional_special_tokens': ['<frag>', '<sep>']}
+        tokenizer.add_special_tokens(special_tokens_dict)
+
     if args.summary_style == 'hybrid_control':
         special_tokens_dict = {'additional_special_tokens': ['<extract>', '<abstract>']}
         tokenizer.add_special_tokens(special_tokens_dict)
@@ -73,7 +77,7 @@ def run(args):
         model = TransformerSummarizer.load_from_checkpoint(
             checkpoint_path=args.pretrained_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=True
         )
-    datamodule = SummaryDataModule(args, tokenizer=tokenizer, max_val_num=args.max_val_num)
+    datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 
     logger = pl_loggers.WandbLogger(
         name=args.experiment,
@@ -138,12 +142,13 @@ if __name__ == '__main__':
     parser.add_argument('-find_lr', default=False, action='store_true')
     parser.add_argument('-offline', default=False, action='store_true')
     parser.add_argument('--num_dataloaders', default=8, type=int)
-    parser.add_argument('--max_val_num', default=1024, type=int)
+    parser.add_argument('--max_val_examples', default=1024, type=int)
     parser.add_argument('-cpu', default=False, action='store_true')
     parser.add_argument('--gpu_device', default=None, type=int)
     parser.add_argument('--plan_lambda', default=1.0, type=float)
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    parser.add_argument('-fragments', default=False, action='store_true')
     parser.add_argument(
         '--summary_style',
         default='plan_abstract',
@@ -157,8 +162,24 @@ if __name__ == '__main__':
         ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
                 'abstract is original reference'
     )
-
-    parser = TransformerSummarizer.add_model_specific_args(parser)
+    parser.add_argument(
+        '--oracle_cutoff', default=0.75, type=float,
+        help='For summary_style=hybrid_control, summaries with ranking above this will be trained as extracts'
+             '(to generate the oracle extractive summary).  Below, abstracts (to generate original reference). '
+    )
+    parser.add_argument('--lr', type=float, default=2.2e-4)
+    parser.add_argument('--warmup_steps', type=int, default=200)
+    parser.add_argument('--target_batch_size', type=int, default=16)
+    parser.add_argument('--per_device_train_bs', type=int, default=8)
+    parser.add_argument('--per_device_eval_bs', type=int, default=16)
+    parser.add_argument('--weight_decay', type=float, default=5e-5)
+    parser.add_argument('--max_output_length', type=int, default=256)
+    parser.add_argument('--max_input_length', type=int, default=1024)
+    parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
+        'facebook/bart-base',
+        'facebook/bart-large',
+        'Yale-LILY/brio-cnndm-uncased',
+    ])
 
     args = parser.parse_args()
 
