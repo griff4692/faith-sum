@@ -32,7 +32,7 @@ class SummaryDataModule(pl.LightningDataModule):
 
     def get_split(self, split, max_examples=None):
         split_dataset = self.dataset[split]
-        if self.args.debug:
+        if self.args.debug and max_examples is None:
             max_examples = 128
         n = len(split_dataset)
         if max_examples is not None and max_examples < n:
@@ -119,6 +119,7 @@ class SummarizationDataset(Dataset):
             target_annotated = f'{target}<sep>{target_prefix}'
         elif self.args.summary_style == 'hybrid_control':
             good_oracle = oracle[1]['rouge_1'] >= self.args.oracle_cutoff
+            # good_oracle = np.random.random() >= 0.5
             if self.split == 'train':
                 prefix = '<extract>' if good_oracle else '<abstract>'
             else:

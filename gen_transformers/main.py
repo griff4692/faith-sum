@@ -90,7 +90,7 @@ def run(args):
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         save_top_k=1,
-        save_last=True,
+        save_last=False,
         mode='min'
     )
     early_stopping = EarlyStopping('val_loss', patience=5, verbose=True)
@@ -113,7 +113,7 @@ def run(args):
         val_check_interval=1.0 if args.debug else 0.25,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
         num_sanity_val_steps=2,
-        log_every_n_steps=25,
+        log_every_n_steps=50,
         max_steps=args.max_steps,
         plugins=plugins
     )
@@ -183,7 +183,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # If we are generating a sentence plan, we need to include <s{idx}> tokens in the source input
+    # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
     args.weight_dir = os.path.join(args.data_dir, 'weights')
     os.makedirs(args.weight_dir, exist_ok=True)

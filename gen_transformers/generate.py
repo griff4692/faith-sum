@@ -69,10 +69,18 @@ if __name__ == '__main__':
     parser.add_argument('-cpu', default=False, action='store_true')
     parser.add_argument('--gpu_device', default=None, type=int)
     parser.add_argument('--max_examples', default=None, type=int)
+    parser.add_argument('--max_output_length', type=int, default=256)
+    parser.add_argument('--per_device_eval_bs', type=int, default=1)
+    parser.add_argument('--max_input_length', type=int, default=1024)
     # Beam Search or Nucleus Sampling (more diverse)
     parser.add_argument('-sample_gen', default=False, action='store_true')
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
     parser.add_argument('-fragments', default=False, action='store_true')
+    parser.add_argument(
+        '--oracle_cutoff', default=0.75, type=float,
+        help='For summary_style=hybrid_control, summaries with ranking above this will be trained as extracts'
+             '(to generate the oracle extractive summary).  Below, abstracts (to generate original reference). '
+    )
     parser.add_argument(
         '--summary_style',
         default='plan_abstract',
@@ -96,7 +104,7 @@ if __name__ == '__main__':
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
 
     # TODO Support batches for predictions (simple fix)
-    args.per_device_eval_batch_size = 1
+    args.per_device_eval_bs = 1
 
     if args.experiment is None:
         args.experiment = args.wandb_name
