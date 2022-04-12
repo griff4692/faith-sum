@@ -163,7 +163,7 @@ if __name__ == '__main__':
                 'abstract is original reference'
     )
     parser.add_argument(
-        '--oracle_cutoff', default=0.75, type=float,
+        '--oracle_cutoff', default=0.4, type=float,
         help='For summary_style=hybrid_control, summaries with ranking above this will be trained as extracts'
              '(to generate the oracle extractive summary).  Below, abstracts (to generate original reference). '
     )

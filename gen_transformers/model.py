@@ -1,4 +1,5 @@
 import regex as re
+import os
 
 from datasets import load_metric
 import pandas as pd
@@ -11,6 +12,8 @@ from transformers import AutoModelForSeq2SeqLM
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
 from convert_abstractive_to_extractive import gain_selection
+os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
+from eval.rouge_metric import RougeMetric
 
 
 def postprocess_text(texts):
@@ -43,7 +46,7 @@ class TransformerSummarizer(pl.LightningModule):
         self.rouge = load_metric('rouge')
         self.label_smoother = LabelSmoother(epsilon=0.1)
         self.nlp = spacy.load('en_core_web_sm')
-
+        self.rouge_metric = RougeMetric()
         # Pull out from regular NLL
         # self.special_id_cutoff = min(self.tokenizer.additional_special_tokens_ids)
 
@@ -78,12 +81,12 @@ class TransformerSummarizer(pl.LightningModule):
         gen_output = self.shared_generate(batch, **validation_kwargs)
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
         if gen_output['abstracts'] is not None:
-            all_metrics.update(self.rouge_metrics(gen_output['abstracts'], gen_output['references']))
+            all_metrics.update(self.compute_rouge(gen_output['abstracts'], gen_output['references']))
             implied_extracts = [x['summary'] for x in gen_output['implied_extracts']]
-            all_metrics.update(self.rouge_metrics(implied_extracts, gen_output['references'], prefix='implied_'))
+            all_metrics.update(self.compute_rouge(implied_extracts, gen_output['references'], prefix='implied_'))
 
         if gen_output['extracts'] is not None:
-            all_metrics.update(self.rouge_metrics(gen_output['extracts'], gen_output['references'], prefix='extract_'))
+            all_metrics.update(self.compute_rouge(gen_output['extracts'], gen_output['references'], prefix='extract_'))
 
         # Measure consistency between abstract (and implied extract) and generated extract
         if gen_output['abstracts'] is not None and gen_output['extracts'] is not None:
@@ -91,7 +94,7 @@ class TransformerSummarizer(pl.LightningModule):
             # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
             # If the plan is working, this should be very high (the abstract should follow the plan)
             all_metrics.update(
-                self.rouge_metrics(gen_output['extracts'], gen_output['abstracts'], prefix='extract_gen_')
+                self.compute_rouge(gen_output['extracts'], gen_output['abstracts'], prefix='extract_gen_')
             )
 
         for k, v in all_metrics.items():
@@ -127,14 +130,14 @@ class TransformerSummarizer(pl.LightningModule):
 
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
         if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
-            save_out.update(self.rouge_metrics(gen_output['abstracts'][:1], gen_output['references'][:1]))
+            save_out.update(self.compute_rouge(gen_output['abstracts'][:1], gen_output['references'][:1]))
             implied_extracts = [x['summary'] for x in gen_output['implied_extracts'][:1]]
-            save_out.update(self.rouge_metrics(implied_extracts, reference, prefix='implied_'))
+            save_out.update(self.compute_rouge(implied_extracts, reference, prefix='implied_'))
 
         if gen_output['extracts'] is not None:
             extracts = [x['summary'] for x in gen_output['extracts']]
-            save_out.update(self.rouge_metrics(extracts[:1], reference, prefix='extract_'))
-            cand_metrics = [self.rouge_metrics([extract], reference, prefix='best_extract_') for extract in extracts]
+            save_out.update(self.compute_rouge(extracts[:1], reference, prefix='extract_'))
+            cand_metrics = [self.compute_rouge([extract], reference, prefix='best_extract_') for extract in extracts]
             best_metric = sorted(cand_metrics, key=lambda x: x['best_extract_mean_f1'])[-1]
             save_out.update(best_metric)
 
@@ -144,7 +147,7 @@ class TransformerSummarizer(pl.LightningModule):
             # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
             # If the plan is working, this should be very high (the abstract should follow the plan)
             save_out.update(
-                self.rouge_metrics(gen_output['extracts'], gen_output['abstracts'], prefix='extract_gen_')
+                self.compute_rouge(gen_output['extracts'], gen_output['abstracts'], prefix='extract_gen_')
             )
 
         return save_out
@@ -159,6 +162,7 @@ class TransformerSummarizer(pl.LightningModule):
             'early_stopping': True,
             'output_scores': True
         }
+
         references = gen_kwargs.pop('references', None)
         default_kwargs.update(gen_kwargs)
         pred_ids = self.model.generate(**default_kwargs)
@@ -317,22 +321,26 @@ class TransformerSummarizer(pl.LightningModule):
         df = pd.DataFrame(overlaps)
         return {k: df[k].mean() for k in df.columns}
 
-    def rouge_metrics(self, generated, gold, prefix=''):
+    def compute_rouge(self, generated, gold, prefix=''):
         rouge_types = ['rouge1', 'rouge2', 'rougeL']
-
-        # Tokenize and lowercase? -- doesn't seem to change scores.
-        # from nltk import word_tokenize
-        # generated = [' '.join(word_tokenize(x.lower())) for x in generated]
-        # gold = [' '.join(word_tokenize(x.lower())) for x in gold]
-
-        rouge_output = self.rouge.compute(predictions=generated, references=gold, rouge_types=rouge_types)
-        stats = {}
+        outputs = self.rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
         f1s = []
-        for rouge_type in rouge_types:
-            stats[f'{prefix}{rouge_type}_precision'] = rouge_output[rouge_type].mid.precision
-            stats[f'{prefix}{rouge_type}_recall'] = rouge_output[rouge_type].mid.recall
-            stats[f'{prefix}{rouge_type}_f1'] = rouge_output[rouge_type].mid.fmeasure
-            f1s.append(rouge_output[rouge_type].mid.fmeasure)
+        stats = {}
+        for rouge_type in ['1', '2', 'L']:
+            fscore = outputs[f'rouge_{rouge_type.lower()}_f_score']
+            stats[f'{prefix}rouge{rouge_type}_precision'] = outputs[f'rouge_{rouge_type.lower()}_precision']
+            stats[f'{prefix}rouge{rouge_type}_recall'] = outputs[f'rouge_{rouge_type.lower()}_recall']
+            stats[f'{prefix}rouge{rouge_type}_f1'] = fscore
+            f1s.append(fscore)
+
+        # rouge_output = self.rouge.compute(predictions=generated, references=gold, rouge_types=rouge_types)
+        # stats = {}
+        # f1s = []
+        # for rouge_type in rouge_types:
+        #     stats[f'{prefix}{rouge_type}_precision'] = rouge_output[rouge_type].mid.precision
+        #     stats[f'{prefix}{rouge_type}_recall'] = rouge_output[rouge_type].mid.recall
+        #     stats[f'{prefix}{rouge_type}_f1'] = rouge_output[rouge_type].mid.fmeasure
+        #     f1s.append(rouge_output[rouge_type].mid.fmeasure)
         stats[f'{prefix}mean_f1'] = np.array(f1s).mean()
         return stats
 

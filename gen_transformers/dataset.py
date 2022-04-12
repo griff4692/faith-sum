@@ -118,8 +118,9 @@ class SummarizationDataset(Dataset):
         elif self.args.summary_style == 'abstract_plan':
             target_annotated = f'{target}<sep>{target_prefix}'
         elif self.args.summary_style == 'hybrid_control':
-            good_oracle = oracle[1]['rouge_1'] >= self.args.oracle_cutoff
-            # good_oracle = np.random.random() >= 0.5
+            avg_rouge = (oracle[1]['rouge_1'] + oracle[1]['rouge_2']) / 2.0
+            # good_oracle = avg_rouge >= self.args.oracle_cutoff
+            good_oracle = np.random.random() >= 0.5
             if self.split == 'train':
                 prefix = '<extract>' if good_oracle else '<abstract>'
             else:

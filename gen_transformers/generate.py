@@ -16,7 +16,7 @@ from global_utils import get_free_gpus
 GEN_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
-        'num_beams': 5,
+        'num_beams': 4,
         'num_return_sequences': 1,
         'length_penalty': 4.0,
         'max_length': 142,
@@ -131,8 +131,10 @@ if __name__ == '__main__':
         checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(gpu).eval()
 
     # TODO remove
-    # tokenizer = BartTokenizer.from_pretrained('Yale-LILY/brio-cnndm-uncased')
-    # model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model='Yale-LILY/brio-cnndm-uncased').to(gpu).eval()
+    # args.hf_model = 'Yale-LILY/brio-cnndm-uncased'
+    # args.lr = 0.1
+    # tokenizer = BartTokenizer.from_pretrained(args.hf_model)
+    # model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model).to(gpu).eval()
 
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style
