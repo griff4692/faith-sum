@@ -1,3 +1,5 @@
+from collections import Counter
+import itertools
 import regex as re
 import os
 
@@ -130,24 +132,34 @@ class TransformerSummarizer(pl.LightningModule):
 
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
         if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
-            save_out.update(self.compute_rouge(gen_output['abstracts'][:1], gen_output['references'][:1]))
+            save_out.update(self.compute_rouge(gen_output['abstracts'][:1], gen_output['references'][:1], eval=True))
             implied_extracts = [x['summary'] for x in gen_output['implied_extracts'][:1]]
-            save_out.update(self.compute_rouge(implied_extracts, reference, prefix='implied_'))
+            save_out.update(self.compute_rouge(implied_extracts, reference, prefix='implied_', eval=True))
 
         if gen_output['extracts'] is not None:
             extracts = [x['summary'] for x in gen_output['extracts']]
-            save_out.update(self.compute_rouge(extracts[:1], reference, prefix='extract_'))
-            cand_metrics = [self.compute_rouge([extract], reference, prefix='best_extract_') for extract in extracts]
+            save_out.update(self.compute_rouge(extracts[:1], reference, prefix='extract_', eval=True))
+            cand_metrics = [self.compute_rouge(
+                [extract], reference, prefix='best_extract_', eval=True
+            ) for extract in extracts]
             best_metric = sorted(cand_metrics, key=lambda x: x['best_extract_mean_f1'])[-1]
             save_out.update(best_metric)
+
+        if gen_output['pyramid_extracts'] is not None:
+            save_out.update(
+                self.compute_rouge(gen_output['pyramid_extracts'], reference[:1], prefix='pyramid_extract_', eval=True)
+            )
+
+        print(save_out['pyramid_extract_rouge1_f1'] >= save_out['extract_rouge1_f1'], save_out['pyramid_extract_rouge1_f1'], save_out['extract_rouge1_f1'])
 
         # Measure consistency between abstract (and implied extract) and generated extract
         if gen_output['abstracts'] is not None and gen_output['extracts'] is not None:
             save_out.update(self.measure_plan_abstract_consistency(gen_output))
             # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
             # If the plan is working, this should be very high (the abstract should follow the plan)
+            extracts = [x['summary'] for x in gen_output['extracts']]
             save_out.update(
-                self.compute_rouge(gen_output['extracts'], gen_output['abstracts'], prefix='extract_gen_')
+                self.compute_rouge(extracts, gen_output['abstracts'], prefix='extract_gen_', eval=True)
             )
 
         return save_out
@@ -197,20 +209,7 @@ class TransformerSummarizer(pl.LightningModule):
         if references is None:
             references = self.tokenizer.batch_decode(gold_ids.tolist(), skip_special_tokens=True)
 
-        if self.hparams.fragments:  # Remove the pre-pended predicted extractive fragments
-            pred_str = []
-            for pred_id in pred_ids:
-                # Find <sep> token and only take everything after
-                idx = torch.where(pred_id == self.tokenizer.encode('<sep>', include_special_tokens=False)[0])
-                sep_id = self.tokenizer.encode('<sep>', include_special_tokens=False)[0]
-                try:
-                    decode_start_idx = int(torch.where(pred_id == sep_id)[0].item()) + 1
-                except:
-                    print('No predicted <sep> token...')
-                    decode_start_idx = 0
-                pred_str.append(self.tokenizer.decode(pred_id[decode_start_idx:], skip_special_tokens=True))
-        else:
-            pred_str = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
+        pred_str = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
         batch_size = len(input_ids)
 
         source_raw = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
@@ -285,19 +284,32 @@ class TransformerSummarizer(pl.LightningModule):
                 abstract_sents]
             for idx in range(batch_size):
                 source_toks = source['sent_toks'][idx]
+                source_raw = source['text'][idx]
                 implied_oracle_idx = gain_selection(source_toks, abstract_sents_tok[idx], 5, lower=True, sort=True)[0]
-                implied_oracle = ' '.join([str(source_toks[i]) for i in implied_oracle_idx])
+                implied_oracle = ' '.join([str(source_raw[i]) for i in implied_oracle_idx])
                 implied_extracts.append({
                     'idxs': implied_oracle_idx,
                     'summary': implied_oracle,
                 })
 
+        pyramid_extracts = None
+        if eval and extracts is not None:
+            source_sents = source['sents'][0]
+            sent_idxs = list(itertools.chain(*[[int(y.lstrip('<s').rstrip('>')) for y in x['idxs']] for x in extracts]))
+            # If invalid sentence is generated, we can't include it in the Pyramid
+            sent_counts = Counter([x for x in sent_idxs if x < len(source_sents)])
+            num_to_extract = int(round(np.mean([len(x['idxs']) for x in extracts]), 0))  # Average of generated plans
+            pyramid_idxs = [x[0] for x in sent_counts.most_common(num_to_extract)]
+            pyramid_summary = ' '.join([str(source_sents[pyramid_idx]).strip() for pyramid_idx in pyramid_idxs])
+            pyramid_extracts = [pyramid_summary]
+
         # Extracts are represented as a dictionary of 'idxs' (indices of source sentences extracted)
-        # and 'summary' (actual text)
+        # and 'summary' (actual  text)
         return {
             'source': source,
             'abstracts': abstracts,
             'extracts': extracts,
+            'pyramid_extracts': pyramid_extracts,
             'implied_extracts': implied_extracts,
             'references': references,
         }
@@ -321,26 +333,27 @@ class TransformerSummarizer(pl.LightningModule):
         df = pd.DataFrame(overlaps)
         return {k: df[k].mean() for k in df.columns}
 
-    def compute_rouge(self, generated, gold, prefix=''):
+    def compute_rouge(self, generated, gold, prefix='', eval=False):
         rouge_types = ['rouge1', 'rouge2', 'rougeL']
-        outputs = self.rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
-        f1s = []
-        stats = {}
-        for rouge_type in ['1', '2', 'L']:
-            fscore = outputs[f'rouge_{rouge_type.lower()}_f_score']
-            stats[f'{prefix}rouge{rouge_type}_precision'] = outputs[f'rouge_{rouge_type.lower()}_precision']
-            stats[f'{prefix}rouge{rouge_type}_recall'] = outputs[f'rouge_{rouge_type.lower()}_recall']
-            stats[f'{prefix}rouge{rouge_type}_f1'] = fscore
-            f1s.append(fscore)
-
-        # rouge_output = self.rouge.compute(predictions=generated, references=gold, rouge_types=rouge_types)
-        # stats = {}
-        # f1s = []
-        # for rouge_type in rouge_types:
-        #     stats[f'{prefix}{rouge_type}_precision'] = rouge_output[rouge_type].mid.precision
-        #     stats[f'{prefix}{rouge_type}_recall'] = rouge_output[rouge_type].mid.recall
-        #     stats[f'{prefix}{rouge_type}_f1'] = rouge_output[rouge_type].mid.fmeasure
-        #     f1s.append(rouge_output[rouge_type].mid.fmeasure)
+        if eval:  # Use SummEval PERL script
+            outputs = self.rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
+            f1s = []
+            stats = {}
+            for rouge_type in ['1', '2', 'L']:
+                fscore = outputs[f'rouge_{rouge_type.lower()}_f_score']
+                stats[f'{prefix}rouge{rouge_type}_precision'] = outputs[f'rouge_{rouge_type.lower()}_precision']
+                stats[f'{prefix}rouge{rouge_type}_recall'] = outputs[f'rouge_{rouge_type.lower()}_recall']
+                stats[f'{prefix}rouge{rouge_type}_f1'] = fscore
+                f1s.append(fscore)
+        else:
+            rouge_output = self.rouge.compute(predictions=generated, references=gold, rouge_types=rouge_types)
+            stats = {}
+            f1s = []
+            for rouge_type in rouge_types:
+                stats[f'{prefix}{rouge_type}_precision'] = rouge_output[rouge_type].mid.precision
+                stats[f'{prefix}{rouge_type}_recall'] = rouge_output[rouge_type].mid.recall
+                stats[f'{prefix}{rouge_type}_f1'] = rouge_output[rouge_type].mid.fmeasure
+                f1s.append(rouge_output[rouge_type].mid.fmeasure)
         stats[f'{prefix}mean_f1'] = np.array(f1s).mean()
         return stats
 

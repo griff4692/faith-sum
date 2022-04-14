@@ -138,7 +138,6 @@ if __name__ == '__main__':
 
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style
-    model.hparams.fragments = args.fragments
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
     dataloader = datamodule.test_dataloader(max_examples=args.max_examples)

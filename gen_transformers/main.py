@@ -61,10 +61,6 @@ def run(args):
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
-    if args.fragments:
-        special_tokens_dict = {'additional_special_tokens': ['<frag>', '<sep>']}
-        tokenizer.add_special_tokens(special_tokens_dict)
-
     if args.summary_style == 'hybrid_control':
         special_tokens_dict = {'additional_special_tokens': ['<extract>', '<abstract>']}
         tokenizer.add_special_tokens(special_tokens_dict)
@@ -148,7 +144,6 @@ if __name__ == '__main__':
     parser.add_argument('--plan_lambda', default=1.0, type=float)
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
-    parser.add_argument('-fragments', default=False, action='store_true')
     parser.add_argument(
         '--summary_style',
         default='plan_abstract',
@@ -163,9 +158,10 @@ if __name__ == '__main__':
                 'abstract is original reference'
     )
     parser.add_argument(
-        '--oracle_cutoff', default=0.4, type=float,
-        help='For summary_style=hybrid_control, summaries with ranking above this will be trained as extracts'
-             '(to generate the oracle extractive summary).  Below, abstracts (to generate original reference). '
+        '--oracle_cutoff', default=0.5, type=float,
+        help='For summary_style=hybrid_control, summaries with ranking above this (avg R1 / R2)'
+             'will be trained as extracts (to generate the oracle extractive summary).'
+             'Below, abstracts (to generate original reference). '
     )
     parser.add_argument('--lr', type=float, default=2.2e-4)
     parser.add_argument('--warmup_steps', type=int, default=200)
@@ -175,6 +171,7 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', type=float, default=5e-5)
     parser.add_argument('--max_output_length', type=int, default=256)
     parser.add_argument('--max_input_length', type=int, default=1024)
+    parser.add_argument('-oracle_filtering', default=False, action='store_true')
     parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
         'facebook/bart-base',
         'facebook/bart-large',

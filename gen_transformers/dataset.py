@@ -1,20 +1,21 @@
-import itertools
+import os
+
 import numpy as np
 np.random.seed(1992)
 import pytorch_lightning as pl
+import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 from nltk.corpus import stopwords
 import spacy
 from string import punctuation
-
-STOPWORDS = set(stopwords.words('english')).union(set(punctuation))
 
 from datasets import load_dataset
 from gen_transformers.data_utils import Seq2SeqCollate
 
 from constants import summarization_name_mapping
 from convert_abstractive_to_extractive import gain_selection
-from fragment_utils import frags
+
+STOPWORDS = set(stopwords.words('english')).union(set(punctuation))
 
 
 class SummaryDataModule(pl.LightningDataModule):
@@ -41,7 +42,15 @@ class SummaryDataModule(pl.LightningDataModule):
         add_cols = []
         if split != 'train' and self.args.summary_style == 'plan':
             add_cols.append('reference')
-        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, self.nlp, add_cols=add_cols)
+
+        oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}.csv')
+        print(f'Loading pre-computed oracle summaries from {oracle_fn}')
+        oracle_df = pd.read_csv(oracle_fn)
+        ids2oracles = {row['id']: row for row in oracle_df.to_dict('records')}
+
+        split_dataset_pl = SummarizationDataset(
+            self.args, split_dataset, split, self.nlp, add_cols=add_cols, ids2oracles=ids2oracles
+        )
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
@@ -68,7 +77,7 @@ class SummaryDataModule(pl.LightningDataModule):
 
 
 class SummarizationDataset(Dataset):
-    def __init__(self, args, dataset, split, nlp, add_cols=None):
+    def __init__(self, args, dataset, split, nlp, add_cols=None, ids2oracles=None):
         super(SummarizationDataset, self).__init__()
         self.args = args
         self.nlp = nlp
@@ -76,17 +85,18 @@ class SummarizationDataset(Dataset):
         self.split = split
         self.add_cols = [] if add_cols is None else add_cols
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
+        self.ids2oracles = ids2oracles
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
         example = self.dataset[idx]
-
         inputs = example[self.input_col]
         target = example[self.target_col]
 
         source_annotated = inputs
+        # For simple abstractive training, no oracle extracts / plans need to be included
         if self.args.summary_style == 'abstract':
             target_annotated = target
             return {
@@ -94,15 +104,15 @@ class SummarizationDataset(Dataset):
                 'target': target_annotated
             }
 
+        # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
+        oracle_obj = self.ids2oracles[example['id']]
+        oracle_idxs = list(map(int, oracle_obj['sent_idxs'].split(',')))
+
+        # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
         source_sents = list(self.nlp(inputs).sents)
-        source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
         if self.args.add_sent_toks:
             source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
-        target_sents = list(self.nlp(target).sents)
-        target_sents_tok = [[str(token.text) for token in sentence] for sentence in target_sents]
         # Sort oracle order or not
-        oracle = gain_selection(source_sents_tok, target_sents_tok, 5, lower=True, sort=True)
-        oracle_idxs = oracle[0]
         target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs]).strip()
         oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs])
 
@@ -118,35 +128,16 @@ class SummarizationDataset(Dataset):
         elif self.args.summary_style == 'abstract_plan':
             target_annotated = f'{target}<sep>{target_prefix}'
         elif self.args.summary_style == 'hybrid_control':
-            avg_rouge = (oracle[1]['rouge_1'] + oracle[1]['rouge_2']) / 2.0
-            # good_oracle = avg_rouge >= self.args.oracle_cutoff
-            good_oracle = np.random.random() >= 0.5
             if self.split == 'train':
+                avg_oracle_rouge = (oracle_obj['rouge_1'] + oracle_obj['rouge_2']) / 2.0
+                good_oracle = avg_oracle_rouge >= self.args.oracle_cutoff
                 prefix = '<extract>' if good_oracle else '<abstract>'
             else:
                 # TODO We can do better than this ultimately for evaluation
                 prefix = '<extract>'  # <abstract>
-                # prefix = str(np.random.choice(['<abstract>', '<extract>'], size=(1, ))[0])
+                # prefix = str(np.random.choice(['<abstract>', '<extract>'], size=(1,))[0])
 
-            if self.args.fragments:
-                source_toks_flat = list(itertools.chain(*source_sents_tok))
-                target_toks_flat = list(itertools.chain(*target_sents_tok))
-                extractive_frags = frags(source_toks_flat, target_toks=target_toks_flat)
-                spans = extractive_frags['fragments'].split('<frag>')
-                keep_frags = []
-                for span in spans:
-                    span_toks = [x.lower() for x in span.split(' ') if x.lower() not in STOPWORDS]
-                    span_len = len(span_toks)
-                    if span_len < 3 or span in keep_frags:
-                        continue
-                    keep_frags.append(span)
-                extractive_prefix = '<frag>'.join(keep_frags)
-                target_annotated = (
-                    f'{extractive_prefix}<sep>{oracle_summary}' if prefix == '<extract>'
-                    else f'{extractive_prefix}<sep>{target}'
-                )
-            else:
-                target_annotated = oracle_summary if prefix == '<extract>' else target
+            target_annotated = oracle_summary if prefix == '<extract>' and self.split == 'train' else target
             source_annotated = prefix + source_annotated
         output = {
             'source': source_annotated,
