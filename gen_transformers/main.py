@@ -108,10 +108,11 @@ def run(args):
         accumulate_grad_batches=args.grad_accum,
         val_check_interval=1.0 if args.debug else 0.25,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
-        num_sanity_val_steps=2,
-        log_every_n_steps=50,
+        num_sanity_val_steps=0 if args.debug else 2,
+        log_every_n_steps=4, #50,
         max_steps=args.max_steps,
-        plugins=plugins
+        plugins=plugins,
+        # detect_anomaly=args.debug
     )
 
     if args.find_lr:
@@ -169,9 +170,10 @@ if __name__ == '__main__':
     parser.add_argument('--per_device_train_bs', type=int, default=8)
     parser.add_argument('--per_device_eval_bs', type=int, default=16)
     parser.add_argument('--weight_decay', type=float, default=5e-5)
-    parser.add_argument('--max_output_length', type=int, default=256)
+    parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('-oracle_filtering', default=False, action='store_true')
+    parser.add_argument('--margin', default=0.1, type=float)
     parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
         'facebook/bart-base',
         'facebook/bart-large',

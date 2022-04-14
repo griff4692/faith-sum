@@ -5,17 +5,18 @@ np.random.seed(1992)
 import pytorch_lightning as pl
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
-from nltk.corpus import stopwords
 import spacy
-from string import punctuation
 
 from datasets import load_dataset
 from gen_transformers.data_utils import Seq2SeqCollate
 
 from constants import summarization_name_mapping
-from convert_abstractive_to_extractive import gain_selection
 
-STOPWORDS = set(stopwords.words('english')).union(set(punctuation))
+
+def remove_sent_from_plan(oracle_idxs):
+    list_idx_to_remove = int(np.random.choice(np.arange(len(oracle_idxs)), size=(1,))[0])
+    remove_idxs = oracle_idxs[:list_idx_to_remove] + oracle_idxs[list_idx_to_remove + 1:]
+    return ''.join([f'<s{i}>' for i in remove_idxs]).strip()
 
 
 class SummaryDataModule(pl.LightningDataModule):
@@ -55,7 +56,8 @@ class SummaryDataModule(pl.LightningDataModule):
             self.tokenizer,
             max_input_length=self.args.max_input_length,
             max_output_length=self.args.max_output_length,
-            add_cols=add_cols
+            add_cols=add_cols,
+            split=split
         )
         batch_size = self.args.per_device_train_bs if split == 'train' else self.args.per_device_eval_bs
         kwargs = {
@@ -143,6 +145,35 @@ class SummarizationDataset(Dataset):
             'source': source_annotated,
             'target': target_annotated,
         }
-        if self.split != 'train' and self.args.summary_style == 'plan':
+        if self.split == 'train' and 'plan' in self.args.summary_style:
+            perturb_prefixes = []  # Perturb the plan and fine-tune with unlikelihood training
+            remaining_idxs = np.sort(list(set(np.arange(len(source_sents))) - set(oracle_idxs)))
+
+            # Remove 1
+            perturb_prefixes.append(remove_sent_from_plan(oracle_idxs))
+
+            if len(remaining_idxs) > 0:
+                # Add-1
+                sample_add_idxs = np.sort([int(np.random.choice(remaining_idxs, size=(1,), )[0])] + oracle_idxs)
+                perturb_prefixes.append(''.join([f'<s{i}>' for i in sample_add_idxs]).strip())
+
+                # Replace 1
+                oracle_idxs_copy = oracle_idxs.copy()
+                list_idx_to_replace = int(np.random.choice(np.arange(len(oracle_idxs)), size=(1,))[0])
+                oracle_idxs_copy[list_idx_to_replace] = int(np.random.choice(remaining_idxs, size=(1,), )[0])
+                oracle_idxs_copy = list(np.sort(oracle_idxs_copy))
+                perturb_prefixes.append(''.join([f'<s{i}>' for i in oracle_idxs_copy]).strip())
+            else:  # duplicate the remove operation just to get batch to have constant size
+                # Remove 1
+                perturb_prefixes.append(remove_sent_from_plan(oracle_idxs))
+
+                # Remove 1
+                perturb_prefixes.append(remove_sent_from_plan(oracle_idxs))
+
+            neg_targets = [prefix + '<sep>' + target for prefix in perturb_prefixes]
+            pos_targets = [target_prefix + '<sep>' + target]
+            output['neg_plans'] = neg_targets
+            output['pos_plans'] = pos_targets
+        elif self.split != 'train' and self.args.summary_style == 'plan':
             output['reference'] = target
         return output

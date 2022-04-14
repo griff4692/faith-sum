@@ -18,6 +18,35 @@ os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 from eval.rouge_metric import RougeMetric
 
 
+# def label_smoothed_nll_loss(lprobs, target, epsilon=0.1, ignore_index=-100, reduce=True):
+#     if target.dim() == lprobs.dim() - 1:
+#         target = target.unsqueeze(-1)
+#     pad_mask = target.eq(ignore_index)
+#     # In case the ignore_index is -100, the gather will fail, so we replace labels by 0. The padding_mask
+#     # will ignore them in any case.
+#     target.clamp_min_(0)
+#     nll_loss = -lprobs.gather(dim=-1, index=target)
+#     smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
+#     nll_loss.masked_fill_(pad_mask, 0.)
+#     smooth_loss.masked_fill_(pad_mask, 0.)
+#     if reduce:
+#         # Take the mean over the label dimensions, then divide by the number of active elements (i.e. not-padded):
+#         num_active_elements = pad_mask.numel() - pad_mask.long().sum()
+#         nll_loss = nll_loss.sum() / num_active_elements
+#         smooth_loss = smooth_loss.sum() / num_active_elements
+#     loss = (1. - epsilon) * nll_loss + (epsilon * smooth_loss / lprobs.size(-1))
+#     return loss, nll_loss
+
+
+# def label_smoothed_unlikelihood(probs, targets, reduce=True):
+#     probs = probs.view(-1, probs.size(-1))
+#     one_minus_probs = torch.clamp(1.0 - probs, min=1e-20)
+#     lprobs = torch.log(one_minus_probs)
+#     targets = targets.view(-1, 1)
+#     loss, nll_loss = label_smoothed_nll_loss(lprobs, targets, ignore_index=-100, reduce=reduce)
+#     return loss, nll_loss
+
+
 def postprocess_text(texts):
     return ['\n'.join(nltk.sent_tokenize(text.strip())) for text in texts]
 
@@ -50,7 +79,33 @@ class TransformerSummarizer(pl.LightningModule):
         self.nlp = spacy.load('en_core_web_sm')
         self.rouge_metric = RougeMetric()
         # Pull out from regular NLL
-        # self.special_id_cutoff = min(self.tokenizer.additional_special_tokens_ids)
+        self.special_id_cutoff = self.tokenizer.convert_tokens_to_ids('<sep>')
+
+    def compute_ll(self, batch, labels, output):
+        batch_size = len(output[1])
+        num_cand = len(labels) // batch_size
+        # Ignore the <eos> token
+        # Tile this for each num_neg example
+        encoder_outputs = output.encoder_last_hidden_state.unsqueeze(1).repeat(
+            1, num_cand, 1, 1).contiguous().view(batch_size * num_cand, -1, 768).clone()
+        encoder_attention_mask = batch['attention_mask'].unsqueeze(1).repeat(
+            1, num_cand, 1).contiguous().view(batch_size * num_cand, -1)
+        inputs = {
+            'encoder_outputs': [encoder_outputs],
+            'attention_mask': encoder_attention_mask,
+            'labels': labels,
+        }
+
+        outputs = self.model(**inputs, use_cache=False)
+        batch_nll = []
+        for cand_idx in range(len(labels)):
+            label_row = labels[cand_idx]
+            cutoff = int(torch.where(label_row == self.special_id_cutoff)[0])
+            start_idx = cutoff + 1  # Start after the <sep> token (disregard the plan)
+            label_row_abstract = label_row[start_idx:]
+            loss_row_abstract = {'logits': outputs['logits'][cand_idx, start_idx:, :]}
+            batch_nll.append(self.label_smoother(loss_row_abstract, label_row_abstract))
+        return batch_nll
 
     def training_step(self, batch, batch_idx):
         output = self.model(**batch, use_cache=False)
@@ -60,10 +115,38 @@ class TransformerSummarizer(pl.LightningModule):
         smooth_loss = self.label_smoother(output, batch['labels'])
         return smooth_loss
 
+    # def training_step(self, batch, batch_idx):
+    #     batch_size = len(batch['input_ids'])
+    #     neg_labels = batch.pop('neg_labels', None)
+    #     pos_labels = batch.pop('pos_labels', None)
+    #     output = self.model(**batch, use_cache=False)
+    #     loss = output.loss
+    #     self.log('train_loss', loss, on_epoch=False, on_step=True, prog_bar=True)
+    #
+    #     full_loss = self.label_smoother(output, batch['labels'])
+    #     if pos_labels is not None:
+    #         batch_pos_nll = self.compute_ll(batch, pos_labels, output)
+    #         batch_neg_nll = self.compute_ll(batch, neg_labels, output)
+    #
+    #         num_neg_cand = len(neg_labels) // batch_size
+    #         margin_losses = []
+    #         for batch_idx in range(batch_size):
+    #             pos_ll = - batch_pos_nll[batch_idx]
+    #             neg_nll_cands = batch_neg_nll[batch_idx * num_neg_cand: (batch_idx + 1) * num_neg_cand]
+    #             for neg_nll_cand in neg_nll_cands:
+    #                 neg_ll_cand = - neg_nll_cand
+    #                 margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.margin, min=0))
+    #         avg_margin_loss = torch.stack(margin_losses).mean()
+    #
+    #         self.log('train_margin', avg_margin_loss, on_epoch=False, on_step=True, prog_bar=True)
+    #         # full_loss += 1e-3 * avg_margin_loss
+    #         self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
+    #     return full_loss
+
         # TODO workshop ~ didn't seem to be working well
         # lm_mask = batch['labels'].le(self.special_id_cutoff - 1)
-        # plan_mask = batch['labels'].ge(self.special_id_cutoff)
         # lm_loss = self.label_smoother(output, batch['labels'].masked_fill(plan_mask, -100))
+        # plan_mask = batch['labels'].ge(self.special_id_cutoff)
         # plan_loss = self.label_smoother(output, batch['labels'].masked_fill(lm_mask, -100))
         # self.log('plan_loss', plan_loss, on_epoch=False, on_step=True, prog_bar=True)
         # self.log('lm_loss', lm_loss, on_epoch=False, on_step=True, prog_bar=True)
@@ -76,7 +159,7 @@ class TransformerSummarizer(pl.LightningModule):
             'num_return_sequences': 1,  # Don't over-generate for validation
             'references': batch.pop('reference', None),
         }
-        output = self.model(**batch)
+        output = self.model(**batch, use_cache=False)
         loss = output.loss
 
         all_metrics = {'val_loss': loss}
@@ -293,15 +376,15 @@ class TransformerSummarizer(pl.LightningModule):
                 })
 
         pyramid_extracts = None
-        if eval and extracts is not None:
-            source_sents = source['sents'][0]
-            sent_idxs = list(itertools.chain(*[[int(y.lstrip('<s').rstrip('>')) for y in x['idxs']] for x in extracts]))
-            # If invalid sentence is generated, we can't include it in the Pyramid
-            sent_counts = Counter([x for x in sent_idxs if x < len(source_sents)])
-            num_to_extract = int(round(np.mean([len(x['idxs']) for x in extracts]), 0))  # Average of generated plans
-            pyramid_idxs = [x[0] for x in sent_counts.most_common(num_to_extract)]
-            pyramid_summary = ' '.join([str(source_sents[pyramid_idx]).strip() for pyramid_idx in pyramid_idxs])
-            pyramid_extracts = [pyramid_summary]
+        # if eval and extracts is not None:
+        #     source_sents = source['sents'][0]
+        #     sent_idxs = list(itertools.chain(*[[int(y.lstrip('<s').rstrip('>')) for y in x['idxs']] for x in extracts]))
+        #     # If invalid sentence is generated, we can't include it in the Pyramid
+        #     sent_counts = Counter([x for x in sent_idxs if x < len(source_sents)])
+        #     num_to_extract = int(round(np.mean([len(x['idxs']) for x in extracts]), 0))  # Average of generated plans
+        #     pyramid_idxs = [x[0] for x in sent_counts.most_common(num_to_extract)]
+        #     pyramid_summary = ' '.join([str(source_sents[pyramid_idx]).strip() for pyramid_idx in pyramid_idxs])
+        #     pyramid_extracts = [pyramid_summary]
 
         # Extracts are represented as a dictionary of 'idxs' (indices of source sentences extracted)
         # and 'summary' (actual  text)
