@@ -108,40 +108,32 @@ class TransformerSummarizer(pl.LightningModule):
         return batch_nll
 
     def training_step(self, batch, batch_idx):
+        batch_size = len(batch['input_ids'])
+        neg_labels = batch.pop('neg_labels', None)
+        pos_labels = batch.pop('pos_labels', None)
         output = self.model(**batch, use_cache=False)
         loss = output.loss
         self.log('train_loss', loss, on_epoch=False, on_step=True, prog_bar=True)
 
-        smooth_loss = self.label_smoother(output, batch['labels'])
-        return smooth_loss
+        full_loss = self.label_smoother(output, batch['labels'])
+        if pos_labels is not None:
+            batch_pos_nll = self.compute_ll(batch, pos_labels, output)
+            batch_neg_nll = self.compute_ll(batch, neg_labels, output)
 
-    # def training_step(self, batch, batch_idx):
-    #     batch_size = len(batch['input_ids'])
-    #     neg_labels = batch.pop('neg_labels', None)
-    #     pos_labels = batch.pop('pos_labels', None)
-    #     output = self.model(**batch, use_cache=False)
-    #     loss = output.loss
-    #     self.log('train_loss', loss, on_epoch=False, on_step=True, prog_bar=True)
-    #
-    #     full_loss = self.label_smoother(output, batch['labels'])
-    #     if pos_labels is not None:
-    #         batch_pos_nll = self.compute_ll(batch, pos_labels, output)
-    #         batch_neg_nll = self.compute_ll(batch, neg_labels, output)
-    #
-    #         num_neg_cand = len(neg_labels) // batch_size
-    #         margin_losses = []
-    #         for batch_idx in range(batch_size):
-    #             pos_ll = - batch_pos_nll[batch_idx]
-    #             neg_nll_cands = batch_neg_nll[batch_idx * num_neg_cand: (batch_idx + 1) * num_neg_cand]
-    #             for neg_nll_cand in neg_nll_cands:
-    #                 neg_ll_cand = - neg_nll_cand
-    #                 margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.margin, min=0))
-    #         avg_margin_loss = torch.stack(margin_losses).mean()
-    #
-    #         self.log('train_margin', avg_margin_loss, on_epoch=False, on_step=True, prog_bar=True)
-    #         # full_loss += 1e-3 * avg_margin_loss
-    #         self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
-    #     return full_loss
+            num_neg_cand = len(neg_labels) // batch_size
+            margin_losses = []
+            for batch_idx in range(batch_size):
+                pos_ll = - batch_pos_nll[batch_idx]
+                neg_nll_cands = batch_neg_nll[batch_idx * num_neg_cand: (batch_idx + 1) * num_neg_cand]
+                for neg_nll_cand in neg_nll_cands:
+                    neg_ll_cand = - neg_nll_cand
+                    margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.margin, min=0))
+            avg_margin_loss = torch.stack(margin_losses).mean()
+
+            self.log('train_margin', avg_margin_loss, on_epoch=False, on_step=True, prog_bar=True)
+            full_loss += avg_margin_loss
+            self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
+        return full_loss
 
         # TODO workshop ~ didn't seem to be working well
         # lm_mask = batch['labels'].le(self.special_id_cutoff - 1)

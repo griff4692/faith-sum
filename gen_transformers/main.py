@@ -42,10 +42,6 @@ def run(args):
             print(f'Using GPUS --> {gpu_str}...')
 
     args.num_gpus = None if gpus is None else len(gpus)
-    num_machine = 1 if args.num_gpus is None else args.num_gpus
-    denom = args.per_device_train_bs * num_machine
-    assert args.target_batch_size % denom == 0
-    args.grad_accum = int(denom / (args.per_device_train_bs * num_machine))
     print('Num GPUs --> {}'.format(args.num_gpus))
     precision = 16 if args.num_gpus is not None else 32
     experiment_dir = os.path.join(args.weight_dir, args.experiment)
@@ -109,7 +105,7 @@ def run(args):
         val_check_interval=1.0 if args.debug else 0.25,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
         num_sanity_val_steps=0 if args.debug else 2,
-        log_every_n_steps=4, #50,
+        log_every_n_steps=50,
         max_steps=args.max_steps,
         plugins=plugins,
         # detect_anomaly=args.debug
@@ -173,7 +169,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('-oracle_filtering', default=False, action='store_true')
-    parser.add_argument('--margin', default=0.1, type=float)
+    parser.add_argument('--margin', default=0.5, type=float)
     parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
         'facebook/bart-base',
         'facebook/bart-large',
@@ -181,6 +177,9 @@ if __name__ == '__main__':
     ])
 
     args = parser.parse_args()
+
+    # Won't held yet for multi-gpu
+    args.grad_accum = args.target_batch_size // args.per_device_train_bs
 
     # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
