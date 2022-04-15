@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
@@ -13,18 +12,6 @@ from transformers import AutoTokenizer, BartTokenizer
 from gen_transformers.dataset import SummaryDataModule
 from gen_transformers.model import TransformerSummarizer
 from global_utils import get_free_gpus, set_same_seed
-
-
-def get_path_from_exp(weights_dir, experiment):
-    dir = os.path.join(weights_dir, experiment)
-    paths = list(Path(dir).rglob('*.ckpt'))
-    if len(paths) == 0:
-        raise Exception(f'No weights found in {dir}')
-    elif len(paths) == 1:
-        return str(paths[0])
-    else:
-        print('\n'.join([str(x) for x in paths]))
-        raise Exception('Multiple possible weights found.  Please remove one or specify the path with --restore_path')
 
 
 def run(args):
@@ -122,25 +109,45 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('BART/PEGASUS trainer.')
+
+    # Configuration Parameters
+    parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--experiment', default='default')
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--restore_path', default=None)
     parser.add_argument('--seed', default=1992, type=int)
-    parser.add_argument('--max_epochs', default=10, type=int)
     parser.add_argument('--max_gpus', default=1, type=int)
+    parser.add_argument('-cpu', default=False, action='store_true')
+    parser.add_argument('--max_val_examples', default=1024, type=int)
+    parser.add_argument('--gpu_device', default=None, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-no_schedule', default=False, action='store_true')
-    parser.add_argument('--max_steps', default=150000, type=int)
-    parser.add_argument('-debug', default=False, action='store_true')
-    parser.add_argument('-find_lr', default=False, action='store_true')
     parser.add_argument('-offline', default=False, action='store_true')
+    parser.add_argument('-find_lr', default=False, action='store_true')
+    # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
-    parser.add_argument('--max_val_examples', default=1024, type=int)
-    parser.add_argument('-cpu', default=False, action='store_true')
-    parser.add_argument('--gpu_device', default=None, type=int)
-    parser.add_argument('--plan_lambda', default=1.0, type=float)
+
+    # Hyper-parameters
+    parser.add_argument('--lr', type=float, default=2.2e-4)
+    # Gradient accumulation will adjust for the ratio between target_batch_size and per_device_train_bs
+    parser.add_argument('--target_batch_size', type=int, default=16)
+    parser.add_argument('--per_device_train_bs', type=int, default=8)
+    parser.add_argument('--per_device_eval_bs', type=int, default=16)
+    parser.add_argument('--warmup_steps', type=int, default=200)
+    parser.add_argument('--max_steps', default=150000, type=int)
+    parser.add_argument('--max_epochs', default=10, type=int)
+    parser.add_argument('--weight_decay', type=float, default=5e-5)
+    parser.add_argument('--max_output_length', type=int, default=256)  # For training only
+    parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
-    parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    # HuggingFace identifier of model for which to load weights for fine-tuning
+    parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
+        'facebook/bart-base',
+        'facebook/bart-large',
+        'Yale-LILY/brio-cnndm-uncased',
+    ])
+
+    # Task-specific / Project-specific parameters
     parser.add_argument(
         '--summary_style',
         default='plan_abstract',
@@ -154,32 +161,34 @@ if __name__ == '__main__':
         ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
                 'abstract is original reference'
     )
+    # This will be automatically determine by summary_style (i.e., 'plan' or not)
+    parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    # This is only used by summary_style=hybrid_control to determine how to partition data (doesn't really work for CNN)
     parser.add_argument(
         '--oracle_cutoff', default=0.5, type=float,
         help='For summary_style=hybrid_control, summaries with ranking above this (avg R1 / R2)'
              'will be trained as extracts (to generate the oracle extractive summary).'
              'Below, abstracts (to generate original reference). '
     )
-    parser.add_argument('--lr', type=float, default=2.2e-4)
-    parser.add_argument('--warmup_steps', type=int, default=200)
-    parser.add_argument('--target_batch_size', type=int, default=16)
-    parser.add_argument('--per_device_train_bs', type=int, default=8)
-    parser.add_argument('--per_device_eval_bs', type=int, default=16)
-    parser.add_argument('--weight_decay', type=float, default=5e-5)
-    parser.add_argument('--max_output_length', type=int, default=256)  # For training only
-    parser.add_argument('--max_input_length', type=int, default=1024)
-    parser.add_argument('-oracle_filtering', default=False, action='store_true')
-    parser.add_argument('--margin', default=0.5, type=float)
-    parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
-        'facebook/bart-base',
-        'facebook/bart-large',
-        'Yale-LILY/brio-cnndm-uncased',
-    ])
+
+    # Oracle Filtering - TODO reimplement
+    # parser.add_argument('-oracle_filtering', default=False, action='store_true')
+
+    # CONTRAST controls
+    # Add Contrast turns on the contrast loss only when summary_style = plan_abstract
+    parser.add_argument('-add_contrast', default=0.5, type=float)
+    # Margin for contrast loss
+    parser.add_argument('--contrast_margin', default=0.5, type=float)
+    # Relative contribution to overall loss for contrastive loss (versus regular LM MLE loss)
+    parser.add_argument('--contrast_lambda', default=1.0, type=float)
 
     args = parser.parse_args()
 
     # Won't held yet for multi-gpu
     args.grad_accum = args.target_batch_size // args.per_device_train_bs
+
+    if args.debug:  # Use small data and tiny BART model
+        args.hf_model = 'sshleifer/bart-tiny-random'
 
     # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}

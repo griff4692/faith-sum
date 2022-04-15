@@ -10,7 +10,7 @@ import spacy
 from datasets import load_dataset
 from gen_transformers.data_utils import Seq2SeqCollate
 
-from constants import summarization_name_mapping
+from sum_constants import summarization_name_mapping
 
 
 def remove_sent_from_plan(oracle_idxs):
@@ -45,6 +45,11 @@ class SummaryDataModule(pl.LightningDataModule):
             add_cols.append('reference')
 
         oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}.csv')
+        if not os.path.exists(oracle_fn):
+            raise Exception(
+                f'Please first run: python preprocess/extract_oracles.py '
+                f'--dataset {self.args.dataset} --data_dir {self.args.data_dir}'
+            )
         print(f'Loading pre-computed oracle summaries from {oracle_fn}')
         oracle_df = pd.read_csv(oracle_fn)
         ids2oracles = {row['id']: row for row in oracle_df.to_dict('records')}
@@ -145,7 +150,7 @@ class SummarizationDataset(Dataset):
             'source': source_annotated,
             'target': target_annotated,
         }
-        if self.split == 'train' and 'plan' in self.args.summary_style:
+        if self.split == 'train' and 'plan' in self.args.summary_style and self.args.add_contrast:
             perturb_prefixes = []  # Perturb the plan and fine-tune with unlikelihood training
             remaining_idxs = np.sort(list(set(np.arange(len(source_sents))) - set(oracle_idxs)))
 

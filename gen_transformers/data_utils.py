@@ -1,5 +1,27 @@
+import os
+from pathlib import Path
+
 import itertools
+import nltk
 import torch
+
+
+def postprocess_text(texts):
+    return ['\n'.join(nltk.sent_tokenize(text.strip())) for text in texts]
+
+
+def source_from_ids(input_ids, nlp, tokenizer):
+    source = tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
+    source_docs = [list(nlp(x).sents) for x in source]
+    source_doc_sents_tok = [
+        [[str(token.text) for token in sentence] for sentence in doc] for doc in source_docs
+    ]
+    return {
+        'text': source,
+        'sents': source_docs,
+        'sent_toks': source_doc_sents_tok
+    }
+
 
 
 class Seq2SeqCollate:
@@ -76,3 +98,15 @@ class Seq2SeqCollate:
                 batch['pos_labels'][torch.where(batch['pos_labels'] == 1)] = -100
                 batch['pos_labels'][torch.where(batch['pos_labels'] == 2)] = -100
         return batch
+
+
+def get_path_from_exp(weights_dir, experiment):
+    dir = os.path.join(weights_dir, experiment)
+    paths = list(Path(dir).rglob('*.ckpt'))
+    if len(paths) == 0:
+        raise Exception(f'No weights found in {dir}')
+    elif len(paths) == 1:
+        return str(paths[0])
+    else:
+        print('\n'.join([str(x) for x in paths]))
+        raise Exception('Multiple possible weights found.  Please remove one or specify the path with --restore_path')

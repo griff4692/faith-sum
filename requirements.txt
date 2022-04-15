@@ -2,3 +2,4 @@ transformers
 nlp
 datasets
 spacy
+pyrouge

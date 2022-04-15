@@ -20,8 +20,8 @@ from spacy.lang.en import English
 from tqdm import tqdm
 
 import datasets as hf_nlp
-from helpers import _get_word_ngrams, load_json
-from constants import summarization_name_mapping
+from preprocess.helpers import _get_word_ngrams, load_json
+from sum_constants import summarization_name_mapping
 
 
 logger = logging.getLogger(__name__)

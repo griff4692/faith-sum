@@ -3,8 +3,8 @@ import os
 from p_tqdm import p_uimap
 import pandas as pd
 
-from convert_abstractive_to_extractive import gain_selection
-from constants import summarization_name_mapping
+from preprocess.convert_abstractive_to_extractive import gain_selection
+from sum_constants import summarization_name_mapping
 from datasets import load_dataset
 import spacy
 
@@ -46,6 +46,7 @@ if __name__ == '__main__':
     nlp = spacy.load('en_core_web_sm')
 
     out_dir = os.path.join(args.data_dir, args.dataset, 'oracle')
+    print(f'Creating directory to store pre-computed oracles -> {out_dir}')
     os.makedirs(out_dir, exist_ok=True)
 
     for split in args.splits.split(','):

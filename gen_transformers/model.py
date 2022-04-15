@@ -1,67 +1,22 @@
-from collections import Counter
-import itertools
-import regex as re
 import os
+import regex as re
 
 from datasets import load_metric
 import pandas as pd
 import pytorch_lightning as pl
-import nltk
 import numpy as np
 import spacy
 import torch
 from transformers import AutoModelForSeq2SeqLM
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
-from convert_abstractive_to_extractive import gain_selection
-os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
+
+from preprocess.convert_abstractive_to_extractive import gain_selection
 from eval.rouge_metric import RougeMetric
+from gen_transformers.data_utils import postprocess_text
 
 
-# def label_smoothed_nll_loss(lprobs, target, epsilon=0.1, ignore_index=-100, reduce=True):
-#     if target.dim() == lprobs.dim() - 1:
-#         target = target.unsqueeze(-1)
-#     pad_mask = target.eq(ignore_index)
-#     # In case the ignore_index is -100, the gather will fail, so we replace labels by 0. The padding_mask
-#     # will ignore them in any case.
-#     target.clamp_min_(0)
-#     nll_loss = -lprobs.gather(dim=-1, index=target)
-#     smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
-#     nll_loss.masked_fill_(pad_mask, 0.)
-#     smooth_loss.masked_fill_(pad_mask, 0.)
-#     if reduce:
-#         # Take the mean over the label dimensions, then divide by the number of active elements (i.e. not-padded):
-#         num_active_elements = pad_mask.numel() - pad_mask.long().sum()
-#         nll_loss = nll_loss.sum() / num_active_elements
-#         smooth_loss = smooth_loss.sum() / num_active_elements
-#     loss = (1. - epsilon) * nll_loss + (epsilon * smooth_loss / lprobs.size(-1))
-#     return loss, nll_loss
-
-
-# def label_smoothed_unlikelihood(probs, targets, reduce=True):
-#     probs = probs.view(-1, probs.size(-1))
-#     one_minus_probs = torch.clamp(1.0 - probs, min=1e-20)
-#     lprobs = torch.log(one_minus_probs)
-#     targets = targets.view(-1, 1)
-#     loss, nll_loss = label_smoothed_nll_loss(lprobs, targets, ignore_index=-100, reduce=reduce)
-#     return loss, nll_loss
-
-
-def postprocess_text(texts):
-    return ['\n'.join(nltk.sent_tokenize(text.strip())) for text in texts]
-
-
-def source_from_ids(input_ids, nlp, tokenizer):
-    source = tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
-    source_docs = [list(nlp(x).sents) for x in source]
-    source_doc_sents_tok = [
-        [[str(token.text) for token in sentence] for sentence in doc] for doc in source_docs
-    ]
-    return {
-        'text': source,
-        'sents': source_docs,
-        'sent_toks': source_doc_sents_tok
-    }
+os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 
 
 class TransformerSummarizer(pl.LightningModule):
@@ -72,14 +27,14 @@ class TransformerSummarizer(pl.LightningModule):
         assert self.hparams.max_input_length <= self.tokenizer.model_max_length
         self.model = AutoModelForSeq2SeqLM.from_pretrained(hf_model)
         self.model.resize_token_embeddings(len(tokenizer))
-        self.lr = self.hparams.lr
-        self.train_size = None
+        self.lr = self.hparams.lr  # Necessary for tune_lr to work with PytorchLightning
         self.rouge = load_metric('rouge')
         self.label_smoother = LabelSmoother(epsilon=0.1)
         self.nlp = spacy.load('en_core_web_sm')
         self.rouge_metric = RougeMetric()
-        # Pull out from regular NLL
-        self.special_id_cutoff = self.tokenizer.convert_tokens_to_ids('<sep>')
+        # <sep> separates plan from abstract for plan models
+        if 'plan' in self.hparams.summary_style:
+            self.special_id_cutoff = self.tokenizer.convert_tokens_to_ids('<sep>')
 
     def compute_ll(self, batch, labels, output):
         batch_size = len(output[1])
@@ -97,53 +52,78 @@ class TransformerSummarizer(pl.LightningModule):
         }
 
         outputs = self.model(**inputs, use_cache=False)
-        batch_nll = []
+        # Separately compute NLL for plan (pre <sep>) and NLL for abstract (post <sep>)
+        plan_nll, abstract_nll = [], []
         for cand_idx in range(len(labels)):
             label_row = labels[cand_idx]
             cutoff = int(torch.where(label_row == self.special_id_cutoff)[0])
-            start_idx = cutoff + 1  # Start after the <sep> token (disregard the plan)
-            label_row_abstract = label_row[start_idx:]
-            loss_row_abstract = {'logits': outputs['logits'][cand_idx, start_idx:, :]}
-            batch_nll.append(self.label_smoother(loss_row_abstract, label_row_abstract))
-        return batch_nll
+
+            label_row_plan = label_row[:cutoff]
+            loss_row_plan = {'logits': outputs['logits'][cand_idx, : cutoff, :]}
+            plan_nll.append(self.label_smoother(loss_row_plan, label_row_plan))
+
+            label_row_abstract = label_row[cutoff + 1:]
+            loss_row_abstract = {'logits': outputs['logits'][cand_idx, cutoff + 1:, :]}
+            abstract_nll.append(self.label_smoother(loss_row_abstract, label_row_abstract))
+
+        return plan_nll, abstract_nll
+
+    def contrast_loss(self, batch_size, num_neg_cand, batch_nll_pos, batch_nll_neg):
+        margin_losses = []
+        for batch_idx in range(batch_size):
+            pos_ll = - batch_nll_pos[batch_idx]
+            neg_nll_cands = batch_nll_neg[batch_idx * num_neg_cand: (batch_idx + 1) * num_neg_cand]
+            for neg_nll_cand in neg_nll_cands:
+                neg_ll_cand = - neg_nll_cand
+                margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.margin, min=0))
+        return margin_losses
 
     def training_step(self, batch, batch_idx):
         batch_size = len(batch['input_ids'])
+
+        # Perturbed Plans
         neg_labels = batch.pop('neg_labels', None)
         pos_labels = batch.pop('pos_labels', None)
         output = self.model(**batch, use_cache=False)
+
+        # Regular MLE decoder loss
         loss = output.loss
         self.log('train_loss', loss, on_epoch=False, on_step=True, prog_bar=True)
 
+        # Return label-smoothed loss
         full_loss = self.label_smoother(output, batch['labels'])
+
         if pos_labels is not None:
-            batch_pos_nll = self.compute_ll(batch, pos_labels, output)
-            batch_neg_nll = self.compute_ll(batch, neg_labels, output)
+            # Single positive is ground-truth plan and abstractive reference
+            batch_plan_nll_pos, batch_abstract_nll_pos = self.compute_ll(batch, pos_labels, output)
+            # Neg labels are perturbed plans: add-1 sentence, remove-1 sentence, replace 1 sentence
+            batch_plan_nll_neg, batch_abstract_nll_neg = self.compute_ll(batch, neg_labels, output)
 
             num_neg_cand = len(neg_labels) // batch_size
-            margin_losses = []
-            for batch_idx in range(batch_size):
-                pos_ll = - batch_pos_nll[batch_idx]
-                neg_nll_cands = batch_neg_nll[batch_idx * num_neg_cand: (batch_idx + 1) * num_neg_cand]
-                for neg_nll_cand in neg_nll_cands:
-                    neg_ll_cand = - neg_nll_cand
-                    margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.margin, min=0))
-            avg_margin_loss = torch.stack(margin_losses).mean()
 
-            self.log('train_margin', avg_margin_loss, on_epoch=False, on_step=True, prog_bar=True)
-            full_loss += avg_margin_loss
+            # Extractive Plan Contrast Loss
+            # Train log likelihood of generating ground-truth plan to be higher than perturbed
+            plan_batch_margins = self.contrast_loss(
+                batch_size, num_neg_cand, batch_plan_nll_pos, batch_plan_nll_neg
+            )
+
+            # Consistency Loss
+            # Train log likelihood of generating abstract to be higher
+            # when conditioned on oracle plan than when conditioned on corrupted plans (mismatched)
+            abstract_batch_margins = self.contrast_loss(
+                batch_size, num_neg_cand, batch_abstract_nll_pos, batch_abstract_nll_neg
+            )
+
+            # Average both and add to MLE language model (plan + abstract) loss
+            plan_avg_margin = torch.stack(plan_batch_margins).mean()
+            abstract_avg_margin = torch.stack(abstract_batch_margins).mean()
+
+            self.log('train_plan_margin', plan_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
+            self.log('train_abstract_margin', abstract_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
+            # --contrast_lambda determines the relative weight of LM versus contrast margin losses
+            full_loss += self.hparams.contrast_lambda * (plan_avg_margin + abstract_avg_margin)
             self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
         return full_loss
-
-        # TODO workshop ~ didn't seem to be working well
-        # lm_mask = batch['labels'].le(self.special_id_cutoff - 1)
-        # lm_loss = self.label_smoother(output, batch['labels'].masked_fill(plan_mask, -100))
-        # plan_mask = batch['labels'].ge(self.special_id_cutoff)
-        # plan_loss = self.label_smoother(output, batch['labels'].masked_fill(lm_mask, -100))
-        # self.log('plan_loss', plan_loss, on_epoch=False, on_step=True, prog_bar=True)
-        # self.log('lm_loss', lm_loss, on_epoch=False, on_step=True, prog_bar=True)
-        # joint_loss = lm_loss + self.hparams.plan_lambda * plan_loss
-        # return joint_loss
 
     def validation_step(self, batch, batch_idx):
         validation_kwargs = {
@@ -224,8 +204,6 @@ class TransformerSummarizer(pl.LightningModule):
             save_out.update(
                 self.compute_rouge(gen_output['pyramid_extracts'], reference[:1], prefix='pyramid_extract_', eval=True)
             )
-
-        print(save_out['pyramid_extract_rouge1_f1'] >= save_out['extract_rouge1_f1'], save_out['pyramid_extract_rouge1_f1'], save_out['extract_rouge1_f1'])
 
         # Measure consistency between abstract (and implied extract) and generated extract
         if gen_output['abstracts'] is not None and gen_output['extracts'] is not None:
@@ -368,6 +346,7 @@ class TransformerSummarizer(pl.LightningModule):
                 })
 
         pyramid_extracts = None
+        # TODO Add in for regular validation
         # if eval and extracts is not None:
         #     source_sents = source['sents'][0]
         #     sent_idxs = list(itertools.chain(*[[int(y.lstrip('<s').rstrip('>')) for y in x['idxs']] for x in extracts]))
