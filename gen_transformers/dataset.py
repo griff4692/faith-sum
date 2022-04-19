@@ -6,6 +6,7 @@ import pytorch_lightning as pl
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
+from tqdm import tqdm
 
 from datasets import load_dataset
 from gen_transformers.data_utils import Seq2SeqCollate
@@ -94,6 +95,19 @@ class SummarizationDataset(Dataset):
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
         self.ids2oracles = ids2oracles
 
+        if self.args.oracle_filter and split == 'train':  # Only filter for training data
+            keep_idxs = []
+            n = len(self.dataset)
+            print(f'Filtering training dataset for high-quality oracles only: avg R1/R2 >= {self.args.oracle_cutoff}')
+            for idx, example in tqdm(enumerate(self.dataset), total=n):
+                oracle_obj = self.ids2oracles[example['id']]
+                avg_oracle_rouge = (oracle_obj['rouge_1'] + oracle_obj['rouge_2']) / 2.0
+                good_oracle = avg_oracle_rouge >= self.args.oracle_cutoff
+                if good_oracle:
+                    keep_idxs.append(idx)
+            self.dataset = self.dataset.select(keep_idxs)
+            print(f'Truncated training data from {n} to {len(self.dataset)}')
+
     def __len__(self):
         return len(self.dataset)
 
@@ -150,7 +164,7 @@ class SummarizationDataset(Dataset):
             'source': source_annotated,
             'target': target_annotated,
         }
-        if self.split == 'train' and 'plan' in self.args.summary_style and self.args.add_contrast:
+        if self.split == 'train' and 'plan' in self.args.summary_style and len(self.args.contrast_modes) > 0:
             perturb_prefixes = []  # Perturb the plan and fine-tune with unlikelihood training
             remaining_idxs = np.sort(list(set(np.arange(len(source_sents))) - set(oracle_idxs)))
 

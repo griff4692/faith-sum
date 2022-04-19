@@ -165,18 +165,31 @@ if __name__ == '__main__':
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
     # This is only used by summary_style=hybrid_control to determine how to partition data (doesn't really work for CNN)
     parser.add_argument(
-        '--oracle_cutoff', default=0.5, type=float,
+        '--oracle_cutoff', default=0.42, type=float,  # 0.42 is not tuned but roughly splits CNN/DM in half
         help='For summary_style=hybrid_control, summaries with ranking above this (avg R1 / R2)'
              'will be trained as extracts (to generate the oracle extractive summary).'
              'Below, abstracts (to generate original reference). '
     )
 
-    # Oracle Filtering - TODO reimplement
-    # parser.add_argument('-oracle_filtering', default=False, action='store_true')
+    # Oracle Filter - remove examples from training set whose extractive oracle is < avg R1, R2 against reference
+    # In other words, only keep training examples where the abstractive reference can be explained well by an oracle
+    parser.add_argument('-oracle_filter', default=False, action='store_true')
 
     # CONTRAST controls
-    # Add Contrast turns on the contrast loss only when summary_style = plan_abstract
-    parser.add_argument('-add_contrast', default=0.5, type=float)
+    # empty string '' means no contrast loss
+    # plan means we just use contrastive learning on extractive plan portion of the target
+    # abstract means just on abstract
+    # plan,abstract means we compute both contrast losses -- on the plan and the abstract
+    # We generate negatives by adding / removing / swapping sentences from plan
+    # Abstract loss is more of a consistency loss
+    # i.e., We shouldn't assign a high probability on generating the reference from a mis-aligned plan
+    # The plan loss directly encourages generating the oracle extractive plan irrespective of subsequent abstact.
+    parser.add_argument('--contrast_modes', default='', choices=[
+        'abstract,plan',  # Make sure you get the order right when calling this ("plan,abstract" will err out)
+        'abstract',
+        'plan'
+        ''
+    ])
     # Margin for contrast loss
     parser.add_argument('--contrast_margin', default=0.5, type=float)
     # Relative contribution to overall loss for contrastive loss (versus regular LM MLE loss)

@@ -40,9 +40,10 @@ class TransformerSummarizer(pl.LightningModule):
         batch_size = len(output[1])
         num_cand = len(labels) // batch_size
         # Ignore the <eos> token
-        # Tile this for each num_neg example
+        # Tile this for each num_neg or num_pos decoder target
+        model_dim = self.model.config.d_model  # 768 for BART (24 for debug shleifer/tiny-random)
         encoder_outputs = output.encoder_last_hidden_state.unsqueeze(1).repeat(
-            1, num_cand, 1, 1).contiguous().view(batch_size * num_cand, -1, 768).clone()
+            1, num_cand, 1, 1).contiguous().view(batch_size * num_cand, -1, model_dim).clone()
         encoder_attention_mask = batch['attention_mask'].unsqueeze(1).repeat(
             1, num_cand, 1).contiguous().view(batch_size * num_cand, -1)
         inputs = {
@@ -69,13 +70,21 @@ class TransformerSummarizer(pl.LightningModule):
         return plan_nll, abstract_nll
 
     def contrast_loss(self, batch_size, num_neg_cand, batch_nll_pos, batch_nll_neg):
+        """
+        :param batch_size: Batch Size
+        :param num_neg_cand: Number of negative targets for each example in batch (batch_size * num_neg_cand total)
+        :param batch_nll_pos: Negative Log Likelihoods for generating the 'positive' ground-truth
+        :param batch_nll_neg: Negative Log Likelihoods for generating the 'negative' ground-truth
+        :return: Margin losses for each pair of pos and neg.  Positive targets should have a higher LL than negatives,
+        with a margin defined by --contrast_margin.
+        """
         margin_losses = []
         for batch_idx in range(batch_size):
             pos_ll = - batch_nll_pos[batch_idx]
             neg_nll_cands = batch_nll_neg[batch_idx * num_neg_cand: (batch_idx + 1) * num_neg_cand]
             for neg_nll_cand in neg_nll_cands:
                 neg_ll_cand = - neg_nll_cand
-                margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.margin, min=0))
+                margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.contrast_margin, min=0))
         return margin_losses
 
     def training_step(self, batch, batch_idx):
@@ -114,14 +123,28 @@ class TransformerSummarizer(pl.LightningModule):
                 batch_size, num_neg_cand, batch_abstract_nll_pos, batch_abstract_nll_neg
             )
 
-            # Average both and add to MLE language model (plan + abstract) loss
+            # Average both and add to MLE language model loss depending on if plan and/or abstract in --contrast_modes
             plan_avg_margin = torch.stack(plan_batch_margins).mean()
             abstract_avg_margin = torch.stack(abstract_batch_margins).mean()
 
-            self.log('train_plan_margin', plan_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
-            self.log('train_abstract_margin', abstract_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
-            # --contrast_lambda determines the relative weight of LM versus contrast margin losses
-            full_loss += self.hparams.contrast_lambda * (plan_avg_margin + abstract_avg_margin)
+            # 3 modes for contrastive learning
+            # 1) Just train on plan LL margin
+            # 2) Just on abstract LL margin
+            # 3) Both
+            if 'plan' in self.hparams.contrast_modes and 'abstract' in self.hparams.contrast_modes:
+                self.log('train_plan_margin', plan_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
+                self.log('train_abstract_margin', abstract_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
+                # --contrast_lambda determines the relative weight of LM versus contrast margin losses
+                full_loss += self.hparams.contrast_lambda * (plan_avg_margin + abstract_avg_margin)
+            elif 'plan' in self.hparams.contrast_modes:
+                self.log('train_plan_margin', plan_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
+                # --contrast_lambda determines the relative weight of LM versus contrast margin losses
+                full_loss += self.hparams.contrast_lambda * plan_avg_margin
+            else:  # Must be just abstract
+                assert self.hparams.contrast_modes == 'abstract'
+                self.log('train_abstract_margin', abstract_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
+                # --contrast_lambda determines the relative weight of LM versus contrast margin losses
+                full_loss += self.hparams.contrast_lambda * abstract_avg_margin
             self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
         return full_loss
 
