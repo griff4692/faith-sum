@@ -7,6 +7,7 @@ from tqdm import tqdm
 import torch
 from transformers import AutoTokenizer, BartTokenizer
 
+from data_utils import get_path_from_exp
 from gen_transformers.dataset import SummaryDataModule
 from gen_transformers.model import TransformerSummarizer
 from global_utils import get_free_gpus
@@ -122,6 +123,7 @@ if __name__ == '__main__':
 
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style
+    args.oracle_filter = False
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
     dataloader = datamodule.test_dataloader(max_examples=args.max_examples)
