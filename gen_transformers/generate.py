@@ -60,7 +60,6 @@ if __name__ == '__main__':
     # Beam Search or Nucleus Sampling (more diverse)
     parser.add_argument('-sample_gen', default=False, action='store_true')
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
-    parser.add_argument('-fragments', default=False, action='store_true')
     parser.add_argument(
         '--oracle_cutoff', default=0.75, type=float,
         help='For summary_style=hybrid_control, summaries with ranking above this will be trained as extracts'
@@ -84,12 +83,14 @@ if __name__ == '__main__':
         'facebook/bart-large',
         'Yale-LILY/brio-cnndm-uncased',
     ])
+    parser.add_argument('--split', default='validation')
 
     args = parser.parse_args()
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
 
     # TODO Support batches for predictions (simple fix)
     args.per_device_eval_bs = 1
+    args.per_device_train_bs = 1
 
     if args.experiment is None:
         args.experiment = args.wandb_name
@@ -124,22 +125,25 @@ if __name__ == '__main__':
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style
     args.oracle_filter = False
+    args.contrast_modes = ''
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
-    dataloader = datamodule.test_dataloader(max_examples=args.max_examples)
+    dataloader, dataset_idxs = datamodule.get_split(args.split, max_examples=args.max_examples)
     outputs = []
     gen_kwargs = SAMPLE_KWARGS[args.dataset] if args.sample_gen else GEN_KWARGS[args.dataset]
-    for batch in tqdm(dataloader, total=len(dataloader)):
+    assert len(dataloader) == len(dataset_idxs)
+    for batch_idx, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
         batch = {k: v.to(gpu) if type(v) == torch.Tensor else v for k, v in batch.items()}
         with torch.no_grad():
             batch_stats = model.predict_step(batch, **gen_kwargs)
+            batch_stats['dataset_idx'] = dataset_idxs[batch_idx]
         if type(batch_stats) == list:
             outputs += batch_stats
         else:
             outputs.append(batch_stats)
 
     outputs = pd.DataFrame(outputs)
-    out_fn = os.path.join(results_dir, 'outputs.csv')
+    out_fn = os.path.join(results_dir, f'{args.split}_outputs.csv')
     print(f'Saving {len(outputs)} ROUGE scores and predictions to {out_fn}')
     outputs.to_csv(out_fn, index=False)
     num_col = outputs.select_dtypes('number')

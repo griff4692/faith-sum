@@ -38,6 +38,7 @@ class SummaryDataModule(pl.LightningDataModule):
         if self.args.debug and max_examples is None:
             max_examples = 128
         n = len(split_dataset)
+        rand_idxs = None
         if max_examples is not None and max_examples < n:
             rand_idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
             split_dataset = split_dataset.select(rand_idxs)
@@ -72,16 +73,16 @@ class SummaryDataModule(pl.LightningDataModule):
             'num_workers': self.num_workers,
             'collate_fn': collate_fn
         }
-        return DataLoader(split_dataset_pl, **kwargs)
+        return DataLoader(split_dataset_pl, **kwargs), rand_idxs
 
-    def train_dataloader(self):
-        return self.get_split('train')
+    def train_dataloader(self, max_examples=None):
+        return self.get_split('train', max_examples=None)[0]
 
     def val_dataloader(self, max_examples=None, add_cols=None):
-        return self.get_split('validation', max_examples=max_examples or self.args.max_val_examples)
+        return self.get_split('validation', max_examples=max_examples or self.args.max_val_examples)[0]
 
     def test_dataloader(self, max_examples=None, add_cols=None):
-        return self.get_split('test', max_examples=max_examples)
+        return self.get_split('test', max_examples=max_examples)[0]
 
 
 class SummarizationDataset(Dataset):

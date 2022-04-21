@@ -159,6 +159,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         all_metrics = {'val_loss': loss}
         gen_output = self.shared_generate(batch, **validation_kwargs)
+
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
         if gen_output['abstracts'] is not None:
             all_metrics.update(self.compute_rouge(gen_output['abstracts'], gen_output['references']))
@@ -211,8 +212,21 @@ class TransformerSummarizer(pl.LightningModule):
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
         if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
             save_out.update(self.compute_rouge(gen_output['abstracts'][:1], gen_output['references'][:1], eval=True))
-            implied_extracts = [x['summary'] for x in gen_output['implied_extracts'][:1]]
-            save_out.update(self.compute_rouge(implied_extracts, reference, prefix='implied_', eval=True))
+            implied_extracts = [x['summary'] for x in gen_output['implied_extracts']]
+            save_out.update(self.compute_rouge(implied_extracts[:1], reference, prefix='implied_', eval=True))
+
+            # Get all the ROUGE abstracts (average ROUGE-1, ROUGE-2)
+            abstract_rouge_f1s = []
+            for abstract in gen_output['abstracts']:
+                score = self.compute_rouge([abstract], gen_output['references'][:1], eval=True)['mean_f1']
+                abstract_rouge_f1s.append(str(score))
+            save_out['abstract_rouges'] = ','.join(abstract_rouge_f1s)
+
+            implied_extract_rouge_f1s = []
+            for extract in implied_extracts:
+                score = self.compute_rouge([extract], gen_output['references'][:1], eval=True)['mean_f1']
+                implied_extract_rouge_f1s.append(str(score))
+            save_out['implied_extract_rouges'] = ','.join(implied_extract_rouge_f1s)
 
         if gen_output['extracts'] is not None:
             extracts = [x['summary'] for x in gen_output['extracts']]
@@ -222,6 +236,7 @@ class TransformerSummarizer(pl.LightningModule):
             ) for extract in extracts]
             best_metric = sorted(cand_metrics, key=lambda x: x['best_extract_mean_f1'])[-1]
             save_out.update(best_metric)
+            save_out['extract_rouges'] = ','.join([str(x['best_extract_mean_f1']) for x in cand_metrics])
 
         if gen_output['pyramid_extracts'] is not None:
             save_out.update(
@@ -358,15 +373,28 @@ class TransformerSummarizer(pl.LightningModule):
             abstract_sents_tok = [[[
                 str(token.text) for token in sentence] for sentence in abstract_sent] for abstract_sent in
                 abstract_sents]
-            for idx in range(batch_size):
-                source_toks = source['sent_toks'][idx]
-                source_raw = source['text'][idx]
-                implied_oracle_idx = gain_selection(source_toks, abstract_sents_tok[idx], 5, lower=True, sort=True)[0]
-                implied_oracle = ' '.join([str(source_raw[i]) for i in implied_oracle_idx])
-                implied_extracts.append({
-                    'idxs': implied_oracle_idx,
-                    'summary': implied_oracle,
-                })
+
+            if batch_size == len(abstract_sents_tok):
+                for idx in range(batch_size):
+                    source_toks = source['sent_toks'][idx]
+                    source_raw = source['sents'][idx]
+                    implied_oracle_idx = gain_selection(source_toks, abstract_sents_tok[idx], 5, lower=True, sort=True)[0]
+                    implied_oracle = ' '.join([str(source_raw[i]) for i in implied_oracle_idx])
+                    implied_extracts.append({
+                        'idxs': implied_oracle_idx,
+                        'summary': implied_oracle,
+                    })
+            else:
+                assert len(source['sent_toks']) == 1
+                for idx in range(len(abstract_sents_tok)):
+                    source_toks = source['sent_toks'][0]
+                    source_raw = source['sents'][0]
+                    implied_oracle_idx = gain_selection(source_toks, abstract_sents_tok[idx], 5, lower=True, sort=True)[0]
+                    implied_oracle = ' '.join([str(source_raw[i]) for i in implied_oracle_idx])
+                    implied_extracts.append({
+                        'idxs': implied_oracle_idx,
+                        'summary': implied_oracle,
+                    })
 
         pyramid_extracts = None
         # TODO Add in for regular validation
@@ -412,7 +440,7 @@ class TransformerSummarizer(pl.LightningModule):
 
     def compute_rouge(self, generated, gold, prefix='', eval=False):
         rouge_types = ['rouge1', 'rouge2', 'rougeL']
-        if eval:  # Use SummEval PERL script
+        if False:  # (TODO) add back eval:  # Use SummEval PERL script
             outputs = self.rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
             f1s = []
             stats = {}
