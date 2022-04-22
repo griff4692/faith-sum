@@ -166,14 +166,23 @@ class RankDataset(Dataset):
         # pred_extracts = example['extract'].split('<cand>')
         pred_extract_idxs = list(map(lambda x: x.replace(',', ''), sample['extract_idx'].split('<cand>')))
         pred_extract_rouges = list(map(float, sample['extract_rouges'].split(',')))
-        pred_abstract_rouges = list(map(float, sample['extract_rouges'].split(',')))
+        pred_abstract_rouges = list(map(float, sample['abstract_rouges'].split(',')))
         pred_implied_rouges = list(map(float, sample['implied_extract_rouges'].split(',')))
         num_cand = len(pred_abstracts)
         full_preds = [pred_extract_idxs[i] + '<sep>' + pred_abstracts[i] for i in range(num_cand)]
 
         avg_scores = [(a + b) / 2.0 for a, b in zip(pred_abstract_rouges, pred_extract_rouges)]
 
-        oracle_order = np.argsort(-np.array(avg_scores))
+        if self.args.rank_variable == 'avg':
+            oracle_order = np.argsort(-np.array(avg_scores))
+        elif self.args.rank_variable == 'extract':
+            oracle_order = np.argsort(-np.array(pred_extract_rouges))
+        elif self.args.rank_variable == 'abstract':
+            oracle_order = np.argsort(-np.array(pred_abstract_rouges))
+        elif self.args.rank_variable == 'implied':
+            oracle_order = np.argsort(-np.array(pred_implied_rouges))
+        else:
+            raise Exception('Unrecognized ROUGE')
         full_preds_ordered = [full_preds[rank] for rank in oracle_order]
         pred_extract_rouges_ordered = [pred_extract_rouges[rank] for rank in oracle_order]
         pred_abstract_rouges_ordered = [pred_abstract_rouges[rank] for rank in oracle_order]

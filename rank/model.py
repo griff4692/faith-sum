@@ -73,7 +73,7 @@ class SummaryRanker(pl.LightningModule):
         margin_losses = []
         mrr = []
         score_adv = []
-        pred_scores = []
+        pred_scores = defaultdict(list)
         corels = defaultdict(list)
         pos_neg_gap = []
         for batch_idx in range(batch_size):
@@ -109,8 +109,10 @@ class SummaryRanker(pl.LightningModule):
             mrr.append(1 / best_rank)
 
             # What is the ROUGE score of our prediction (highest LL)
-            pred_score = avg_scores[np.argmax(full_ll)]
-            pred_scores.append(pred_score)
+            predicted_idx = np.argmax(full_ll)
+            pred_scores['avg'].append(avg_scores[predicted_idx])
+            pred_scores['extract'].append(extract_scores[predicted_idx])
+            pred_scores['abstract'].append(abstract_scores[predicted_idx])
             # How much better is this than the average score (adv = advantage)
             score_adv.append(avg_scores[np.argmax(full_ll)] - np.mean(avg_scores))
 
@@ -164,19 +166,21 @@ class SummaryRanker(pl.LightningModule):
 
         # Average both and add to MLE language model loss depending on if plan and/or abstract in --contrast_modes
         avg_margin = torch.stack(batch_margins).mean()
-        avg_pred_score = np.stack(pred_scores).mean()
         avg_score_adv = np.stack(score_adv).mean()
         avg_mrr = np.stack(mrr).mean()
         avg_pos_neg_gap = np.stack(pos_neg_gap).mean()
         self.log(f'{split}_margin', avg_margin, on_epoch=not is_train, on_step=is_train, prog_bar=True)
         self.log(f'{split}_gap', avg_pos_neg_gap, on_epoch=not is_train, on_step=is_train, prog_bar=True)
-        self.log(f'{split}_avg_rouge', avg_pred_score, on_epoch=not is_train, on_step=is_train, prog_bar=True)
         self.log(f'{split}_advantage', avg_score_adv, on_epoch=not is_train, on_step=is_train, prog_bar=True)
         self.log(f'{split}_mrr', avg_mrr, on_epoch=not is_train, on_step=is_train, prog_bar=True)
 
         for k, v in corels.items():
             avg_corel = np.stack(v).mean()
             self.log(f'{split}_{k}_corel', avg_corel, on_epoch=not is_train, on_step=is_train, prog_bar=True)
+
+        for k, v in pred_scores.items():
+            avg_score = np.stack(v).mean()
+            self.log(f'{split}_{k}_rouge', avg_score, on_epoch=not is_train, on_step=is_train, prog_bar=True)
         return avg_margin
 
     def training_step(self, batch, batch_idx):

@@ -34,7 +34,6 @@ def run(args):
     args.num_gpus = None if gpus is None else len(gpus)
     print('Num GPUs --> {}'.format(args.num_gpus))
     precision = 16 if args.num_gpus is not None else 32
-    experiment_dir = os.path.join(args.weight_dir, args.experiment)
 
     # Load pre-trained summarizer (summary_style -> abstract_plan)
     ckpt_path = get_path_from_exp(args.weight_dir, args.wandb_name)
@@ -49,6 +48,7 @@ def run(args):
     finetuned_model = TransformerSummarizer.load_from_checkpoint(
         checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False)
 
+    experiment_dir = os.path.join(args.weight_dir, args.experiment, 'rank')
     os.makedirs(os.path.join(experiment_dir, 'wandb'), exist_ok=True)  # Only way to make sure it's writable
 
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
@@ -144,6 +144,12 @@ if __name__ == '__main__':
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--wandb_name', default='plan_abstract_bs24')
+    parser.add_argument('--rank_variable', default='avg', choices=[
+        'avg',
+        'extract',
+        'abstract',
+        'implied'
+    ])
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
     parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
