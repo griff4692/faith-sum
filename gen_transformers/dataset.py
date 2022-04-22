@@ -1,7 +1,6 @@
 import os
 
 import numpy as np
-np.random.seed(1992)
 import pytorch_lightning as pl
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
@@ -38,14 +37,10 @@ class SummaryDataModule(pl.LightningDataModule):
         if self.args.debug and max_examples is None:
             max_examples = 128
         n = len(split_dataset)
-        rand_idxs = None
+        idxs = list(range(n))
         if max_examples is not None and max_examples < n:
-            rand_idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
-            split_dataset = split_dataset.select(rand_idxs)
-        add_cols = []
-        if split != 'train' and self.args.summary_style == 'plan':
-            add_cols.append('reference')
-
+            idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
+            split_dataset = split_dataset.select(idxs)
         oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}.csv')
         if not os.path.exists(oracle_fn):
             raise Exception(
@@ -56,9 +51,8 @@ class SummaryDataModule(pl.LightningDataModule):
         oracle_df = pd.read_csv(oracle_fn)
         ids2oracles = {row['id']: row for row in oracle_df.to_dict('records')}
 
-        split_dataset_pl = SummarizationDataset(
-            self.args, split_dataset, split, self.nlp, add_cols=add_cols, ids2oracles=ids2oracles
-        )
+        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, self.nlp, ids2oracles=ids2oracles)
+        add_cols = ['reference']
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
@@ -73,26 +67,25 @@ class SummaryDataModule(pl.LightningDataModule):
             'num_workers': self.num_workers,
             'collate_fn': collate_fn
         }
-        return DataLoader(split_dataset_pl, **kwargs), rand_idxs
+        return DataLoader(split_dataset_pl, **kwargs), idxs
 
     def train_dataloader(self, max_examples=None):
         return self.get_split('train', max_examples=None)[0]
 
-    def val_dataloader(self, max_examples=None, add_cols=None):
+    def val_dataloader(self, max_examples=None):
         return self.get_split('validation', max_examples=max_examples or self.args.max_val_examples)[0]
 
-    def test_dataloader(self, max_examples=None, add_cols=None):
+    def test_dataloader(self, max_examples=None):
         return self.get_split('test', max_examples=max_examples)[0]
 
 
 class SummarizationDataset(Dataset):
-    def __init__(self, args, dataset, split, nlp, add_cols=None, ids2oracles=None):
+    def __init__(self, args, dataset, split, nlp, ids2oracles=None):
         super(SummarizationDataset, self).__init__()
         self.args = args
         self.nlp = nlp
         self.dataset = dataset
         self.split = split
-        self.add_cols = [] if add_cols is None else add_cols
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
         self.ids2oracles = ids2oracles
 
@@ -117,13 +110,16 @@ class SummarizationDataset(Dataset):
         inputs = example[self.input_col]
         target = example[self.target_col]
 
+        untouched_target = target  # Original untouched reference
+
         source_annotated = inputs
         # For simple abstractive training, no oracle extracts / plans need to be included
         if self.args.summary_style == 'abstract':
             target_annotated = target
             return {
                 'source': source_annotated,
-                'target': target_annotated
+                'target': target_annotated,
+                'reference': untouched_target  # Same as target here but not always true
             }
 
         # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
@@ -164,6 +160,7 @@ class SummarizationDataset(Dataset):
         output = {
             'source': source_annotated,
             'target': target_annotated,
+            'reference': untouched_target,  # Use for evaluation
         }
         if self.split == 'train' and 'plan' in self.args.summary_style and len(self.args.contrast_modes) > 0:
             perturb_prefixes = []  # Perturb the plan and fine-tune with unlikelihood training
@@ -194,6 +191,5 @@ class SummarizationDataset(Dataset):
             pos_targets = [target_prefix + '<sep>' + target]
             output['neg_plans'] = neg_targets
             output['pos_plans'] = pos_targets
-        elif self.split != 'train' and self.args.summary_style == 'plan':
-            output['reference'] = target
+
         return output

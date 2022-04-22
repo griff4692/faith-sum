@@ -93,6 +93,7 @@ class TransformerSummarizer(pl.LightningModule):
         # Perturbed Plans
         neg_labels = batch.pop('neg_labels', None)
         pos_labels = batch.pop('pos_labels', None)
+        _ = batch.pop('reference', None)
         output = self.model(**batch, use_cache=False)
 
         # Regular MLE decoder loss
@@ -152,7 +153,7 @@ class TransformerSummarizer(pl.LightningModule):
         validation_kwargs = {
             'num_beams': 1,
             'num_return_sequences': 1,  # Don't over-generate for validation
-            'references': batch.pop('reference', None),
+            'references': batch.pop('reference'),
         }
         output = self.model(**batch, use_cache=False)
         loss = output.loss
@@ -183,15 +184,22 @@ class TransformerSummarizer(pl.LightningModule):
 
         return loss
 
+    def score_candidates(self, reference, candidates, prefix):
+        cand_metrics = [self.compute_rouge(
+            [abstract], reference, prefix=f'best_{prefix}_', eval=True
+        ) for abstract in candidates]
+        best_metric = sorted(cand_metrics, key=lambda x: x[f'best_{prefix}_mean_f1'])[-1]
+        return cand_metrics, best_metric
+
     def predict_step(self, batch, batch_idx=None, **gen_kwargs):
+        references = batch.pop('reference')
         gen_kwargs.update({
-            'references': batch.pop('reference', None),
+            'references': references
         })
         output = self.model(**batch)
         loss = output.loss
         gen_output = self.shared_generate(batch, **gen_kwargs)
-        reference = gen_output['references']
-        assert len(reference) == 1  # TODO - add support for multi-batch outputs
+        assert len(references) == 1  # TODO - add support for multi-batch outputs
 
         abstract_flat = '' if gen_output['abstracts'] is None else '<cand>'.join(gen_output['abstracts'])
         extract_flat = '' if gen_output['extracts'] is None else '<cand>'.join(
@@ -205,42 +213,49 @@ class TransformerSummarizer(pl.LightningModule):
 
         save_out = {
             'abstract': abstract_flat, 'extract': extract_flat, 'implied_extract': implied_extract_flat,
-            'reference': reference[0], 'source': gen_output['source']['text'][0],
+            'reference': references[0], 'source': gen_output['source']['text'][0],
             'extract_idx': extract_idx_flat, 'implied_extract_idx': implied_extract_idx_flat, 'loss': loss,
         }
 
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
         if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
-            save_out.update(self.compute_rouge(gen_output['abstracts'][:1], gen_output['references'][:1], eval=True))
+            save_out.update(self.compute_rouge(gen_output['abstracts'][:1], references, eval=True))
             implied_extracts = [x['summary'] for x in gen_output['implied_extracts']]
-            save_out.update(self.compute_rouge(implied_extracts[:1], reference, prefix='implied_', eval=True))
+            save_out.update(self.compute_rouge(implied_extracts[:1], references, prefix='implied_', eval=True))
 
             # Get all the ROUGE abstracts (average ROUGE-1, ROUGE-2)
-            abstract_rouge_f1s = []
-            for abstract in gen_output['abstracts']:
-                score = self.compute_rouge([abstract], gen_output['references'][:1], eval=True)['mean_f1']
-                abstract_rouge_f1s.append(str(score))
-            save_out['abstract_rouges'] = ','.join(abstract_rouge_f1s)
+            abstract_cand_metrics, best_abstract_metric = self.score_candidates(
+                references, gen_output['abstracts'], 'abstract'
+            )
+            save_out.update(best_abstract_metric)
+            save_out['abstract_rouges'] = ','.join([str(x['best_abstract_mean_f1']) for x in abstract_cand_metrics])
 
-            implied_extract_rouge_f1s = []
-            for extract in implied_extracts:
-                score = self.compute_rouge([extract], gen_output['references'][:1], eval=True)['mean_f1']
-                implied_extract_rouge_f1s.append(str(score))
-            save_out['implied_extract_rouges'] = ','.join(implied_extract_rouge_f1s)
+            implied_cand_metrics, best_implied_metric = self.score_candidates(references, implied_extracts, 'implied')
+            save_out.update(best_implied_metric)
+            save_out['implied_extract_rouges'] = ','.join(
+                [str(x['best_implied_mean_f1']) for x in implied_cand_metrics]
+            )
 
         if gen_output['extracts'] is not None:
             extracts = [x['summary'] for x in gen_output['extracts']]
-            save_out.update(self.compute_rouge(extracts[:1], reference, prefix='extract_', eval=True))
-            cand_metrics = [self.compute_rouge(
-                [extract], reference, prefix='best_extract_', eval=True
-            ) for extract in extracts]
-            best_metric = sorted(cand_metrics, key=lambda x: x['best_extract_mean_f1'])[-1]
-            save_out.update(best_metric)
-            save_out['extract_rouges'] = ','.join([str(x['best_extract_mean_f1']) for x in cand_metrics])
+            save_out.update(self.compute_rouge(extracts[:1], references, prefix='extract_', eval=True))
+
+            extract_cand_metrics, best_extract_metric = self.score_candidates(references, extracts, 'extract')
+            save_out.update(best_extract_metric)
+            save_out['extract_rouges'] = ','.join(
+                [str(x['best_extract_mean_f1']) for x in extract_cand_metrics]
+            )
+
+            # cand_metrics = [self.compute_rouge(
+            #     [extract], reference, prefix='best_extract_', eval=True
+            # ) for extract in extracts]
+            # best_metric = sorted(cand_metrics, key=lambda x: x['best_extract_mean_f1'])[-1]
+            # save_out.update(best_metric)
+            # save_out['extract_rouges'] = ','.join([str(x['best_extract_mean_f1']) for x in cand_metrics])
 
         if gen_output['pyramid_extracts'] is not None:
             save_out.update(
-                self.compute_rouge(gen_output['pyramid_extracts'], reference[:1], prefix='pyramid_extract_', eval=True)
+                self.compute_rouge(gen_output['pyramid_extracts'], references, prefix='pyramid_extract_', eval=True)
             )
 
         # Measure consistency between abstract (and implied extract) and generated extract
@@ -266,13 +281,17 @@ class TransformerSummarizer(pl.LightningModule):
             'output_scores': True
         }
 
-        references = gen_kwargs.pop('references', None)
+        references = gen_kwargs.pop('references')
         default_kwargs.update(gen_kwargs)
         pred_ids = self.model.generate(**default_kwargs)
         gold_ids = batch['labels']
         gold_ids[torch.where(batch['labels'] == -100)] = 1
+
+        # TODO remove
+        # references = self.tokenizer.batch_decode(gold_ids, skip_special_tokens=True)  # .tolist()
+
         input_ids = batch['input_ids']
-        outputs = self.parse_output(pred_ids, gold_ids, input_ids, references=references)
+        outputs = self.parse_output(pred_ids, input_ids, references)
         return outputs
 
     def ensure_extract(self, pred_str, source_sents, source_sent_toks):
@@ -296,13 +315,9 @@ class TransformerSummarizer(pl.LightningModule):
             extractive.append(str(closest_sent))
         return {'summary': ' '.join(extractive), 'idxs': idxs}
 
-    def parse_output(self, pred_ids, gold_ids, input_ids, references=None):
-        if references is None:
-            references = self.tokenizer.batch_decode(gold_ids.tolist(), skip_special_tokens=True)
-
+    def parse_output(self, pred_ids, input_ids, references):
         pred_str = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
         batch_size = len(input_ids)
-
         source_raw = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
         source_docs = [list(self.nlp(x).sents) for x in source_raw]
         source_doc_sents_tok = [
@@ -440,7 +455,7 @@ class TransformerSummarizer(pl.LightningModule):
 
     def compute_rouge(self, generated, gold, prefix='', eval=False):
         rouge_types = ['rouge1', 'rouge2', 'rougeL']
-        if False:  # (TODO) add back eval:  # Use SummEval PERL script
+        if eval:  # Use SummEval PERL script
             outputs = self.rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
             f1s = []
             stats = {}

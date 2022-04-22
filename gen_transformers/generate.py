@@ -2,6 +2,7 @@ import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import torch
@@ -17,8 +18,6 @@ GEN_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
         'num_beams': 4,
-        'num_return_sequences': 1,
-        'length_penalty': 4.0,
         'max_length': 142,
         'min_length': 56,
     },
@@ -27,19 +26,15 @@ GEN_KWARGS = {
 SAMPLE_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
-        # 'length_penalty': 4.0,
         'max_length': 142,
         'min_length': 56,
         # 'top_p': 0.92,
         # 'top_k': 0,
         # 'do_sample': True,
-        # 'num_return_sequences': 10  # Over-generate to get upper bound
         # https://github.com/andrejmiscic/simcls-pytorch/blob/2f0f8e00636f3eeebe2d41b4d318744a89602959/src/model.py
-        'num_return_sequences': 16,
         'num_beam_groups': 16,
         'num_beams': 16,
         'diversity_penalty': 1.0,
-        'length_penalty': 2.,
     },
 }
 
@@ -60,11 +55,14 @@ if __name__ == '__main__':
     # Beam Search or Nucleus Sampling (more diverse)
     parser.add_argument('-sample_gen', default=False, action='store_true')
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    parser.add_argument('--length_penalty', default=2.0, type=float)
+    parser.add_argument('--num_return_sequences', default=16, type=int)
     parser.add_argument(
         '--oracle_cutoff', default=0.75, type=float,
         help='For summary_style=hybrid_control, summaries with ranking above this will be trained as extracts'
              '(to generate the oracle extractive summary).  Below, abstracts (to generate original reference). '
     )
+    parser.add_argument('--bootstraps', default=1, type=int)
     parser.add_argument(
         '--summary_style',
         default='plan_abstract',
@@ -101,9 +99,9 @@ if __name__ == '__main__':
 
     free_gpus = get_free_gpus()
     gpu = free_gpus[0] if args.gpu_device is None else args.gpu_device
-    if args.gpu_device is not None and args.gpu_device not in free_gpus:
-        print(f'Warning! Youve selected a GPU that is not available.  Putting the model on {free_gpus[0]} instead.')
-        gpu = free_gpus[0]
+    # if args.gpu_device is not None and args.gpu_device not in free_gpus:
+    #     print(f'Warning! Youve selected a GPU that is not available.  Putting the model on {free_gpus[0]} instead.')
+    #     gpu = free_gpus[0]
 
     tokenizer_dir = os.path.join(weight_dir, args.wandb_name, 'tokenizer')
     print(f'Loading tokenizer from {tokenizer_dir}...')
@@ -128,47 +126,77 @@ if __name__ == '__main__':
     args.contrast_modes = ''
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
-    dataloader, dataset_idxs = datamodule.get_split(args.split, max_examples=args.max_examples)
-    outputs = []
-    gen_kwargs = SAMPLE_KWARGS[args.dataset] if args.sample_gen else GEN_KWARGS[args.dataset]
-    assert len(dataloader) == len(dataset_idxs)
-    for batch_idx, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
-        batch = {k: v.to(gpu) if type(v) == torch.Tensor else v for k, v in batch.items()}
-        with torch.no_grad():
-            batch_stats = model.predict_step(batch, **gen_kwargs)
-            batch_stats['dataset_idx'] = dataset_idxs[batch_idx]
-        if type(batch_stats) == list:
-            outputs += batch_stats
-        else:
-            outputs.append(batch_stats)
 
-    outputs = pd.DataFrame(outputs)
-    out_fn = os.path.join(results_dir, f'{args.split}_outputs.csv')
-    print(f'Saving {len(outputs)} ROUGE scores and predictions to {out_fn}')
-    outputs.to_csv(out_fn, index=False)
-    num_col = outputs.select_dtypes('number')
-    for col in list(num_col.columns):
-        print(f'{col}: {num_col[col].dropna().mean()}')
+    exp_results = []
+    for exp_id in range(args.bootstraps):
+        np.random.seed(1992 + exp_id)
+        dataloader, dataset_idxs = datamodule.get_split(args.split, max_examples=args.max_examples)
+        outputs = []
+        gen_kwargs = SAMPLE_KWARGS[args.dataset] if args.sample_gen else GEN_KWARGS[args.dataset]
+        gen_kwargs['length_penalty'] = args.length_penalty
 
-    table_cols = [
-        'abstract_rouge_f1',
-        'abstract_rouge2_f1',
-        'abstract_rougeL_f1',
-        'extract_rouge1_f1',
-        'extract_rouge2_f1',
-        'extract_rougeL_f1',
-        'implied_extract_rouge1_f1',
-        'implied_extract_rouge2_f1',
-        'implied_extract_rougeL_f1',
-    ]
+        # If you want just the plan
+        # gen_kwargs['eos_token_id'] = int(tokenizer.convert_tokens_to_ids('<sep>'))
+        # gen_kwargs['min_length'] = 1
+        # gen_kwargs['max_length'] = 4
 
-    out_str = ''
-    for col in table_cols:
-        try:
-            v = outputs[col].dropna().mean()
-            out_str += f'{round(v, 3)},'
-        except:  # If the column doesn't exist (i.e., we are generating for an abstractive model, extract_ won't exist)
-            out_str += ','
-    out_str.strip(',')
-    print(','.join(table_cols))
-    print(out_str)
+        # No reason to over-generate
+        gen_kwargs['num_return_sequences'] = args.num_return_sequences if args.sample_gen else 1
+        assert len(dataloader) == len(dataset_idxs)
+        for batch_idx, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
+            batch = {k: v.to(gpu) if type(v) == torch.Tensor else v for k, v in batch.items()}
+            with torch.no_grad():
+                batch_stats = model.predict_step(batch, **gen_kwargs)
+                batch_stats['dataset_idx'] = dataset_idxs[batch_idx]
+            if type(batch_stats) == list:
+                outputs += batch_stats
+            else:
+                outputs.append(batch_stats)
+
+        outputs = pd.DataFrame(outputs)
+        method = '_sample' if args.sample_gen else '_beam'
+        out_fn = os.path.join(results_dir, f'{args.split}{method}_outputs.csv')
+        print(f'Saving {len(outputs)} ROUGE scores and predictions to {out_fn}')
+        outputs.to_csv(out_fn, index=False)
+        num_col = outputs.select_dtypes('number')
+        for col in list(num_col.columns):
+            print(f'{col}: {num_col[col].dropna().mean()}')
+
+        table_cols = [
+            'rouge1_f1',
+            'rouge2_f1',
+            'rougeL_f1',
+            'extract_rouge1_f1',
+            'extract_rouge2_f1',
+            'extract_rougeL_f1',
+            'implied_rouge1_f1',
+            'implied_rouge2_f1',
+            'implied_rougeL_f1',
+        ]
+
+        out_str = ''
+        for col in table_cols:
+            try:
+                v = outputs[col].dropna().mean()
+                out_str += f'{round(v, 3)},'
+            except:  # If the column doesn't exist (i.e., we are generating for an abstractive model, extract_ won't exist)
+                out_str += ','
+        out_str.strip(',')
+        # print(','.join(table_cols))
+        # print(out_str)
+
+        agg_cols = [
+            'rouge1_f1', 'implied_rouge1_f1', 'extract_rouge1_f1',
+            'best_extract_rouge1_f1', 'best_abstract_rouge1_f1', 'best_implied_rouge1_f1'
+        ]
+        exp_row = {
+            col: outputs[col].dropna().mean() for col in agg_cols if col in list(outputs.columns)
+        }
+
+        exp_results.append(exp_row)
+    exp_results = pd.DataFrame(exp_results)
+    out_fn = 'confidence_sample.csv' if args.sample_gen else 'confidence.csv'
+    print(args.length_penalty)
+    exp_results.to_csv(out_fn, index=False)
+    for col in list(exp_results.columns):
+        print(f'{col}: min={exp_results[col].min()}, max={exp_results[col].max()}, avg={exp_results[col].mean()}')

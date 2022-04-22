@@ -23,7 +23,6 @@ def source_from_ids(input_ids, nlp, tokenizer):
     }
 
 
-
 class Seq2SeqCollate:
     def __init__(self, tokenizer, max_input_length=8192, max_output_length=512, add_cols=None, split=None):
         self.tokenizer = tokenizer
