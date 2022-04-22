@@ -286,10 +286,6 @@ class TransformerSummarizer(pl.LightningModule):
         pred_ids = self.model.generate(**default_kwargs)
         gold_ids = batch['labels']
         gold_ids[torch.where(batch['labels'] == -100)] = 1
-
-        # TODO remove
-        # references = self.tokenizer.batch_decode(gold_ids, skip_special_tokens=True)  # .tolist()
-
         input_ids = batch['input_ids']
         outputs = self.parse_output(pred_ids, input_ids, references)
         return outputs

@@ -1,3 +1,4 @@
+from collections import defaultdict
 import os
 import itertools
 
@@ -11,7 +12,7 @@ import spacy
 from sum_constants import summarization_name_mapping
 
 
-class Seq2SeqCollate:
+class RankCollate:
     def __init__(self, tokenizer, max_input_length=8192, max_output_length=512, add_cols=None, split=None):
         self.tokenizer = tokenizer
         self.max_input_length = max_input_length
@@ -66,9 +67,45 @@ class RankDataModule(pl.LightningDataModule):
         self.num_workers = 0 if args.debug else 16
         self.nlp = spacy.load('en_core_web_sm')
 
+        beam_fn = os.path.join(self.args.data_dir, 'results', self.args.gen_experiment, 'validation_beam_outputs.csv')
+        sample_fn = os.path.join(
+            self.args.data_dir, 'results', self.args.gen_experiment, 'validation_sample_outputs.csv'
+        )
+
+        beam_df = pd.read_csv(beam_fn)
+        sample_df = pd.read_csv(sample_fn)
+
+        avail_idxs = sample_df['dataset_idx'].unique().tolist()
+        beam_df = beam_df[beam_df['dataset_idx'].isin(set(avail_idxs))]
+
+        sample_records = {record['dataset_idx']: record for record in sample_df.to_dict('records')}
+        beam_records = {record['dataset_idx']: record for record in beam_df.to_dict('records')}
+        np.random.seed(1992)
+        train_frac = 0.75
+        n = len(sample_records)
+        train_cutoff = round(train_frac * n)
+        np.random.shuffle(avail_idxs)
+
+        self.splits = {
+            'train': avail_idxs[:train_cutoff],
+            'validation': avail_idxs[train_cutoff:]
+        }
+
+        num_train = len(self.splits['train'])
+        num_val = len(self.splits['validation'])
+        print(f'{num_train} train examples. {num_val} validation.')
+
+        combined_data = defaultdict(dict)
+        for dataset_idx in avail_idxs:
+            combined_data[dataset_idx] = {
+                'dataset_idx': dataset_idx,
+                'beam': beam_records[dataset_idx],
+                'sample': sample_records[dataset_idx]
+            }
+        self.dataset = list(combined_data.values())
+
     def get_split(self, split, max_examples=None):
-        fn = os.path.join(self.args.data_dir, 'results', self.args.gen_experiment, f'{split}_outputs.csv')
-        split_dataset = pd.read_csv(fn).to_dict('records')
+        split_dataset = list(filter(lambda example: example['dataset_idx'] in self.splits[split], self.dataset))
         if self.args.debug and max_examples is None:
             max_examples = 128
         n = len(split_dataset)
@@ -76,28 +113,17 @@ class RankDataModule(pl.LightningDataModule):
         if max_examples is not None and max_examples < n:
             rand_idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
             split_dataset = [split_dataset[i] for i in rand_idxs]
-        add_cols = ['scores']
-        # oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}.csv')
-        # if not os.path.exists(oracle_fn):
-        #     raise Exception(
-        #         f'Please first run: python preprocess/extract_oracles.py '
-        #         f'--dataset {self.args.dataset} --data_dir {self.args.data_dir}'
-        #     )
-        # print(f'Loading pre-computed oracle summaries from {oracle_fn}')
-        # oracle_df = pd.read_csv(oracle_fn)
-        # ids2oracles = {row['id']: row for row in oracle_df.to_dict('records')}
-
+        add_cols = ['extract_scores', 'abstract_scores', 'avg_scores']
         split_dataset_pl = RankDataset(self.args, split_dataset, split, self.nlp, add_cols=add_cols)
-        collate_fn = Seq2SeqCollate(
+        collate_fn = RankCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
             max_output_length=self.args.max_output_length,
             add_cols=add_cols,
             split=split
         )
-        batch_size = self.args.per_device_train_bs if split == 'train' else self.args.per_device_eval_bs
         kwargs = {
-            'batch_size': batch_size,
+            'batch_size': 1,
             'shuffle': split == 'train',
             'num_workers': self.num_workers,
             'collate_fn': collate_fn
@@ -131,18 +157,39 @@ class RankDataset(Dataset):
     def __getitem__(self, idx):
         example = self.dataset[idx]
 
-        source = example['source']
-        pred_abstracts = example['abstract'].split('<cand>')
+        # beam = example['beam']
+        sample = example['sample']
+
+        source = sample['source']
+        pred_abstracts = sample['abstract'].split('<cand>')
         # pred_abstract_rouges = list(map(float, example['abstract_rouges'].split(',')))
         # pred_extracts = example['extract'].split('<cand>')
-        pred_extract_idxs = list(map(lambda x: x.replace(',', ''), example['extract_idx'].split('<cand>')))
-        pred_extract_rouges = list(map(float, example['extract_rouges'].split(',')))
-
+        pred_extract_idxs = list(map(lambda x: x.replace(',', ''), sample['extract_idx'].split('<cand>')))
+        pred_extract_rouges = list(map(float, sample['extract_rouges'].split(',')))
+        pred_abstract_rouges = list(map(float, sample['extract_rouges'].split(',')))
+        pred_implied_rouges = list(map(float, sample['implied_extract_rouges'].split(',')))
         num_cand = len(pred_abstracts)
         full_preds = [pred_extract_idxs[i] + '<sep>' + pred_abstracts[i] for i in range(num_cand)]
 
+        avg_scores = [(a + b) / 2.0 for a, b in zip(pred_abstract_rouges, pred_extract_rouges)]
+
+        oracle_order = np.argsort(-np.array(avg_scores))
+        full_preds_ordered = [full_preds[rank] for rank in oracle_order]
+        pred_extract_rouges_ordered = [pred_extract_rouges[rank] for rank in oracle_order]
+        pred_abstract_rouges_ordered = [pred_abstract_rouges[rank] for rank in oracle_order]
+        avg_scores_ordered = [avg_scores[rank] for rank in oracle_order]
+
+        # Eliminate Candidates with Identical Scores
+        uniq_idxs = [i for i in range(num_cand) if i == 0 or avg_scores_ordered[i] != avg_scores_ordered[i - 1]]
+        full_preds_ordered = [full_preds_ordered[i] for i in uniq_idxs]
+        pred_extract_rouges_ordered = [pred_extract_rouges_ordered[i] for i in uniq_idxs]
+        pred_abstract_rouges_ordered = [pred_abstract_rouges_ordered[i] for i in uniq_idxs]
+        avg_scores_ordered = [avg_scores_ordered[i] for i in uniq_idxs]
+
         return {
             'source': source,
-            'targets': full_preds,
-            'scores': pred_extract_rouges,
+            'targets': full_preds_ordered,
+            'extract_scores': pred_extract_rouges_ordered,
+            'abstract_scores': pred_abstract_rouges_ordered,
+            'avg_scores': avg_scores_ordered,
         }

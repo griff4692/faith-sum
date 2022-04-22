@@ -10,9 +10,11 @@ from pytorch_lightning.plugins import DDPPlugin
 import torch
 from transformers import AutoTokenizer, BartTokenizer
 
+from gen_transformers.model import TransformerSummarizer
+from gen_transformers.data_utils import get_path_from_exp
+from global_utils import get_free_gpus, set_same_seed
 from rank.dataset import RankDataModule
 from rank.model import SummaryRanker
-from global_utils import get_free_gpus, set_same_seed
 
 
 def run(args):
@@ -33,25 +35,30 @@ def run(args):
     print('Num GPUs --> {}'.format(args.num_gpus))
     precision = 16 if args.num_gpus is not None else 32
     experiment_dir = os.path.join(args.weight_dir, args.experiment)
-    os.makedirs(os.path.join(experiment_dir, 'wandb'), exist_ok=True)  # Only way to make sure it's writable
-    if 'brio' in args.hf_model:
-        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
 
-    add_tokens = [f'<s{i}>' for i in range(100)]
-    add_tokens.append('<sep>')
-    special_tokens_dict = {'additional_special_tokens': add_tokens}
-    tokenizer.add_special_tokens(special_tokens_dict)
+    # Load pre-trained summarizer (summary_style -> abstract_plan)
+    ckpt_path = get_path_from_exp(args.weight_dir, args.wandb_name)
+    tokenizer_dir = os.path.join(args.weight_dir, args.wandb_name, 'tokenizer')
+    print(f'Loading tokenizer from {tokenizer_dir}...')
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
+    except:  # BRIO model doesn't load from AutoTokenizer
+        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
+
+    print(f'Loading model from {ckpt_path}...')
+    finetuned_model = TransformerSummarizer.load_from_checkpoint(
+        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False)
+
+    os.makedirs(os.path.join(experiment_dir, 'wandb'), exist_ok=True)  # Only way to make sure it's writable
 
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
     if not args.debug:
         tokenizer.save_pretrained(tokenizer_dir)
     if args.pretrained_path is None:
-        model = SummaryRanker(args, tokenizer=tokenizer, hf_model=args.hf_model)
+        model = SummaryRanker(args, tokenizer=tokenizer, finetuned_model=finetuned_model.model)
     else:
         model = SummaryRanker.load_from_checkpoint(
-            checkpoint_path=args.pretrained_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=True
+            checkpoint_path=args.pretrained_path, tokenizer=tokenizer, strict=True
         )
     datamodule = RankDataModule(args, tokenizer=tokenizer)
 
@@ -63,13 +70,15 @@ def run(args):
         entity='griffinadams',
     )
 
+    primary_eval_metric = 'val_avg_rouge'
+    primary_metric_mode = 'max'  # Higher is better ('min' for val_loss)
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
+        monitor=primary_eval_metric,
         save_top_k=1,
         save_last=False,
-        mode='min'
+        mode=primary_metric_mode
     )
-    early_stopping = EarlyStopping('val_loss', patience=5, verbose=True)
+    early_stopping = EarlyStopping(primary_eval_metric, mode=primary_metric_mode, patience=5, verbose=True)
     callbacks = [checkpoint_callback, early_stopping]
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')
@@ -86,10 +95,10 @@ def run(args):
         default_root_dir=experiment_dir,
         gradient_clip_val=0.1,
         accumulate_grad_batches=args.grad_accum,
-        val_check_interval=1.0 if args.debug else 0.25,
+        val_check_interval=1.0 if args.debug else 0.5,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
         num_sanity_val_steps=0 if args.debug else 2,
-        log_every_n_steps=50,
+        log_every_n_steps=10,
         max_steps=args.max_steps,
         plugins=plugins,
         # detect_anomaly=args.debug
@@ -126,17 +135,15 @@ if __name__ == '__main__':
     parser.add_argument('--num_dataloaders', default=8, type=int)
 
     # Hyper-parameters
-    parser.add_argument('--lr', type=float, default=2.2e-4)
-    # Gradient accumulation will adjust for the ratio between target_batch_size and per_device_train_bs
-    parser.add_argument('--target_batch_size', type=int, default=16)
-    parser.add_argument('--per_device_train_bs', type=int, default=1)
-    parser.add_argument('--per_device_eval_bs', type=int, default=16)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--target_batch_size', type=int, default=8)
     parser.add_argument('--warmup_steps', type=int, default=200)
-    parser.add_argument('--max_steps', default=150000, type=int)
+    parser.add_argument('--max_steps', default=10000, type=int)
     parser.add_argument('--max_epochs', default=10, type=int)
     parser.add_argument('--weight_decay', type=float, default=5e-5)
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_input_length', type=int, default=1024)
+    parser.add_argument('--wandb_name', default='plan_abstract_bs24')
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
     parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
@@ -146,18 +153,12 @@ if __name__ == '__main__':
     ])
 
     # Margin for contrast loss
-    parser.add_argument('--contrast_margin', default=0.5, type=float)
-    # Relative contribution to overall loss for contrastive loss (versus regular LM MLE loss)
-    parser.add_argument('--contrast_lambda', default=1.0, type=float)
+    parser.add_argument('--contrast_margin', default=1.0, type=float)
 
     args = parser.parse_args()
 
     # Won't held yet for multi-gpu
-    args.grad_accum = args.target_batch_size // args.per_device_train_bs
-
-    if args.debug:  # Use small data and tiny BART model
-        args.hf_model = 'sshleifer/bart-tiny-random'
-
+    args.grad_accum = args.target_batch_size
     args.weight_dir = os.path.join(args.data_dir, 'weights')
     os.makedirs(args.weight_dir, exist_ok=True)
 
