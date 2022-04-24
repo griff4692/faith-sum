@@ -32,7 +32,7 @@ class SummaryDataModule(pl.LightningDataModule):
         self.num_workers = 0 if args.debug else 16
         self.nlp = spacy.load('en_core_web_sm')
 
-    def get_split(self, split, max_examples=None):
+    def get_split(self, split, max_examples=None, **dataloader_kwargs):
         split_dataset = self.dataset[split]
         if self.args.debug and max_examples is None:
             max_examples = 128
@@ -67,6 +67,7 @@ class SummaryDataModule(pl.LightningDataModule):
             'num_workers': self.num_workers,
             'collate_fn': collate_fn
         }
+        kwargs.update(**dataloader_kwargs)
         return DataLoader(split_dataset_pl, **kwargs), idxs
 
     def train_dataloader(self, max_examples=None):

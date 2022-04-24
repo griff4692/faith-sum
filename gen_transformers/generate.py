@@ -41,7 +41,7 @@ SAMPLE_KWARGS = {
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('BART/PEGASUS Generator & Evaluator.')
-    parser.add_argument('--wandb_name', default='cnn_bart_extract_prefix')
+    parser.add_argument('--wandb_name', required=True)
     parser.add_argument('--experiment', default=None)
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
@@ -55,8 +55,11 @@ if __name__ == '__main__':
     # Beam Search or Nucleus Sampling (more diverse)
     parser.add_argument('-sample_gen', default=False, action='store_true')
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
+    parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--length_penalty', default=2.0, type=float)
+    parser.add_argument('--seed', default=1992, type=int)
     parser.add_argument('--num_return_sequences', default=16, type=int)
+    parser.add_argument('-use_hf_rouge', default=False, action='store_true')  # Much faster to use HF implementation
     parser.add_argument(
         '--oracle_cutoff', default=0.75, type=float,
         help='For summary_style=hybrid_control, summaries with ranking above this will be trained as extracts'
@@ -86,39 +89,39 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
 
-    # TODO Support batches for predictions (simple fix)
-    args.per_device_eval_bs = 1
-    args.per_device_train_bs = 1
+    np.random.seed(args.seed)
+
+    # These are ignored but need to pass something in
+    args.per_device_eval_bs = -1
+    args.per_device_train_bs = -1
 
     if args.experiment is None:
         args.experiment = args.wandb_name
     weight_dir = os.path.join(args.data_dir, 'weights')
-    ckpt_path = get_path_from_exp(weight_dir, args.wandb_name)
     results_dir = os.path.join(args.data_dir, 'results', args.experiment)
     os.makedirs(results_dir, exist_ok=True)
 
     free_gpus = get_free_gpus()
     gpu = free_gpus[0] if args.gpu_device is None else args.gpu_device
-    # if args.gpu_device is not None and args.gpu_device not in free_gpus:
-    #     print(f'Warning! Youve selected a GPU that is not available.  Putting the model on {free_gpus[0]} instead.')
-    #     gpu = free_gpus[0]
 
-    tokenizer_dir = os.path.join(weight_dir, args.wandb_name, 'tokenizer')
-    print(f'Loading tokenizer from {tokenizer_dir}...')
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
-    except:  # BRIO model doesn't load from AutoTokenizer
-        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
+    # Generating from this pre-trained model
+    if args.wandb_name == 'brio' and args.hf_model == 'Yale-LILY/brio-cnndm-uncased':
+        args.summary_style = 'abstract'
+        args.lr = 1.0   # Needed to load
+        tokenizer = BartTokenizer.from_pretrained(args.hf_model)
+        model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model).to(gpu).eval()
+    else:
+        ckpt_path = get_path_from_exp(weight_dir, args.wandb_name)
+        tokenizer_dir = os.path.join(weight_dir, args.wandb_name, 'tokenizer')
+        print(f'Loading tokenizer from {tokenizer_dir}...')
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
+        except:  # BRIO model doesn't load from AutoTokenizer
+            tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
 
-    print(f'Loading model from {ckpt_path}...')
-    model = TransformerSummarizer.load_from_checkpoint(
-        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(gpu).eval()
-
-    # TODO remove
-    # args.hf_model = 'Yale-LILY/brio-cnndm-uncased'
-    # args.lr = 0.1
-    # tokenizer = BartTokenizer.from_pretrained(args.hf_model)
-    # model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model).to(gpu).eval()
+        print(f'Loading model from {ckpt_path}...')
+        model = TransformerSummarizer.load_from_checkpoint(
+            checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(gpu).eval()
 
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style
@@ -129,29 +132,27 @@ if __name__ == '__main__':
 
     exp_results = []
     for exp_id in range(args.bootstraps):
-        np.random.seed(1992 + exp_id)
-        dataloader, dataset_idxs = datamodule.get_split(args.split, max_examples=args.max_examples)
+        # Override behavior during training
+        dataloader_kwargs = {'shuffle': False, 'batch_size': args.batch_size}
+        dataloader, dataset_idxs = datamodule.get_split(args.split, max_examples=args.max_examples, **dataloader_kwargs)
         outputs = []
         gen_kwargs = SAMPLE_KWARGS[args.dataset] if args.sample_gen else GEN_KWARGS[args.dataset]
         gen_kwargs['length_penalty'] = args.length_penalty
-
-        # If you want just the plan
-        # gen_kwargs['eos_token_id'] = int(tokenizer.convert_tokens_to_ids('<sep>'))
-        # gen_kwargs['min_length'] = 1
-        # gen_kwargs['max_length'] = 4
+        gen_kwargs['use_hf_rouge'] = args.use_hf_rouge
 
         # No reason to over-generate
         gen_kwargs['num_return_sequences'] = args.num_return_sequences if args.sample_gen else 1
-        assert len(dataloader) == len(dataset_idxs)
         for batch_idx, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
             batch = {k: v.to(gpu) if type(v) == torch.Tensor else v for k, v in batch.items()}
+            start = args.batch_size * batch_idx
+            actual_batch_size = len(batch['input_ids'])
+            end = start + actual_batch_size
+            batch_dataset_idxs = dataset_idxs[start:end]
             with torch.no_grad():
                 batch_stats = model.predict_step(batch, **gen_kwargs)
-                batch_stats['dataset_idx'] = dataset_idxs[batch_idx]
-            if type(batch_stats) == list:
+                for j in range(actual_batch_size):
+                    batch_stats[j]['dataset_idx'] = batch_dataset_idxs[j]
                 outputs += batch_stats
-            else:
-                outputs.append(batch_stats)
 
         outputs = pd.DataFrame(outputs)
         method = '_sample' if args.sample_gen else '_beam'
