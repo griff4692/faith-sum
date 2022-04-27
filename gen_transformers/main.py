@@ -39,8 +39,8 @@ def run(args):
         tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
 
     if args.add_sent_toks:
-        add_tokens = [f'<s{i}>' for i in range(100)]
-        add_tokens.append('<sep>')
+        add_tokens = ['<sep>']
+        add_tokens.extend([f'<s{i}>' for i in range(1, 201)])
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
@@ -90,9 +90,9 @@ def run(args):
         gradient_clip_val=0.1,
         accumulate_grad_batches=args.grad_accum,
         # TODO change back to 0.25
-        val_check_interval=1.0 if args.debug else 0.1,
+        val_check_interval=1.0 if args.debug else 0.25,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
-        num_sanity_val_steps=2,  # 0 if args.debug else 2,
+        num_sanity_val_steps=0 if args.debug else 2,
         log_every_n_steps=50,
         max_steps=args.max_steps,
         plugins=plugins,

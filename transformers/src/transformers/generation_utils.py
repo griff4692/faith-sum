@@ -584,6 +584,10 @@ class GenerationMixin:
             token_type_ids = model_kwargs["token_type_ids"]
             model_kwargs["token_type_ids"] = token_type_ids.index_select(0, expanded_return_idx)
 
+        if 'sent_pos_ids' in model_kwargs:
+            sent_pos_ids = model_kwargs["sent_pos_ids"]
+            model_kwargs["sent_pos_ids"] = sent_pos_ids.index_select(0, expanded_return_idx)
+
         if attention_mask is not None:
             model_kwargs["attention_mask"] = attention_mask.index_select(0, expanded_return_idx)
 
@@ -1163,6 +1167,8 @@ class GenerationMixin:
                 inputs_tensor, pad_token_id, eos_token_id
             )
 
+        encoder_sent_idx_map = model_kwargs.pop('encoder_sent_idx_map', None)
+
         if self.config.is_encoder_decoder and "encoder_outputs" not in model_kwargs:
             # if model is encoder decoder encoder_outputs are created
             # and added to `model_kwargs`
@@ -1273,6 +1279,7 @@ class GenerationMixin:
             # 10. run greedy search
             return self.greedy_search(
                 input_ids,
+                encoder_sent_idx_map=encoder_sent_idx_map,
                 logits_processor=logits_processor,
                 stopping_criteria=stopping_criteria,
                 pad_token_id=pad_token_id,
@@ -1305,6 +1312,7 @@ class GenerationMixin:
             # 12. run sample
             return self.sample(
                 input_ids,
+                encoder_sent_idx_map=encoder_sent_idx_map,
                 logits_processor=logits_processor,
                 logits_warper=logits_warper,
                 stopping_criteria=stopping_criteria,
@@ -1332,14 +1340,24 @@ class GenerationMixin:
                 do_early_stopping=early_stopping,
                 num_beam_hyps_to_keep=num_return_sequences,
             )
+
             # 11. interleave input_ids with `num_beams` additional sequences per batch
             input_ids, model_kwargs = self._expand_inputs_for_generation(
                 input_ids, expand_size=num_beams, is_encoder_decoder=self.config.is_encoder_decoder, **model_kwargs
             )
+
+            expanded_encoder_sent_idx_map = {}
+            for key, v in encoder_sent_idx_map.items():
+                new_keys = range(num_beams * key, num_beams * (key + 1))
+                for new_key in new_keys:
+                    expanded_encoder_sent_idx_map[new_key] = v
+            assert len(expanded_encoder_sent_idx_map) == len(input_ids)
+
             # 12. run beam search
             return self.beam_search(
                 input_ids,
                 beam_scorer,
+                encoder_sent_idx_map=expanded_encoder_sent_idx_map,
                 logits_processor=logits_processor,
                 stopping_criteria=stopping_criteria,
                 pad_token_id=pad_token_id,
@@ -1518,6 +1536,7 @@ class GenerationMixin:
     def greedy_search(
         self,
         input_ids: torch.LongTensor,
+        encoder_sent_idx_map: torch.Tensor,
         logits_processor: Optional[LogitsProcessorList] = None,
         stopping_criteria: Optional[StoppingCriteriaList] = None,
         max_length: Optional[int] = None,
@@ -1667,6 +1686,7 @@ class GenerationMixin:
             # forward pass to get next token
             outputs = self(
                 **model_inputs,
+                encoder_sent_idx_map=encoder_sent_idx_map,
                 return_dict=True,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
@@ -2007,6 +2027,7 @@ class GenerationMixin:
         self,
         input_ids: torch.LongTensor,
         beam_scorer: BeamScorer,
+        encoder_sent_idx_map: Optional[dict] = None,
         logits_processor: Optional[LogitsProcessorList] = None,
         stopping_criteria: Optional[StoppingCriteriaList] = None,
         max_length: Optional[int] = None,
@@ -2187,6 +2208,7 @@ class GenerationMixin:
 
             outputs = self(
                 **model_inputs,
+                encoder_sent_idx_map=encoder_sent_idx_map,
                 return_dict=True,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
@@ -2319,6 +2341,7 @@ class GenerationMixin:
         self,
         input_ids: torch.LongTensor,
         beam_scorer: BeamScorer,
+        encoder_sent_idx_map: Optional[dict] = None,
         logits_processor: Optional[LogitsProcessorList] = None,
         stopping_criteria: Optional[StoppingCriteriaList] = None,
         logits_warper: Optional[LogitsProcessorList] = None,
@@ -2504,6 +2527,7 @@ class GenerationMixin:
 
             outputs = self(
                 **model_inputs,
+                encoder_sent_idx_map=encoder_sent_idx_map,
                 return_dict=True,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,

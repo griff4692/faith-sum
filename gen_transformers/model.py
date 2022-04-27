@@ -8,7 +8,7 @@ import pytorch_lightning as pl
 import numpy as np
 import spacy
 import torch
-from transformers import AutoModelForSeq2SeqLM
+from transformers import AutoModelForSeq2SeqLM, BartForConditionalGeneration
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
 
@@ -26,7 +26,7 @@ class TransformerSummarizer(pl.LightningModule):
         self.save_hyperparameters(args)
         self.tokenizer = tokenizer
         assert self.hparams.max_input_length <= self.tokenizer.model_max_length
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(hf_model)
+        self.model = BartForConditionalGeneration.from_pretrained(hf_model)
         self.model.resize_token_embeddings(len(tokenizer))
         self.lr = self.hparams.lr  # Necessary for tune_lr to work with PytorchLightning
         self.rouge = load_metric('rouge')
@@ -36,6 +36,11 @@ class TransformerSummarizer(pl.LightningModule):
         # <sep> separates plan from abstract for plan models
         if 'plan' in self.hparams.summary_style:
             self.special_id_cutoff = self.tokenizer.convert_tokens_to_ids('<sep>')
+        self.sentence_tok_ids = self.tokenizer.additional_special_tokens_ids
+        self.sentence_cutoff = min(self.tokenizer.additional_special_tokens_ids) + 1
+        self.model.model.sentence_cutoff = self.sentence_cutoff
+        self.model.model.encoder.sentence_cutoff = self.sentence_cutoff
+        self.model.model.decoder.sentence_cutoff = self.sentence_cutoff
 
     def compute_ll(self, batch, labels, output):
         batch_size = len(output[1])
@@ -292,6 +297,7 @@ class TransformerSummarizer(pl.LightningModule):
     def shared_generate(self, batch, **gen_kwargs):
         default_kwargs = {  # Some of these values may get overridden by gen_kwargs
             'input_ids': batch['input_ids'],
+            'sent_pos_ids': batch['sent_pos_ids'],
             'attention_mask': batch['attention_mask'],
             'num_return_sequences': 1,
             'max_length': self.hparams.max_output_length,
@@ -300,8 +306,15 @@ class TransformerSummarizer(pl.LightningModule):
             'output_scores': True
         }
 
+        encoder_sent_idx_map = defaultdict(dict)
+        for batch_idx, input_id_seq in enumerate(batch['input_ids']):
+            for input_idx, vocab_id in enumerate(input_id_seq):
+                if vocab_id >= self.sentence_cutoff:
+                    encoder_sent_idx_map[batch_idx][int(vocab_id.item())] = input_idx
+
         references = gen_kwargs.pop('references')
         default_kwargs.update(gen_kwargs)
+        default_kwargs['encoder_sent_idx_map'] = encoder_sent_idx_map
         pred_ids = self.model.generate(**default_kwargs)
         gold_ids = batch['labels']
         gold_ids[torch.where(batch['labels'] == -100)] = 1

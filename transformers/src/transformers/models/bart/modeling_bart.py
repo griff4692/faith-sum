@@ -712,6 +712,8 @@ class BartEncoder(BartPretrainedModel):
         else:
             self.embed_tokens = nn.Embedding(config.vocab_size, embed_dim, self.padding_idx)
 
+        self.embed_sent_positions = nn.Embedding(3, embed_dim, 0)
+
         self.embed_positions = BartLearnedPositionalEmbedding(
             config.max_position_embeddings,
             embed_dim,
@@ -732,6 +734,7 @@ class BartEncoder(BartPretrainedModel):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
+        sent_pos_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
@@ -787,6 +790,7 @@ class BartEncoder(BartPretrainedModel):
         elif input_ids is not None:
             input_shape = input_ids.size()
             input_ids = input_ids.view(-1, input_shape[-1])
+            sent_pos_ids = sent_pos_ids.view(-1, input_shape[-1])
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
         else:
@@ -796,8 +800,10 @@ class BartEncoder(BartPretrainedModel):
             inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
 
         embed_pos = self.embed_positions(input_shape)
+        assert sent_pos_ids.size() == input_shape
+        embed_sent_pos = self.embed_sent_positions(sent_pos_ids)
 
-        hidden_states = inputs_embeds + embed_pos
+        hidden_states = inputs_embeds + embed_pos + embed_sent_pos
         hidden_states = self.layernorm_embedding(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
@@ -921,6 +927,7 @@ class BartDecoder(BartPretrainedModel):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
+        encoder_sent_idx_map: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.LongTensor] = None,
@@ -1020,7 +1027,18 @@ class BartDecoder(BartPretrainedModel):
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
 
         if inputs_embeds is None:
+            # When the label is a sentence tag, use the encoder embedding
             inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
+
+            batch_size = len(input_ids)
+            for batch_idx in range(batch_size):
+                input_id_seq = input_ids[batch_idx]
+                for input_idx, vocab_id in enumerate(input_id_seq):
+                    vocab_id_int = int(vocab_id.item())
+                    if vocab_id_int in encoder_sent_idx_map[batch_idx]:
+                        inputs_embeds[batch_idx, input_idx] *= 0
+                        encoder_location = encoder_sent_idx_map[batch_idx][vocab_id_int]
+                        inputs_embeds[batch_idx, input_idx] = encoder_hidden_states[batch_idx, encoder_location]
 
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, input_shape, inputs_embeds, past_key_values_length
@@ -1176,6 +1194,8 @@ class BartModel(BartPretrainedModel):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
+        sent_pos_ids: torch.LongTensor = None,
+        encoder_sent_idx_map: Optional[dict] = None,
         attention_mask: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
@@ -1216,6 +1236,7 @@ class BartModel(BartPretrainedModel):
         if encoder_outputs is None:
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
+                sent_pos_ids=sent_pos_ids,
                 attention_mask=attention_mask,
                 head_mask=head_mask,
                 inputs_embeds=inputs_embeds,
@@ -1231,9 +1252,19 @@ class BartModel(BartPretrainedModel):
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
             )
 
+        if encoder_sent_idx_map is None:
+            assert input_ids is not None
+            from collections import defaultdict
+            encoder_sent_idx_map = defaultdict(dict)
+            for batch_idx, input_id_seq in enumerate(input_ids):
+                for input_idx, vocab_id in enumerate(input_id_seq):
+                    if vocab_id >= self.sentence_cutoff:
+                        encoder_sent_idx_map[batch_idx][int(vocab_id.item())] = input_idx
+
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
+            encoder_sent_idx_map=encoder_sent_idx_map,
             attention_mask=decoder_attention_mask,
             encoder_hidden_states=encoder_outputs[0],
             encoder_attention_mask=attention_mask,
@@ -1310,6 +1341,8 @@ class BartForConditionalGeneration(BartPretrainedModel):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
+        sent_pos_ids: torch.LongTensor = None,
+        encoder_sent_idx_map: Optional[dict] = None,
         attention_mask: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
@@ -1347,6 +1380,8 @@ class BartForConditionalGeneration(BartPretrainedModel):
 
         outputs = self.model(
             input_ids,
+            encoder_sent_idx_map=encoder_sent_idx_map,
+            sent_pos_ids=sent_pos_ids,
             attention_mask=attention_mask,
             decoder_input_ids=decoder_input_ids,
             encoder_outputs=encoder_outputs,

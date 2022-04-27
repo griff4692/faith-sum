@@ -129,11 +129,17 @@ class SummarizationDataset(Dataset):
 
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
         source_sents = list(self.nlp(inputs).sents)
+        max_num_sents = 200
+        if len(source_sents) > max_num_sents:
+            print('Taking the first 200 sentences.')
+            source_sents = source_sents[:max_num_sents]
+
         if self.args.add_sent_toks:
-            source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
+            # Index-1 to match position embeddings
+            source_annotated = ''.join([f'<s{i + 1}> {s}' for i, s in enumerate(source_sents)])
         # Sort oracle order or not
-        target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs]).strip()
-        oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs])
+        target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs if i < max_num_sents]).strip()
+        oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs if i < max_num_sents])
 
         if self.args.summary_style == 'extract':
             if self.split == 'train':

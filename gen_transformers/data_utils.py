@@ -1,4 +1,5 @@
 import os
+import numpy as np
 from pathlib import Path
 
 import itertools
@@ -34,8 +35,11 @@ class Seq2SeqCollate:
         self.eos_token_id = tokenizer.eos_token_id
         self.add_cols = [] if add_cols is None else add_cols
         self.split = split
+        self.sentence_tok_ids = self.tokenizer.additional_special_tokens_ids
+        self.cutoff = min(self.tokenizer.additional_special_tokens_ids)
 
     def __call__(self, batch_list):
+        batch_size = len(batch_list)
         # tokenize the inputs and labels
         inputs = self.tokenizer(
             [x['source'] for x in batch_list],
@@ -61,6 +65,22 @@ class Seq2SeqCollate:
         # We have to make sure that the PAD token is ignored
         batch['labels'][torch.where(batch['labels'] == 1)] = -100
 
+        sent_pos_ids = np.zeros([batch_size, batch['input_ids'].size()[-1]], dtype=np.long)
+        for batch_idx in range(batch_size):
+            id_seq = batch['input_ids'][batch_idx]
+            pad_idxs = torch.where(id_seq == self.tokenizer.pad_token_id)[0]
+
+            if len(pad_idxs) == 0:
+                pad_start = len(id_seq)
+            else:
+                pad_start = pad_idxs[0].item()
+            sent_cls_pos = torch.where(id_seq >= self.cutoff)[0].tolist()
+            for sent_idx, offset in enumerate(sent_cls_pos):
+                start = offset
+                end = sent_cls_pos[sent_idx + 1] if sent_idx < len(sent_cls_pos) - 1 else pad_start
+                is_odd_sent = sent_idx % 2 != 0
+                sent_pos_ids[batch_idx, start:end] = 1 if is_odd_sent else 2  # sent_idx + 1
+        sent_pos_ids = torch.from_numpy(sent_pos_ids)
         for col in self.add_cols:
             batch[col] = [x[col] for x in batch_list]
 
@@ -96,6 +116,7 @@ class Seq2SeqCollate:
                 # We have to make sure that the PAD token is ignored
                 batch['pos_labels'][torch.where(batch['pos_labels'] == 1)] = -100
                 batch['pos_labels'][torch.where(batch['pos_labels'] == 2)] = -100
+        batch['sent_pos_ids'] = sent_pos_ids
         return batch
 
 
