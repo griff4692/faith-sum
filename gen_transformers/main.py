@@ -38,15 +38,6 @@ def run(args):
     else:
         tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
 
-    if args.add_sent_toks:
-        add_tokens = ['<sep>']
-        add_tokens.extend([f'<s{i}>' for i in range(1, 201)])
-        special_tokens_dict = {'additional_special_tokens': add_tokens}
-        tokenizer.add_special_tokens(special_tokens_dict)
-
-    if args.summary_style == 'hybrid_control':
-        special_tokens_dict = {'additional_special_tokens': ['<extract>', '<abstract>']}
-        tokenizer.add_special_tokens(special_tokens_dict)
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
     if not args.debug:
         tokenizer.save_pretrained(tokenizer_dir)
@@ -92,7 +83,7 @@ def run(args):
         # TODO change back to 0.25
         val_check_interval=1.0 if args.debug else 0.25,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
-        num_sanity_val_steps=0 if args.debug else 2,
+        num_sanity_val_steps=2 if args.debug else 2,
         log_every_n_steps=50,
         max_steps=args.max_steps,
         plugins=plugins,
@@ -138,6 +129,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_steps', default=150000, type=int)
     parser.add_argument('--max_epochs', default=10, type=int)
     parser.add_argument('--weight_decay', type=float, default=5e-5)
+    parser.add_argument('--max_num_sents', type=int, default=200)  # Truncate otherwise
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
@@ -147,23 +139,9 @@ if __name__ == '__main__':
         'facebook/bart-large',
         'Yale-LILY/brio-cnndm-uncased',
     ])
+    parser.add_argument('--mode', default='both', choices=['extract', 'abstract', 'both'])
 
     # Task-specific / Project-specific parameters
-    parser.add_argument(
-        '--summary_style',
-        default='plan_abstract',
-        choices=[
-            'plan_abstract',
-            'abstract_plan',
-            'extract',
-            'plan',
-            'abstract',
-            'hybrid_control',
-        ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
-                'abstract is original reference'
-    )
-    # This will be automatically determine by summary_style (i.e., 'plan' or not)
-    parser.add_argument('-add_sent_toks', default=False, action='store_true')
     # This is only used by summary_style=hybrid_control to determine how to partition data (doesn't really work for CNN)
     parser.add_argument(
         '--oracle_cutoff', default=0.42, type=float,  # 0.42 is not tuned but roughly splits CNN/DM in half
@@ -176,26 +154,6 @@ if __name__ == '__main__':
     # In other words, only keep training examples where the abstractive reference can be explained well by an oracle
     parser.add_argument('-oracle_filter', default=False, action='store_true')
 
-    # CONTRAST controls
-    # empty string '' means no contrast loss
-    # plan means we just use contrastive learning on extractive plan portion of the target
-    # abstract means just on abstract
-    # plan,abstract means we compute both contrast losses -- on the plan and the abstract
-    # We generate negatives by adding / removing / swapping sentences from plan
-    # Abstract loss is more of a consistency loss
-    # i.e., We shouldn't assign a high probability on generating the reference from a mis-aligned plan
-    # The plan loss directly encourages generating the oracle extractive plan irrespective of subsequent abstact.
-    parser.add_argument('--contrast_modes', default='', choices=[
-        'abstract,plan',  # Make sure you get the order right when calling this ("plan,abstract" will err out)
-        'abstract',
-        'plan'
-        ''
-    ])
-    # Margin for contrast loss
-    parser.add_argument('--contrast_margin', default=0.5, type=float)
-    # Relative contribution to overall loss for contrastive loss (versus regular LM MLE loss)
-    parser.add_argument('--contrast_lambda', default=1.0, type=float)
-
     args = parser.parse_args()
 
     # Won't held yet for multi-gpu
@@ -204,8 +162,6 @@ if __name__ == '__main__':
     if args.debug:  # Use small data and tiny BART model
         args.hf_model = 'sshleifer/bart-tiny-random'
 
-    # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
-    args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
     args.weight_dir = os.path.join(args.data_dir, 'weights')
     os.makedirs(args.weight_dir, exist_ok=True)
 

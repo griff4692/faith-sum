@@ -2,7 +2,6 @@ import os
 import numpy as np
 from pathlib import Path
 
-import itertools
 import nltk
 import torch
 
@@ -25,18 +24,19 @@ def source_from_ids(input_ids, nlp, tokenizer):
 
 
 class Seq2SeqCollate:
-    def __init__(self, tokenizer, max_input_length=8192, max_output_length=512, add_cols=None, split=None):
+    def __init__(
+            self, tokenizer, max_input_length=8192, max_output_length=512, add_cols=None, split=None, verbose=False
+    ):
         self.tokenizer = tokenizer
         self.max_input_length = max_input_length
         assert self.max_input_length <= tokenizer.model_max_length
         self.max_output_length = max_output_length
-        self.pad_id = tokenizer.pad_token_id
+        self.pad_token_id = tokenizer.pad_token_id
         self.cls_token_id = tokenizer.cls_token_id
         self.eos_token_id = tokenizer.eos_token_id
         self.add_cols = [] if add_cols is None else add_cols
         self.split = split
-        self.sentence_tok_ids = self.tokenizer.additional_special_tokens_ids
-        self.cutoff = min(self.tokenizer.additional_special_tokens_ids)
+        self.verbose = verbose
 
     def __call__(self, batch_list):
         batch_size = len(batch_list)
@@ -60,63 +60,53 @@ class Seq2SeqCollate:
 
         batch = {}
         batch['input_ids'] = inputs.input_ids
+        batch['cls_mask'] = batch['input_ids'] == self.tokenizer.bos_token_id
         batch['attention_mask'] = inputs.attention_mask
         batch['labels'] = outputs.input_ids
         # We have to make sure that the PAD token is ignored
         batch['labels'][torch.where(batch['labels'] == 1)] = -100
 
-        sent_pos_ids = np.zeros([batch_size, batch['input_ids'].size()[-1]], dtype=np.long)
+        num_cls_per_batch = batch['cls_mask'].sum(dim=1)
+        max_num_sent = num_cls_per_batch.max()
+        batch_plan_labels = [x['plan_labels'] for x in batch_list]
+        doc_offset = 1  # Document CLS token comes first
+        batch_plan_labels_pad = np.zeros([batch_size, max_num_sent], dtype=np.float)
         for batch_idx in range(batch_size):
-            id_seq = batch['input_ids'][batch_idx]
-            pad_idxs = torch.where(id_seq == self.tokenizer.pad_token_id)[0]
+            pl = batch_plan_labels[batch_idx]
+            num_cls = num_cls_per_batch[batch_idx]
+            for sent_idx in pl:
+                try:
+                    batch_plan_labels_pad[batch_idx, sent_idx + doc_offset] = 1
+                except:
+                    if self.verbose:
+                        print(f'Sentence {sent_idx} truncated by tokenizer and cannot be assigned as part of oracle.')
+            batch_plan_labels_pad[batch_idx, num_cls:] = -100  # This is padded
+        batch_plan_labels_pad[:, 0] = -100  # This is the document CLS token
+        batch_plan_labels_pad = torch.from_numpy(batch_plan_labels_pad)
+        batch['plan_labels'] = batch_plan_labels_pad
 
-            if len(pad_idxs) == 0:
-                pad_start = len(id_seq)
-            else:
-                pad_start = pad_idxs[0].item()
-            sent_cls_pos = torch.where(id_seq >= self.cutoff)[0].tolist()
-            for sent_idx, offset in enumerate(sent_cls_pos):
-                start = offset
-                end = sent_cls_pos[sent_idx + 1] if sent_idx < len(sent_cls_pos) - 1 else pad_start
-                is_odd_sent = sent_idx % 2 != 0
-                sent_pos_ids[batch_idx, start:end] = 1 if is_odd_sent else 2  # sent_idx + 1
-        sent_pos_ids = torch.from_numpy(sent_pos_ids)
+        # sent_pos_ids = np.zeros([batch_size, batch['input_ids'].size()[-1]], dtype=np.long)
+        # for batch_idx in range(batch_size):
+        #     id_seq = batch['input_ids'][batch_idx]
+        #     pad_idxs = torch.where(id_seq == self.pad_token_id)[0]
+        #
+        #     if len(pad_idxs) == 0:
+        #         pad_start = len(id_seq)
+        #     else:
+        #         pad_start = pad_idxs[0].item()
+        #     sent_cls_pos = torch.where(id_seq >= self.cls_token_id)[0].tolist()
+        #     for sent_idx, offset in enumerate(sent_cls_pos):
+        #         start = offset
+        #         end = sent_cls_pos[sent_idx + 1] if sent_idx < len(sent_cls_pos) - 1 else pad_start
+        #         is_odd_sent = sent_idx % 2 != 0
+        #         sent_pos_ids[batch_idx, start:end] = 1 if is_odd_sent else 2  # sent_idx + 1
+        # sent_pos_ids = torch.from_numpy(sent_pos_ids)
+        # batch['sent_pos_ids'] = sent_pos_ids
+
+        # Any additional columns that need to be added (don't have to be tensors)
         for col in self.add_cols:
             batch[col] = [x[col] for x in batch_list]
 
-        if 'neg_plans' in batch_list[0]:
-            neg_plans = list(itertools.chain(*[x['neg_plans'] for x in batch_list]))
-
-            with self.tokenizer.as_target_tokenizer():
-                neg_labels = self.tokenizer(
-                    neg_plans,
-                    padding='longest',
-                    truncation=True,
-                    max_length=self.max_output_length,
-                    return_tensors='pt'
-                )['input_ids']
-
-                batch['neg_labels'] = neg_labels
-                # We have to make sure that the PAD token is ignored
-                batch['neg_labels'][torch.where(batch['neg_labels'] == 1)] = -100
-                batch['neg_labels'][torch.where(batch['neg_labels'] == 2)] = -100
-        if 'pos_plans' in batch_list[0]:
-            neg_plans = list(itertools.chain(*[x['pos_plans'] for x in batch_list]))
-
-            with self.tokenizer.as_target_tokenizer():
-                pos_labels = self.tokenizer(
-                    neg_plans,
-                    padding='longest',
-                    truncation=True,
-                    max_length=self.max_output_length,
-                    return_tensors='pt'
-                )['input_ids']
-
-                batch['pos_labels'] = pos_labels
-                # We have to make sure that the PAD token is ignored
-                batch['pos_labels'][torch.where(batch['pos_labels'] == 1)] = -100
-                batch['pos_labels'][torch.where(batch['pos_labels'] == 2)] = -100
-        batch['sent_pos_ids'] = sent_pos_ids
         return batch
 
 

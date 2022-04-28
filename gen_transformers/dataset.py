@@ -58,7 +58,8 @@ class SummaryDataModule(pl.LightningDataModule):
             max_input_length=self.args.max_input_length,
             max_output_length=self.args.max_output_length,
             add_cols=add_cols,
-            split=split
+            split=split,
+            verbose=self.args.debug
         )
         batch_size = self.args.per_device_train_bs if split == 'train' else self.args.per_device_eval_bs
         kwargs = {
@@ -113,90 +114,28 @@ class SummarizationDataset(Dataset):
 
         untouched_target = target  # Original untouched reference
 
-        source_annotated = inputs
-        # For simple abstractive training, no oracle extracts / plans need to be included
-        if self.args.summary_style == 'abstract':
-            target_annotated = target
-            return {
-                'source': source_annotated,
-                'target': target_annotated,
-                'reference': untouched_target  # Same as target here but not always true
-            }
-
         # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
         oracle_obj = self.ids2oracles[example['id']]
         oracle_idxs = list(map(int, oracle_obj['sent_idxs'].split(',')))
 
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
-        source_sents = list(self.nlp(inputs).sents)
-        max_num_sents = 200
-        if len(source_sents) > max_num_sents:
-            print('Taking the first 200 sentences.')
-            source_sents = source_sents[:max_num_sents]
+        # source_sents = list(self.nlp(inputs).sents)
+        # if len(source_sents) > self.args.max_num_sents:
+        #     print(f'Taking the first {self.args.max_num_sents} sentences.')
+        #     source_sents = source_sents[:self.args.max_num_sents]
 
-        if self.args.add_sent_toks:
-            # Index-1 to match position embeddings
-            source_annotated = ''.join([f'<s{i + 1}> {s}' for i, s in enumerate(source_sents)])
+        # Insert [CLS] tokens before each sentence
+        # source_annotated = ''.join([f'<s> {s}' for i, s in enumerate(source_sents)])
+        source_annotated = inputs  # ' '.join(source_sents)
+
         # Sort oracle order or not
-        target_prefix = ''.join([f'<s{i + 1}>' for i in oracle_idxs if i < max_num_sents]).strip()
-        oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs if i < max_num_sents])
-
-        if self.args.summary_style == 'extract':
-            if self.split == 'train':
-                target_annotated = oracle_summary
-            else:
-                target_annotated = target  # We are evaluating on the abstractive summary
-        elif self.args.summary_style == 'plan':
-            target_annotated = target_prefix
-        elif self.args.summary_style == 'plan_abstract':
-            target_annotated = f'{target_prefix}<sep>{target}'
-        elif self.args.summary_style == 'abstract_plan':
-            target_annotated = f'{target}<sep>{target_prefix}'
-        elif self.args.summary_style == 'hybrid_control':
-            if self.split == 'train':
-                avg_oracle_rouge = (oracle_obj['rouge_1'] + oracle_obj['rouge_2']) / 2.0
-                good_oracle = avg_oracle_rouge >= self.args.oracle_cutoff
-                prefix = '<extract>' if good_oracle else '<abstract>'
-            else:
-                # TODO We can do better than this ultimately for evaluation
-                prefix = '<extract>'  # <abstract>
-                # prefix = str(np.random.choice(['<abstract>', '<extract>'], size=(1,))[0])
-
-            target_annotated = oracle_summary if prefix == '<extract>' and self.split == 'train' else target
-            source_annotated = prefix + source_annotated
+        plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
+        target_annotated = target
+        # oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs if i < max_num_sents])
         output = {
             'source': source_annotated,
             'target': target_annotated,
             'reference': untouched_target,  # Use for evaluation
+            'plan_labels': plan_labels,
         }
-        if self.split == 'train' and 'plan' in self.args.summary_style and len(self.args.contrast_modes) > 0:
-            perturb_prefixes = []  # Perturb the plan and fine-tune with unlikelihood training
-            remaining_idxs = np.sort(list(set(np.arange(len(source_sents))) - set(oracle_idxs)))
-
-            # Remove 1
-            perturb_prefixes.append(remove_sent_from_plan(oracle_idxs))
-
-            if len(remaining_idxs) > 0:
-                # Add-1
-                sample_add_idxs = np.sort([int(np.random.choice(remaining_idxs, size=(1,), )[0])] + oracle_idxs)
-                perturb_prefixes.append(''.join([f'<s{i}>' for i in sample_add_idxs]).strip())
-
-                # Replace 1
-                oracle_idxs_copy = oracle_idxs.copy()
-                list_idx_to_replace = int(np.random.choice(np.arange(len(oracle_idxs)), size=(1,))[0])
-                oracle_idxs_copy[list_idx_to_replace] = int(np.random.choice(remaining_idxs, size=(1,), )[0])
-                oracle_idxs_copy = list(np.sort(oracle_idxs_copy))
-                perturb_prefixes.append(''.join([f'<s{i}>' for i in oracle_idxs_copy]).strip())
-            else:  # duplicate the remove operation just to get batch to have constant size
-                # Remove 1
-                perturb_prefixes.append(remove_sent_from_plan(oracle_idxs))
-
-                # Remove 1
-                perturb_prefixes.append(remove_sent_from_plan(oracle_idxs))
-
-            neg_targets = [prefix + '<sep>' + target for prefix in perturb_prefixes]
-            pos_targets = [target_prefix + '<sep>' + target]
-            output['neg_plans'] = neg_targets
-            output['pos_plans'] = pos_targets
-
         return output
