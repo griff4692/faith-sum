@@ -138,7 +138,7 @@ class SummarizationDataset(Dataset):
             # Index-1 to match position embeddings
             source_annotated = ''.join([f'<s{i + 1}> {s}' for i, s in enumerate(source_sents)])
         # Sort oracle order or not
-        target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs if i < max_num_sents]).strip()
+        target_prefix = ''.join([f'<s{i + 1}>' for i in oracle_idxs if i < max_num_sents]).strip()
         oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs if i < max_num_sents])
 
         if self.args.summary_style == 'extract':

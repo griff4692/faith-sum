@@ -3,6 +3,7 @@ import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
+import numpy as np
 import torch
 from transformers import AutoTokenizer
 from datasets import load_dataset
@@ -18,7 +19,7 @@ from preprocess.convert_abstractive_to_extractive import gain_selection
 GEN_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
-        'num_beams': 4,
+        'num_beams': 1,
         'length_penalty': 4.0,
         'max_length': 142,
         'min_length': 56,
@@ -40,7 +41,7 @@ SAMPLE_KWARGS = {
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Experiment with Models.')
-    parser.add_argument('--wandb_name', default='plan_abstract_bs24')
+    parser.add_argument('--wandb_name', default='plan_abstract_sent_embed_alternate_pos')
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-cpu', default=False, action='store_true')
@@ -98,30 +99,65 @@ if __name__ == '__main__':
     print(source_annotated)
     # Sort oracle order or not
     oracle = gain_selection(source_sents_tok, target_sents_tok, 5, lower=True, sort=True)
-    target_prefix = ''.join([f'<s{i}>' for i in oracle[0]]).strip()
+    target_prefix = ''.join([f'<s{i + 1}>' for i in oracle[0]]).strip()
     target_annotated = f'{target_prefix}<sep>{target}'
 
-    inputs = tokenizer(source, truncation=True, max_length=1024, return_tensors='pt')
+    inputs = tokenizer(source_annotated, truncation=True, max_length=1024, return_tensors='pt')
+    seq_len = len(inputs['input_ids'][0])
+    sent_pos_ids = np.zeros([seq_len, ], dtype=np.long)
+    sentence_tok_ids = tokenizer.additional_special_tokens_ids
+    cutoff = min(tokenizer.additional_special_tokens_ids)
+    sent_cls_pos = torch.where(inputs['input_ids'][0] >= cutoff)[0].tolist()
+    for sent_idx, offset in enumerate(sent_cls_pos):
+        start = offset
+        end = sent_cls_pos[sent_idx + 1] if sent_idx < len(sent_cls_pos) - 1 else seq_len
+        is_odd_sent = sent_idx % 2 != 0
+        sent_pos_ids[start:end] = 1 if is_odd_sent else 2  # sent_idx + 1
+    sent_pos_ids = torch.from_numpy(sent_pos_ids).to(gpu)
 
     input_ids = inputs['input_ids'].to(gpu)
     attention_mask = inputs['attention_mask'].to(gpu)
+
+    from collections import defaultdict
+    encoder_sent_idx_map = defaultdict(dict)
+    for batch_idx, input_id_seq in enumerate(input_ids):
+        for input_idx, vocab_id in enumerate(input_id_seq):
+            if vocab_id >= cutoff:
+                encoder_sent_idx_map[batch_idx][int(vocab_id.item())] = input_idx
+
     # # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
     # 'num_beams': 4,
     # 'length_penalty': 4.0,
     # 'max_length': 142,
     # 'min_length': 56,
-    prompt = '</s><s><s13>'
-    decoder = tokenizer(prompt, return_tensors='pt', add_special_tokens=False).input_ids.to(gpu)
-    with torch.no_grad():
-        outputs = model.model.generate(
-            input_ids=input_ids,
-            decoder_input_ids=decoder,
-            attention_mask=attention_mask,
-            no_repeat_ngram_size=3,
-            early_stopping=True,
-            **GEN_KWARGS[args.dataset]
-        )
+    prompt = '</s><s><s0>'
+    prompts = [
+        '</s><s><s0>',
+        '</s><s><s1>',
+        '</s><s><s2>',
+        '</s><s><s3>',
+        '</s><s><s4>',
+        '</s><s><s5>',
+        '</s><s><s6>',
+        '</s><s><s7>',
+        '</s><s><s8>',
+    ]
 
-        prediction = tokenizer.decode(outputs[0], skip_special_tokens=False)
+    for prompt in prompts:
+        decoder = tokenizer(prompt, return_tensors='pt', add_special_tokens=False).input_ids.to(gpu)
+        with torch.no_grad():
+            outputs = model.model.generate(
+                input_ids=input_ids,
+                encoder_sent_idx_map=encoder_sent_idx_map,
+                sent_pos_ids=sent_pos_ids,
+                decoder_input_ids=decoder,
+                attention_mask=attention_mask,
+                no_repeat_ngram_size=3,
+                early_stopping=True,
+                **GEN_KWARGS[args.dataset]
+            )
 
-        print(prediction)
+            prediction = tokenizer.decode(outputs[0], skip_special_tokens=False)
+            print(prompt)
+            print(prediction)
+            print('\n')

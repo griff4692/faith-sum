@@ -1025,7 +1025,6 @@ class BartDecoder(BartPretrainedModel):
 
         # past_key_values_length
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
-
         if inputs_embeds is None:
             # When the label is a sentence tag, use the encoder embedding
             inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale

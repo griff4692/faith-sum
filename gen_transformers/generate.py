@@ -17,7 +17,7 @@ from global_utils import get_free_gpus
 GEN_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
-        'num_beams': 4,
+        'num_beams': 4,  # 1,
         'max_length': 142,
         'min_length': 56,
     },
