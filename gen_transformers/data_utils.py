@@ -3,6 +3,7 @@ from pathlib import Path
 
 import itertools
 import nltk
+import numpy as np
 import torch
 
 
@@ -24,7 +25,7 @@ def source_from_ids(input_ids, nlp, tokenizer):
 
 
 class Seq2SeqCollate:
-    def __init__(self, tokenizer, max_input_length=8192, max_output_length=512, add_cols=None, split=None):
+    def __init__(self, tokenizer, max_input_length=8192, max_output_length=512, add_cols=None, split=None, verbose=False):
         self.tokenizer = tokenizer
         self.max_input_length = max_input_length
         assert self.max_input_length <= tokenizer.model_max_length
@@ -34,6 +35,30 @@ class Seq2SeqCollate:
         self.eos_token_id = tokenizer.eos_token_id
         self.add_cols = [] if add_cols is None else add_cols
         self.split = split
+        additional_ids = self.tokenizer.additional_special_tokens_ids
+        self.special_id_min = None if len(additional_ids) == 0 else min(self.tokenizer.additional_special_tokens_ids)
+        self.verbose = verbose
+
+    def sent_extract_labels(self, batch_list, batch):
+        batch_size = len(batch_list)
+        num_cls_per_batch = batch['cls_mask'].sum(dim=1)
+        max_num_sent = num_cls_per_batch.max()
+        batch_plan_labels = [x['plan_labels'] for x in batch_list]
+        doc_offset = 1  # Document CLS token comes first
+        batch_plan_labels_pad = np.zeros([batch_size, max_num_sent], dtype=np.float)
+        for batch_idx in range(batch_size):
+            pl = batch_plan_labels[batch_idx]
+            num_cls = num_cls_per_batch[batch_idx]
+            for sent_idx in pl:
+                try:
+                    batch_plan_labels_pad[batch_idx, sent_idx + doc_offset] = 1
+                except:
+                    if self.verbose:
+                        print(f'Sentence {sent_idx} truncated by tokenizer and cannot be assigned as part of oracle.')
+            batch_plan_labels_pad[batch_idx, num_cls:] = -100  # This is padded
+        batch_plan_labels_pad[:, 0] = -100  # This is the document CLS token
+        batch_plan_labels_pad = torch.from_numpy(batch_plan_labels_pad)
+        batch['plan_labels'] = batch_plan_labels_pad
 
     def __call__(self, batch_list):
         # tokenize the inputs and labels
@@ -58,11 +83,14 @@ class Seq2SeqCollate:
         batch['input_ids'] = inputs.input_ids
         batch['attention_mask'] = inputs.attention_mask
         batch['labels'] = outputs.input_ids
+        batch['cls_mask'] = batch['input_ids'] >= self.special_id_min
         # We have to make sure that the PAD token is ignored
         batch['labels'][torch.where(batch['labels'] == 1)] = -100
-
         for col in self.add_cols:
             batch[col] = [x[col] for x in batch_list]
+
+        if 'plan_labels' in batch_list[0] and batch_list[0]['plan_labels'] is not None:
+            self.sent_extract_labels(batch_list, batch)
 
         if 'neg_plans' in batch_list[0]:
             neg_plans = list(itertools.chain(*[x['neg_plans'] for x in batch_list]))

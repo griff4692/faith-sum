@@ -15,7 +15,7 @@ from gen_transformers.generate import get_path_from_exp
 from preprocess.convert_abstractive_to_extractive import gain_selection
 
 
-GEN_KWARGS = {
+BEAM_KWARGS = {
     'cnn_dailymail': {
         # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
         'num_beams': 4,
@@ -40,7 +40,7 @@ SAMPLE_KWARGS = {
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Experiment with Models.')
-    parser.add_argument('--wandb_name', default='v2')
+    parser.add_argument('--wandb_name', default='plan_abstract_bs24')
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-cpu', default=False, action='store_true')
@@ -116,5 +116,6 @@ if __name__ == '__main__':
         outputs = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            **SAMPLE_KWARGS[args.dataset]
+            **BEAM_KWARGS[args.dataset]
         )
+

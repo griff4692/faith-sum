@@ -39,7 +39,7 @@ def run(args):
         tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
 
     if args.add_sent_toks:
-        add_tokens = [f'<s{i}>' for i in range(100)]
+        add_tokens = [f'<s{i}>' for i in range(args.max_num_sents)]
         add_tokens.append('<sep>')
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
@@ -139,6 +139,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', default=10, type=int)
     parser.add_argument('--weight_decay', type=float, default=5e-5)
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
+    parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
@@ -151,9 +152,10 @@ if __name__ == '__main__':
     # Task-specific / Project-specific parameters
     parser.add_argument(
         '--summary_style',
-        default='plan_abstract',
+        default='plan_and_abstract',
         choices=[
             'plan_abstract',
+            'plan_and_abstract',
             'abstract_plan',
             'extract',
             'plan',
@@ -205,7 +207,9 @@ if __name__ == '__main__':
         args.hf_model = 'sshleifer/bart-tiny-random'
 
     # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
-    args.add_sent_toks = args.add_sent_toks or args.summary_style in {'plan_abstract', 'plan', 'abstract_plan'}
+    args.add_sent_toks = args.add_sent_toks or args.summary_style in {
+        'plan_abstract', 'plan', 'abstract_plan', 'plan_and_abstract'
+    }
     args.weight_dir = os.path.join(args.data_dir, 'weights')
     os.makedirs(args.weight_dir, exist_ok=True)
 

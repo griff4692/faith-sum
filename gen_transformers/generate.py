@@ -140,6 +140,9 @@ if __name__ == '__main__':
         gen_kwargs['length_penalty'] = args.length_penalty
         gen_kwargs['use_hf_rouge'] = args.use_hf_rouge
 
+        if args.summary_style == 'plan':
+            gen_kwargs['max_length'] = 7
+
         # No reason to over-generate
         gen_kwargs['num_return_sequences'] = args.num_return_sequences if args.sample_gen else 1
         for batch_idx, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
@@ -188,7 +191,9 @@ if __name__ == '__main__':
 
         agg_cols = [
             'rouge1_f1', 'implied_rouge1_f1', 'extract_rouge1_f1',
-            'best_extract_rouge1_f1', 'best_abstract_rouge1_f1', 'best_implied_rouge1_f1'
+            'best_extract_rouge1_f1', 'best_abstract_rouge1_f1', 'best_implied_rouge1_f1',
+            'oracle_prompt_rouge1_f1', 'extract_implied_sent_f1', 'extract_gen_rouge1_f1',
+            'rand_plan_implied_sent_f1'
         ]
         exp_row = {
             col: outputs[col].dropna().mean() for col in agg_cols if col in list(outputs.columns)

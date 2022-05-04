@@ -134,6 +134,7 @@ class SummarizationDataset(Dataset):
         # Sort oracle order or not
         target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs]).strip()
         oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs])
+        plan_labels = None
 
         if self.args.summary_style == 'extract':
             if self.split == 'train':
@@ -144,6 +145,9 @@ class SummarizationDataset(Dataset):
             target_annotated = target_prefix
         elif self.args.summary_style == 'plan_abstract':
             target_annotated = f'{target_prefix}<sep>{target}'
+        elif self.args.summary_style == 'plan_and_abstract':
+            target_annotated = target
+            plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
         elif self.args.summary_style == 'abstract_plan':
             target_annotated = f'{target}<sep>{target_prefix}'
         elif self.args.summary_style == 'hybrid_control':
@@ -161,6 +165,7 @@ class SummarizationDataset(Dataset):
         output = {
             'source': source_annotated,
             'target': target_annotated,
+            'plan_labels': plan_labels,
             'reference': untouched_target,  # Use for evaluation
         }
         if self.split == 'train' and 'plan' in self.args.summary_style and len(self.args.contrast_modes) > 0:
