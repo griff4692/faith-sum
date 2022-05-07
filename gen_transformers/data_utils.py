@@ -42,25 +42,19 @@ class Seq2SeqCollate:
     def sent_extract_labels(self, batch_list, batch):
         batch_size = len(batch_list)
         num_cls_per_batch = batch['cls_mask'].sum(dim=1)
-        max_num_sent = num_cls_per_batch.max()
         batch_plan_labels = [x['plan_labels'] for x in batch_list]
-        doc_offset = 1  # Document CLS token comes first
-        batch_plan_labels_pad = np.zeros([batch_size, max_num_sent], dtype=np.float)
+        batch_plan_labels_pad = np.zeros(shape=(batch_size, batch['input_ids'].size()[1]), dtype=np.float)
+        batch_plan_labels_pad.fill(-100)
         for batch_idx in range(batch_size):
-            pl = batch_plan_labels[batch_idx]
-            num_cls = num_cls_per_batch[batch_idx]
-            for sent_idx in pl:
-                try:
-                    batch_plan_labels_pad[batch_idx, sent_idx + doc_offset] = 1
-                except:
-                    if self.verbose:
-                        print(f'Sentence {sent_idx} truncated by tokenizer and cannot be assigned as part of oracle.')
-            batch_plan_labels_pad[batch_idx, num_cls:] = -100  # This is padded
-        batch_plan_labels_pad[:, 0] = -100  # This is the document CLS token
+            sent_locs = batch['cls_mask'][batch_idx].nonzero().squeeze(1)
+            for sent_idx, location in enumerate(sent_locs):
+                label = 1 if sent_idx in batch_plan_labels[batch_idx] else 0
+                batch_plan_labels_pad[batch_idx, location] = label
         batch_plan_labels_pad = torch.from_numpy(batch_plan_labels_pad)
         batch['plan_labels'] = batch_plan_labels_pad
 
     def __call__(self, batch_list):
+        batch = {}
         # tokenize the inputs and labels
         inputs = self.tokenizer(
             [x['source'] for x in batch_list],
@@ -70,22 +64,22 @@ class Seq2SeqCollate:
             return_tensors='pt'
         )
 
-        with self.tokenizer.as_target_tokenizer():
-            outputs = self.tokenizer(
-                [x['target'] for x in batch_list],
-                padding='longest',
-                truncation=True,
-                max_length=self.max_output_length,
-                return_tensors='pt'
-            )
+        if batch_list[0]['target'] is not None:  # If we are just doing sentence scoring, 'score', this will be None
+            with self.tokenizer.as_target_tokenizer():
+                outputs = self.tokenizer(
+                    [x['target'] for x in batch_list],
+                    padding='longest',
+                    truncation=True,
+                    max_length=self.max_output_length,
+                    return_tensors='pt'
+                )
+                batch['labels'] = outputs.input_ids
+                # We have to make sure that the PAD token is ignored
+                batch['labels'][torch.where(batch['labels'] == 1)] = -100
 
-        batch = {}
         batch['input_ids'] = inputs.input_ids
         batch['attention_mask'] = inputs.attention_mask
-        batch['labels'] = outputs.input_ids
         batch['cls_mask'] = batch['input_ids'] >= self.special_id_min
-        # We have to make sure that the PAD token is ignored
-        batch['labels'][torch.where(batch['labels'] == 1)] = -100
         for col in self.add_cols:
             batch[col] = [x[col] for x in batch_list]
 

@@ -145,8 +145,11 @@ class SummarizationDataset(Dataset):
             target_annotated = target_prefix
         elif self.args.summary_style == 'plan_abstract':
             target_annotated = f'{target_prefix}<sep>{target}'
-        elif self.args.summary_style == 'plan_and_abstract':
+        elif self.args.summary_style == 'score_abstract':
             target_annotated = target
+            plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
+        elif self.args.summary_style == 'score':
+            target_annotated = None  # No generation, just sentence scoring and selection for extractive summarization
             plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
         elif self.args.summary_style == 'abstract_plan':
             target_annotated = f'{target}<sep>{target_prefix}'

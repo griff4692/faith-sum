@@ -92,8 +92,8 @@ def run(args):
         # TODO change back to 0.25
         val_check_interval=1.0 if args.debug else 0.1,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
-        num_sanity_val_steps=2,  # 0 if args.debug else 2,
-        log_every_n_steps=50,
+        num_sanity_val_steps=0 if args.debug else 2,
+        log_every_n_steps=25,
         max_steps=args.max_steps,
         plugins=plugins,
         # detect_anomaly=args.debug
@@ -136,7 +136,7 @@ if __name__ == '__main__':
     parser.add_argument('--per_device_eval_bs', type=int, default=16)
     parser.add_argument('--warmup_steps', type=int, default=200)
     parser.add_argument('--max_steps', default=150000, type=int)
-    parser.add_argument('--max_epochs', default=10, type=int)
+    parser.add_argument('--max_epochs', default=20, type=int)
     parser.add_argument('--weight_decay', type=float, default=5e-5)
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_num_sents', type=int, default=200)
@@ -152,10 +152,11 @@ if __name__ == '__main__':
     # Task-specific / Project-specific parameters
     parser.add_argument(
         '--summary_style',
-        default='plan_and_abstract',
+        default='score_abstract',
         choices=[
             'plan_abstract',
-            'plan_and_abstract',
+            'score_abstract',
+            'score',
             'abstract_plan',
             'extract',
             'plan',
@@ -208,7 +209,7 @@ if __name__ == '__main__':
 
     # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {
-        'plan_abstract', 'plan', 'abstract_plan', 'plan_and_abstract'
+        'plan_abstract', 'plan', 'abstract_plan', 'score_abstract', 'score',
     }
     args.weight_dir = os.path.join(args.data_dir, 'weights')
     os.makedirs(args.weight_dir, exist_ok=True)
