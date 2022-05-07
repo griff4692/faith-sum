@@ -13,11 +13,12 @@ import torch.nn as nn
 from transformers import AutoModelForSeq2SeqLM
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
+from transformers.models.bart.modeling_bart import _expand_mask, BartEncoderLayer
+from preprocess.extract_oracles import convert_to_sents
 
 from scipy.special import expit
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from eval.rouge_metric import RougeMetric
-from gen_transformers.data_utils import postprocess_text
 
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
@@ -30,6 +31,7 @@ class TransformerSummarizer(pl.LightningModule):
         self.tokenizer = tokenizer
         assert self.hparams.max_input_length <= self.tokenizer.model_max_length
         self.model = AutoModelForSeq2SeqLM.from_pretrained(hf_model)
+        self.model.config.output_attentions = True  # Keep track of them
         self.model.resize_token_embeddings(len(tokenizer))
         self.lr = self.hparams.lr  # Necessary for tune_lr to work with PytorchLightning
         self.rouge = load_metric('rouge')
@@ -45,6 +47,34 @@ class TransformerSummarizer(pl.LightningModule):
             self.sent_classifier = nn.Linear(self.model.config.d_model, 1)
             pos_weight = torch.FloatTensor([1.0])
             self.sent_loss = torch.nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)
+            self.sent_model = None
+            # if self.hparams.sent_model_layer:
+            #     self.sent_model = BartEncoderLayer(self.model.config)
+            #     self.sent_model.load_state_dict(self.model.model.encoder.layers[-1].state_dict())
+            self.kld_loss = nn.KLDivLoss(log_target=False, reduction='batchmean')
+            self.enc_transform = nn.Linear(self.model.config.d_model, 200, bias=True)
+        self.sim = nn.CosineSimilarity()
+
+    def parse_source_text_from_inputs(self, batch):
+        source_special = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
+        source_no_special = self.tokenizer.batch_decode(batch['input_ids'].tolist(), skip_special_tokens=True)
+        if self.hparams.add_sent_toks:  # If we have sentences demarcated in the source text
+            source_sents = list(map(lambda x: re.split(
+                r'<s\d*>', x.replace('<s>', '').replace('</s>', '').replace('<pad>', '').strip())[1:], source_special))
+            source_sents = list(map(lambda ss: list(map(lambda x: x.strip(), ss)), source_sents))
+            source_sent_toks = [
+                [[str(t.text).strip() for t in self.nlp(sentence) if len(str(t.text).strip()) > 0] for sentence in doc]
+                for doc in source_sents
+            ]
+        else:  # We have to sentence split ourselves
+            source_sents = [convert_to_sents(x, self.nlp) for x in source_no_special]
+            source_sent_toks = [
+                [[str(t.text).strip() for t in sentence if len(str(t.text).strip()) > 0] for sentence in doc]
+                for doc in source_sents
+            ]
+            source_sents = list(map(lambda ss: [str(x).strip() for x in ss], source_sents))
+        return [{'text': a.strip(), 'sents': b, 'sent_toks': c} for a, b, c in
+                zip(source_no_special, source_sents, source_sent_toks)]
 
     def compute_ll(self, batch, labels, output):
         batch_size = len(output[1])
@@ -97,7 +127,7 @@ class TransformerSummarizer(pl.LightningModule):
                 margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.contrast_margin, min=0))
         return margin_losses
 
-    def build_summaries(self, source_sents, y_hat, trigram_block=True, max_num_sents=3):
+    def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
         all_summaries = []
         y_hat_cls = y_hat[np.where(y_hat > float('-inf'))]
         priority = expit(y_hat_cls.copy())
@@ -106,14 +136,14 @@ class TransformerSummarizer(pl.LightningModule):
             trigram_to_sent_idx = defaultdict(list)
             sent_idx_to_trigram = defaultdict(list)
 
-            for sent_idx, sent in enumerate(source_sents):
+            for sent_idx, sent in enumerate(source['sents']):
                 sent_toks = [t for t in re.sub('\W+', ' ', sent.lower()).split(' ') if len(t) > 0]
                 sent_trigrams = list(trigrams(sent_toks))
                 for trigram in sent_trigrams:
                     trigram_to_sent_idx[trigram].append(sent_idx)
                     sent_idx_to_trigram[sent_idx].append(trigram)
 
-        for k in range(min(max_num_sents, len(source_sents))):
+        for k in range(min(max_num_sents, len(source['sents']))):
             top_sent = np.argmax(priority)
             priority[top_sent] = float('-inf')
             if trigram_block:
@@ -124,13 +154,48 @@ class TransformerSummarizer(pl.LightningModule):
             prev_sents = [] if k == 0 else all_summaries[k - 1]
             summary_at_k = prev_sents + [top_sent]
             all_summaries.append(summary_at_k)
-        return all_summaries
+        summary_idx = all_summaries[-1]
+        return self.get_summary_from_sent_idxs(source, summary_idx)
+
+    def score_sents(self, cls_mask, encoder_hidden_states):
+        if self.sent_model is not None:
+            cls_attention_mask = cls_mask.float()
+            cls_attention_mask[:, 0] = 1.0  # Document BOS should be un-masked
+            cls_attention_mask_exp = _expand_mask(cls_attention_mask, dtype=encoder_hidden_states.dtype)
+            encoder_hidden_states = self.sent_model(
+                hidden_states=encoder_hidden_states, attention_mask=cls_attention_mask_exp, layer_head_mask=None
+            )[0]
+        return self.sent_classifier(encoder_hidden_states).squeeze(-1)
+
+    def kld(self, y_hat_scores, y_dist):
+        y_hat_lprob = torch.log_softmax(y_hat_scores, dim=-1)
+        return self.kld_loss(y_hat_lprob, y_dist.float())
+
+    def compute_ll_extract_loss(self, sent_preds, plan_labels):
+        sent_loss = self.sent_loss(sent_preds.flatten(), plan_labels.flatten())
+
+        # These are the document [CLS] token and padding
+        sent_label_mask = (plan_labels == -100).flatten()
+        sent_loss.masked_fill_(sent_label_mask, 0)
+        extract_loss = sent_loss.sum() / (plan_labels != -100).sum()
+        return extract_loss
+
+    def compute_kld_extract_loss(self, sent_preds, plan_q, cls_mask):
+        batch_size = len(sent_preds)
+        klds = []
+        for batch_idx in range(batch_size):
+            p, q = sent_preds[batch_idx, cls_mask[batch_idx]], plan_q[batch_idx, cls_mask[batch_idx]]
+            kld_loss = self.kld(p.unsqueeze(0), q.unsqueeze(0))
+            klds.append(kld_loss)
+        extract_loss = torch.stack(klds).mean()
+        return extract_loss
 
     def training_step(self, batch, batch_idx):
         batch_size = len(batch['input_ids'])
 
         # Train on extractive labels
         plan_labels = batch.pop('plan_labels', None)
+        plan_q = batch.pop('plan_q', None)
         cls_mask = batch.pop('cls_mask')
 
         # Perturbed Plans
@@ -146,6 +211,9 @@ class TransformerSummarizer(pl.LightningModule):
             # Return label-smoothed loss
             full_loss = self.label_smoother(output, batch['labels'])
             encoder_h = output.encoder_last_hidden_state
+            cross_attentions = output.cross_attentions
+            cross_att_head_pooled = [x.mean(dim=1) for x in cross_attentions]
+            cross_att_pool_layers = torch.stack([x.max(dim=1)[0] for x in cross_att_head_pooled]).mean(dim=0)
         else:
             full_loss = 0
             output = self.model.model.encoder(**batch)
@@ -153,14 +221,46 @@ class TransformerSummarizer(pl.LightningModule):
 
         if plan_labels is not None:
             # Predict if a sentence is in oracle summary
-            sent_preds = self.sent_classifier(encoder_h).squeeze(1)
-            sent_loss = self.sent_loss(sent_preds.flatten(), plan_labels.flatten())
+            sent_preds = self.score_sents(cls_mask, encoder_h)
 
-            # These are the document [CLS] token and padding
-            # These are the document [CLS] token and padding
-            sent_label_mask = (plan_labels == -100).flatten()
-            sent_loss.masked_fill_(sent_label_mask, 0)
-            extract_loss = sent_loss.sum() / (plan_labels != -100).sum()
+            encoder_h_proj = torch.tanh(self.enc_transform(encoder_h))
+
+            # cross_att_pool_layers
+            cross_weight = torch.softmax(cross_att_pool_layers, dim=1)
+            # sent_label_mask = (plan_labels == -100)
+            # sent_preds.masked_fill_(sent_label_mask, float('-inf'))
+            # sent_weight = torch.softmax(sent_preds, dim=1)
+
+            oracle_weight = (plan_labels == 1).float()
+            oracle_weight /= oracle_weight.sum(dim=1).unsqueeze(1)
+
+            even_sent_weight = (plan_labels != -100).float()
+            even_sent_weight /= even_sent_weight.sum(dim=1).unsqueeze(1)
+
+            oracle_sent_enc_h = (oracle_weight.unsqueeze(-1) * encoder_h_proj).sum(dim=1)
+            cross_enc_h = (cross_weight.unsqueeze(-1) * encoder_h_proj).sum(dim=1)
+            # pred_sent_enc_h = (sent_weight.unsqueeze(-1) * encoder_h_proj).sum(dim=1)
+            even_sent_enc_h = (even_sent_weight.unsqueeze(-1) * encoder_h_proj).sum(dim=1)
+
+            # oracle_cross_sim = (oracle_sent_enc_h * cross_enc_h).sum(dim=1)
+            oracle_cross_sim = self.sim(oracle_sent_enc_h, cross_enc_h)
+            # oracle_pred_sim = self.sim(oracle_sent_enc_h, pred_sent_enc_h)
+
+            even_cross_sim = self.sim(even_sent_enc_h, cross_enc_h)  # (even_sent_enc_h * cross_enc_h).sum(dim=1)
+            # even_pred_sim = self.sim(even_sent_enc_h, pred_sent_enc_h)
+
+            margin = 1.0
+            # pred_margin = torch.clamp_min(even_pred_sim - oracle_pred_sim + margin, 0).mean()
+            cross_margin = torch.clamp_min(even_cross_sim - oracle_cross_sim + margin, 0).mean()
+            # self.log('pred_margin', pred_margin, on_epoch=False, on_step=True, prog_bar=True)
+            self.log('cross_margin', cross_margin, on_epoch=False, on_step=True, prog_bar=True)
+            # TODO revert this back if you want the cross_margin loss
+            # full_loss += cross_margin  # + pred_margin
+
+            if self.hparams.use_kld:
+                extract_loss = self.compute_kld_extract_loss(sent_preds, plan_q, cls_mask)
+            else:
+                extract_loss = self.compute_ll_extract_loss(sent_preds, plan_labels)
             self.log('train_extract', extract_loss, on_epoch=False, on_step=True, prog_bar=True)
             if full_loss is None:
                 full_loss = extract_loss
@@ -214,11 +314,28 @@ class TransformerSummarizer(pl.LightningModule):
             self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
         return full_loss
 
+    def score_extracts(self, source, cls_mask, encoder_h, plan_labels):
+        batch_size = len(source)
+        sent_preds = self.score_sents(cls_mask, encoder_h)
+        extract_loss = self.compute_ll_extract_loss(sent_preds, plan_labels)
+        # Only predict positively for CLS tokens
+        sent_preds.masked_fill_(~ cls_mask, float('-inf'))
+        y_hat_np = sent_preds.detach().cpu().numpy()
+        extractive_summaries = [
+            self.build_summaries(source=source[batch_idx], y_hat=y_hat_np[batch_idx, :])
+            for batch_idx in range(batch_size)
+        ]
+        return extractive_summaries, extract_loss
+
     def validation_step(self, batch, batch_idx):
         # Train on extractive labels
         plan_labels = batch.pop('plan_labels', None)
+        _ = batch.pop('plan_q', None)
         cls_mask = batch.pop('cls_mask')
         batch_size = len(batch['input_ids'])
+        references = batch['reference']
+
+        source = self.parse_source_text_from_inputs(batch)
 
         validation_kwargs = {
             'num_beams': 1,
@@ -233,33 +350,23 @@ class TransformerSummarizer(pl.LightningModule):
             encoder_h = output.encoder_last_hidden_state
         else:
             loss = 0
-            output = self.model.model.encoder(**batch)
+            encoder_kwargs = {
+                'input_ids': batch['input_ids'],
+                'attention_mask': batch['attention_mask']
+            }
+            output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
 
-        extractive_summaries = None
-        if plan_labels is not None:
-            assert 'score' in self.hparams.summary_style
-            # Predict if a sentence is in oracle summary
-            sent_preds = self.sent_classifier(encoder_h).squeeze(-1)
-            sent_loss = self.sent_loss(sent_preds.flatten(), plan_labels.flatten())
-
-            sent_preds = self.sent_classifier(encoder_h).squeeze(-1)
-            # Only predict positively for CLS tokens
-            sent_preds.masked_fill_(~ cls_mask, float('-inf'))
-
-            source = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
-            source_sents = list(map(lambda x: re.split(
-                r'<s\d*>', x.replace('<s>', '').replace('</s>', '').replace('<pad>', '').strip())[1:], source))
-            y_hat_np = sent_preds.detach().cpu().numpy()
-            extractive_summaries = []
+        score_outputs = [None for _ in range(batch_size)]
+        if 'score' in self.hparams.summary_style:
+            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
             for batch_idx in range(batch_size):
-                summary = self.build_summaries(source_sents=source_sents[batch_idx], y_hat=y_hat_np[batch_idx, :])[-1]
-                extractive_summaries.append(summary)
-
-            # These are the document [CLS] token and padding
-            sent_label_mask = (plan_labels == -100).flatten()
-            sent_loss.masked_fill_(sent_label_mask, 0)
-            extract_loss = sent_loss.sum() / (plan_labels != -100).sum()
+                score_outputs[batch_idx] = {
+                    'source': source[batch_idx],
+                    'abstracts': None, 'implied_extracts': None,
+                    'extracts': [extractive_summaries[batch_idx]],
+                    'reference': references[batch_idx],
+                }
             self.log('val_extract', extract_loss, on_epoch=True, on_step=False, prog_bar=True)
             if loss is None:  # No generation
                 loss = extract_loss
@@ -267,47 +374,43 @@ class TransformerSummarizer(pl.LightningModule):
                 loss += extract_loss
                 self.log('val_combined', loss, on_epoch=True, on_step=False, prog_bar=True)
 
+        gen_outputs = [None for _ in range(batch_size)]
+        if self.hparams.summary_style != 'score':
+            gen_outputs = self.shared_generate(batch, source, **validation_kwargs)
+
+        # Merge the two if needed (score_abstract only)
+        gen_outputs_resolved = self.merge_outputs(gen_outputs, score_outputs)
+
         all_metrics = {'val_loss': loss}
-
-        if self.hparams.summary_style == 'score':
-            gen_output_list = []
-            for batch_idx in range(batch_size):
-                row = self.parse_score(
-                    batch['input_ids'][batch_idx].unsqueeze(0), [validation_kwargs['references'][batch_idx]],
-                    extractive_summaries[batch_idx]
-                )
-                gen_output_list.append(row)
-        else:
-            gen_output_list = self.shared_generate(batch, extractive_idxs=extractive_summaries, **validation_kwargs)
-
         # It's a list of dictionaries --> convert into dictionary of lists and process as a batch (for ROUGE)
-        gen_output = defaultdict(list)
-        for item in gen_output_list:
+        output_dict = defaultdict(list)
+        for item in gen_outputs_resolved:
             for k, v in item.items():
                 if type(v) == list:
-                    gen_output[k] += v
+                    output_dict[k] += v
                 elif v is not None:
-                    gen_output[k].append(v)
+                    output_dict[k].append(v)
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
         if self.hparams.summary_style in {'abstract_plan', 'plan_abstract'}:
             from_oracle_rouge = self.generate_from_oracle(batch, reduce=True, **validation_kwargs)
             all_metrics.update(from_oracle_rouge)
 
-        if len(gen_output['abstracts']) > 0:
-            all_metrics.update(self.compute_rouge(gen_output['abstracts'], gen_output['references']))
-            implied_extracts = [x['summary'] for x in gen_output['implied_extracts']]
-            all_metrics.update(self.compute_rouge(implied_extracts, gen_output['references'], prefix='implied_'))
+        if len(output_dict['abstracts']) > 0:
+            all_metrics.update(self.compute_rouge(output_dict['abstracts'], references))
+            implied_extracts = [x['summary'] for x in output_dict['implied_extracts']]
+            all_metrics.update(self.compute_rouge(implied_extracts, references, prefix='implied_'))
 
-        if len(gen_output['extracts']) > 0:
-            all_metrics.update(self.compute_rouge(gen_output['extracts'], gen_output['references'], prefix='extract_'))
+        if len(output_dict['extracts']) > 0:
+            all_metrics.update(self.compute_rouge(output_dict['extracts'], references, prefix='extract_'))
 
         # Measure consistency between abstract (and implied extract) and generated extract
-        if len(gen_output['abstracts']) > 0 and len(gen_output['extracts']) > 0:
-            all_metrics.update(self.measure_plan_abstract_consistency(batch, gen_output, **validation_kwargs))
+        if len(output_dict['abstracts']) > 0 and len(output_dict['extracts']) > 0:
+            if 'score' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
+                all_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
             # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
             # If the plan is working, this should be very high (the abstract should follow the plan)
             all_metrics.update(
-                self.compute_rouge(gen_output['extracts'], gen_output['abstracts'], prefix='extract_gen_')
+                self.compute_rouge(output_dict['extracts'], output_dict['abstracts'], prefix='extract_gen_')
             )
 
         for k, v in all_metrics.items():
@@ -353,10 +456,27 @@ class TransformerSummarizer(pl.LightningModule):
             return {col: df[col].dropna().mean for col in df.columns}
         return results
 
+    def merge_outputs(self, gen_outputs, score_outputs):
+        merged = []
+        assert len(score_outputs) == len(gen_outputs)
+        for batch_idx in range(len(score_outputs)):
+            row = {}
+            if gen_outputs[batch_idx] is not None:
+                row.update(gen_outputs[batch_idx])
+            if score_outputs[batch_idx] is not None:
+                for k, v in score_outputs[batch_idx].items():
+                    if v is None or row[k] is not None:
+                        continue
+                    row[k] = v
+            merged.append(row)
+        return merged
+
     def predict_step(self, batch, batch_idx=None, **gen_kwargs):
+        source = self.parse_source_text_from_inputs(batch)
         references = batch.pop('reference')
         cls_mask = batch.pop('cls_mask')
         plan_labels = batch.pop('plan_labels', None)
+        _ = batch.pop('plan_q', None)
         use_hf_rouge = gen_kwargs.pop('use_hf_rouge')
         eval = not use_hf_rouge
 
@@ -365,31 +485,38 @@ class TransformerSummarizer(pl.LightningModule):
             'references': references
         })
 
+        score_outputs = [None for _ in range(batch_size)]
         if 'score' in self.hparams.summary_style:
             assert 'score' in self.hparams.summary_style
             # Predict if a sentence is in oracle summary
-            output = self.model.model.encoder(**batch)
+            encoder_kwargs = {
+                'input_ids': batch['input_ids'],
+                'attention_mask': batch['attention_mask']
+            }
+            output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
-            sent_preds = self.sent_classifier(encoder_h).squeeze(-1)
-            sent_preds.masked_fill_(~ cls_mask, float('-inf'))
-            source = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
-            source_sents = list(map(lambda x: re.split(
-                r'<s\d*>', x.replace('<s>', '').replace('</s>', '').replace('<pad>', '').strip())[1:], source))
-            y_hat_np = sent_preds.detach().cpu().numpy()
-            gen_outputs = []
+            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
             for batch_idx in range(batch_size):
-                summary = self.build_summaries(source_sents=source_sents[batch_idx], y_hat=y_hat_np[batch_idx, :])[-1]
-                row = self.parse_score(batch['input_ids'][batch_idx].unsqueeze(0), [references[batch_idx]], summary)
-                gen_outputs.append(row)
-        else:
-            gen_outputs = self.shared_generate(batch, **gen_kwargs)
-        batch_outputs = []
+                score_outputs[batch_idx] = {
+                    'source': source[batch_idx],
+                    'abstracts': None, 'implied_extracts': None,
+                    'extracts': [extractive_summaries[batch_idx]],
+                    'reference': references[batch_idx],
+                }
 
+        gen_outputs = [None for _ in range(batch_size)]
+        if self.hparams.summary_style != 'score':
+            gen_outputs = self.shared_generate(batch, source, **gen_kwargs)
+
+        # Merge the two if needed (score_abstract only)
+        gen_outputs_resolved = self.merge_outputs(gen_outputs, score_outputs)
+
+        batch_outputs = []
         from_oracle_metrics = None
         if self.hparams.summary_style in {'abstract_plan', 'plan_abstract'}:
             from_oracle_metrics = self.generate_from_oracle(batch, use_hf_rouge, **gen_kwargs)
 
-        for batch_idx, (reference, gen_output) in enumerate(zip(references, gen_outputs)):
+        for batch_idx, (reference, gen_output) in enumerate(zip(references, gen_outputs_resolved)):
             abstract_flat = '' if gen_output['abstracts'] is None else '<cand>'.join(gen_output['abstracts'])
             extract_flat = '' if gen_output['extracts'] is None else '<cand>'.join(
                 [x['summary'] for x in gen_output['extracts']])
@@ -417,43 +544,47 @@ class TransformerSummarizer(pl.LightningModule):
                     implied_extracts[:1], [reference], prefix='implied_', eval=eval
                 ))
 
-                # Get all the ROUGE abstracts (average ROUGE-1, ROUGE-2)
-                abstract_cand_metrics, best_abstract_metric = self.score_candidates(
-                    [reference], gen_output['abstracts'], 'abstract', eval=eval
-                )
-                save_out.update(best_abstract_metric)
-                save_out['abstract_rouges'] = ','.join([str(x['best_abstract_mean_f1']) for x in abstract_cand_metrics])
+                if len(gen_output['abstracts']) > 1:
+                    # Get all the ROUGE abstracts (average ROUGE-1, ROUGE-2)
+                    abstract_cand_metrics, best_abstract_metric = self.score_candidates(
+                        [reference], gen_output['abstracts'], 'abstract', eval=eval
+                    )
+                    save_out.update(best_abstract_metric)
+                    save_out['abstract_rouges'] = ','.join(
+                        [str(x['best_abstract_mean_f1']) for x in abstract_cand_metrics]
+                    )
 
-                implied_cand_metrics, best_implied_metric = self.score_candidates(
-                    [reference], implied_extracts, 'implied', eval=eval
-                )
-                save_out.update(best_implied_metric)
-                save_out['implied_extract_rouges'] = ','.join(
-                    [str(x['best_implied_mean_f1']) for x in implied_cand_metrics]
-                )
+                    implied_cand_metrics, best_implied_metric = self.score_candidates(
+                        [reference], implied_extracts, 'implied', eval=eval
+                    )
+                    save_out.update(best_implied_metric)
+                    save_out['implied_extract_rouges'] = ','.join(
+                        [str(x['best_implied_mean_f1']) for x in implied_cand_metrics]
+                    )
 
             if gen_output['extracts'] is not None:
                 extracts = [x['summary'] for x in gen_output['extracts']]
                 save_out.update(self.compute_rouge(extracts[:1], [reference], prefix='extract_', eval=eval))
-
-                extract_cand_metrics, best_extract_metric = self.score_candidates(
-                    [reference], extracts, 'extract', eval=eval
-                )
-                save_out.update(best_extract_metric)
-                save_out['extract_rouges'] = ','.join(
-                    [str(x['best_extract_mean_f1']) for x in extract_cand_metrics]
-                )
-
-            if gen_output['pyramid_extracts'] is not None:
-                save_out.update(
-                    self.compute_rouge(
-                        gen_output['pyramid_extracts'], [reference], prefix='pyramid_extract_', eval=eval
+                if len(extracts) > 1:
+                    extract_cand_metrics, best_extract_metric = self.score_candidates(
+                        [reference], extracts, 'extract', eval=eval
                     )
-                )
+                    save_out.update(best_extract_metric)
+                    save_out['extract_rouges'] = ','.join(
+                        [str(x['best_extract_mean_f1']) for x in extract_cand_metrics]
+                    )
+
+            # if gen_output['pyramid_extracts'] is not None:
+            #     save_out.update(
+            #         self.compute_rouge(
+            #             gen_output['pyramid_extracts'], [reference], prefix='pyramid_extract_', eval=eval
+            #         )
+            #     )
 
             # Measure consistency between abstract (and implied extract) and generated extract
             if gen_output['abstracts'] is not None and gen_output['extracts'] is not None:
-                save_out.update(self.measure_plan_abstract_consistency(batch, gen_output, **gen_kwargs))
+                if 'score' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
+                    save_out.update(self.measure_plan_abstract_consistency(batch, gen_output, **gen_kwargs))
                 # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
                 # If the plan is working, this should be very high (the abstract should follow the plan)
                 extracts = [x['summary'] for x in gen_output['extracts']]
@@ -464,7 +595,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         return batch_outputs
 
-    def shared_generate(self, batch, extractive_idxs=None, **gen_kwargs):
+    def shared_generate(self, batch, source, references, **gen_kwargs):
         default_kwargs = {  # Some of these values may get overridden by gen_kwargs
             'input_ids': batch['input_ids'],
             'attention_mask': batch['attention_mask'],
@@ -475,7 +606,6 @@ class TransformerSummarizer(pl.LightningModule):
             'output_scores': True
         }
 
-        references = gen_kwargs.pop('references')
         default_kwargs.update(gen_kwargs)
         pred_ids = self.model.generate(**default_kwargs)
         gold_ids = batch['labels']
@@ -486,24 +616,16 @@ class TransformerSummarizer(pl.LightningModule):
         num_pred = len(pred_ids)
         num_cands = gen_kwargs['num_return_sequences']
         assert num_cands * batch_size == num_pred
-        if num_cands > 1:
-            pred_ids = pred_ids.view(batch_size, num_cands, -1)
-        else:
-            pred_ids = pred_ids.unsqueeze(1)
-        outputs = []
-        for batch_idx in range(batch_size):
-            extractive_idx = extractive_idxs[batch_idx] if extractive_idxs is not None else None
-            row = self.parse_output(
-                pred_ids[batch_idx], input_ids[batch_idx].unsqueeze(0), [references[batch_idx]],
-                extractive_idx=extractive_idx
-            )
-            outputs.append(row)
-        return outputs
+        pred_ids = pred_ids.view(batch_size, num_cands, -1) if num_cands > 1 else pred_ids.unsqueeze(1)
+        return [
+            self.parse_output(source[batch_idx], references[batch_idx], pred_ids[batch_idx])
+            for batch_idx in range(batch_size)
+        ]
 
-    def ensure_extract(self, pred_str, source_sents, source_sent_toks):
+    def ensure_extract(self, pred_str, source):
         extractive = []
         idxs = []
-        pred_sents = list(self.nlp(pred_str).sents)
+        pred_sents = convert_to_sents(pred_str, self.nlp)
         for sent in pred_sents:
             sent_toks = [str(token.text).strip() for token in sent if len(str(token.text).strip()) > 0]
             if len(sent_toks) <= 1:
@@ -511,117 +633,54 @@ class TransformerSummarizer(pl.LightningModule):
             max_intersect = 0
             closest_sent = ''
             best_idx = -1
-            for source_idx in range(len(source_sents)):
-                num_intersect = len(set(source_sent_toks[source_idx]).intersection(set(sent_toks)))
+            for source_idx in range(len(source['sents'])):
+                num_intersect = len(set(source['sent_toks'][source_idx]).intersection(set(sent_toks)))
                 if num_intersect >= max_intersect:
-                    closest_sent = source_sents[source_idx]
+                    closest_sent = source['sents'][source_idx]
                     max_intersect = num_intersect
                     best_idx = source_idx
             idxs.append(best_idx)
             extractive.append(str(closest_sent))
         return {'summary': ' '.join(extractive), 'idxs': idxs}
 
-    def get_summary_from_sent_idxs(self, input_ids, extractive_idxs):
-        extractive_tags = [f'<s{d}>' for d in list(sorted(extractive_idxs))]
-        decoded_inputs = self.tokenizer.batch_decode(input_ids, skip_special_tokens=False)
-        decoded_input = re.sub(r'<pad>|</s>|<s>', '', decoded_inputs[0])
-        source_sent_tps = re.split(r'(<s\d+>)', decoded_input)
-        predicted_extractive_summary = []
-        for sent_idx, tp in enumerate(source_sent_tps):
-            if tp.startswith('<s') and int(re.search(r'\d+', tp).group()) in extractive_idxs:
-                predicted_extractive_summary.append(source_sent_tps[sent_idx + 1].strip())
-        summary = postprocess_text([' '.join(predicted_extractive_summary)])[0]
+    def get_summary_from_sent_idxs(self, source, extractive_idxs, sort=True):
+        if sort:
+            extractive_idxs = list(sorted(extractive_idxs))
+        summary = ' '.join([source['sents'][i].strip() for i in extractive_idxs])
         return {
-            'idxs': extractive_tags,
+            'idxs': extractive_idxs,
             'summary': summary
         }
 
-    def parse_score(self, input_ids, references, extractive_idx):
-        source_raw = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
-        source_docs = [list(self.nlp(x).sents) for x in source_raw]
-        source_doc_sents_tok = [
-            [[str(token.text).strip() for token in sentence if len(str(token.text).strip()) > 0] for sentence in doc]
-            for doc in source_docs
-        ]
-        source = {
-            'text': source_raw,
-            'sents': source_docs,
-            'sent_toks': source_doc_sents_tok,
-        }
-
-        extracts = [self.get_summary_from_sent_idxs(input_ids, extractive_idx)]
-        return {
-            'source': source,
-            'abstracts': None,
-            'extracts': extracts,
-            'pyramid_extracts': None,
-            'implied_extracts': None,
-            'references': references,
-        }
-
-    def parse_output(self, pred_ids, input_ids, references, extractive_idx=None):
+    def parse_output(self, source, reference, pred_ids):
         pred_str = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
-        batch_size = len(input_ids)
-        source_raw = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
-        source_docs = [list(self.nlp(x).sents) for x in source_raw]
-        source_doc_sents_tok = [
-            [[str(token.text).strip() for token in sentence if len(str(token.text).strip()) > 0] for sentence in doc]
-            for doc in source_docs
-        ]
-        source = {
-            'text': source_raw,
-            'sents': source_docs,
-            'sent_toks': source_doc_sents_tok,
-        }
-
+        num_pred = len(pred_str)
         if 'plan' in self.hparams.summary_style:
             decoded_sent_preds = [
                 re.findall(r'(<s\d+>)', x) for x in
                 self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=False)
             ]
-            decoded_inputs = self.tokenizer.batch_decode(input_ids, skip_special_tokens=False)
-            decoded_inputs = list(np.repeat(decoded_inputs, len(decoded_sent_preds) // len(decoded_inputs)))
-            assert len(decoded_inputs) == len(decoded_sent_preds)
-            extracts = []  # Get them from the plan
-            for example_idx, decoded_input in enumerate(decoded_inputs):
-                decoded_input = re.sub(r'<pad>|</s>|<s>', '', decoded_input)
-                source_sent_tps = re.split(r'(<s\d+>)', decoded_input)
-                first_sent = source_sent_tps[2]  # normally, empty space, '<s0>, {body first sentence}
-                predicted_extractive_summary = []
-                for sent_idx, tp in enumerate(source_sent_tps):
-                    if tp in decoded_sent_preds[example_idx]:
-                        predicted_extractive_summary.append(source_sent_tps[sent_idx + 1].strip())
-                #  (should only happen before training starts)
-                if len(predicted_extractive_summary) == 0:  # Default to LEAD-1 if none predicted
-                    assert '<s' not in first_sent
-                    extracts.append({'idxs': ['<s0>'], 'summary': first_sent})
-                else:
-                    extracts.append({
-                        'idxs': decoded_sent_preds[example_idx],
-                        'summary': postprocess_text([' '.join(predicted_extractive_summary)])[0]
-                    })
+
+            decoded_sent_idxs = [
+                [int(re.search(r'\d+', tag)) for tag in sent_tags] for sent_tags in decoded_sent_preds
+            ]
+
+            extracts = [self.build_summaries(source, sent_idx) for sent_idx in decoded_sent_idxs]
             abstracts = None if self.hparams.summary_style == 'plan' else pred_str
         elif self.hparams.summary_style == 'extract':  # Our abstractive generation is actually an extract
-            extracts = list(map(
-                lambda i: self.ensure_extract(pred_str[i], source_docs[i], source_doc_sents_tok[i]), range(batch_size)
-            ))
+            extracts = list(map(lambda i: self.ensure_extract(pred_str[i], source), range(num_pred)))
             abstracts = None
         elif self.hparams.summary_style == 'score_abstract':
             abstracts = pred_str
-            assert extractive_idx is not None
-            extracts = [self.get_summary_from_sent_idxs(input_ids, extractive_idx)]
+            extracts = None  # these will be filled in after (not part of generation)
         elif self.hparams.summary_style == 'abstract':
             extracts = None
             abstracts = pred_str
         elif self.hparams.summary_style == 'hybrid_control':
-            source_special = self.tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=False)
-            is_extractive = ['<extract>' in p for p in source_special]
-            extracts = [self.ensure_extract(
-                pred_str[i], source_docs[i], source_doc_sents_tok[i]) for i in range(len(is_extractive))
-                if is_extractive[i]
-            ]
+            # TODO signal if extractive or abstractive
+            is_extractive = ['<extract>' in p for p in ['<extract>']]
+            extracts = [self.ensure_extract(pred_str[i], source) for i in range(len(is_extractive)) if is_extractive[i]]
             abstracts = [pred_str[i] for i in range(len(is_extractive)) if not is_extractive[i]]
-            # abstract_idxs = [i for i in abstract_idxs if not is_extractive[i]]
             if len(extracts) == 0:
                 extracts = None
             if len(abstracts) == 0:
@@ -632,35 +691,23 @@ class TransformerSummarizer(pl.LightningModule):
         implied_extracts = None
         if abstracts is not None:
             implied_extracts = []
-            abstract_sents = [list(self.nlp(x).sents) for x in abstracts]
+            abstract_sents = [convert_to_sents(x, self.nlp) for x in abstracts]
             abstract_sents_tok = [[[
                 str(token.text) for token in sentence] for sentence in abstract_sent] for abstract_sent in
                 abstract_sents]
 
-            if batch_size == len(abstract_sents_tok):
-                for idx in range(batch_size):
-                    source_toks = source['sent_toks'][idx]
-                    source_raw = source['sents'][idx]
-                    implied_oracle_idx = gain_selection(source_toks, abstract_sents_tok[idx], 5, lower=True, sort=True)[0]
-                    implied_oracle = ' '.join([str(source_raw[i]) for i in implied_oracle_idx])
-                    implied_extracts.append({
-                        'idxs': implied_oracle_idx,
-                        'summary': implied_oracle,
-                    })
-            else:
-                assert len(source['sent_toks']) == 1
-                for idx in range(len(abstract_sents_tok)):
-                    source_toks = source['sent_toks'][0]
-                    source_raw = source['sents'][0]
-                    implied_oracle_idx = gain_selection(source_toks, abstract_sents_tok[idx], 5, lower=True, sort=True)[0]
-                    implied_oracle = ' '.join([str(source_raw[i]) for i in implied_oracle_idx])
-                    implied_extracts.append({
-                        'idxs': implied_oracle_idx,
-                        'summary': implied_oracle,
-                    })
+            for idx in range(num_pred):
+                implied_oracle_idx = gain_selection(
+                    source['sent_toks'], abstract_sents_tok[idx], 5, lower=True, sort=True
+                )[0]
+                implied_oracle = ' '.join([str(source['sents'][i]) for i in implied_oracle_idx])
+                implied_extracts.append({
+                    'idxs': implied_oracle_idx,
+                    'summary': implied_oracle,
+                })
 
-        pyramid_extracts = None
         # TODO Add in for regular validation
+        # pyramid_extracts = None
         # if eval and extracts is not None:
         #     source_sents = source['sents'][0]
         #     sent_idxs = list(itertools.chain(*[[int(y.lstrip('<s').rstrip('>')) for y in x['idxs']] for x in extracts]))
@@ -671,21 +718,15 @@ class TransformerSummarizer(pl.LightningModule):
         #     pyramid_summary = ' '.join([str(source_sents[pyramid_idx]).strip() for pyramid_idx in pyramid_idxs])
         #     pyramid_extracts = [pyramid_summary]
 
-        # Extracts are represented as a dictionary of 'idxs' (indices of source sentences extracted)
-        # and 'summary' (actual  text)
         return {
             'source': source,
+            'reference': reference,
             'abstracts': abstracts,
             'extracts': extracts,
-            'pyramid_extracts': pyramid_extracts,
             'implied_extracts': implied_extracts,
-            'references': references,
         }
 
     def measure_plan_abstract_consistency(self, batch, outputs, eval=False, **gen_kwargs):
-        source_annotated = self.tokenizer.batch_decode(batch['input_ids'].tolist(), skip_special_tokens=False)
-        source_sents = [re.findall(r'<s\d+>', sa) for sa in source_annotated]
-
         extract_idxs = [x['idxs'] for x in outputs['extracts']]
         implied_extract_idxs = [x['idxs'] for x in outputs['implied_extracts']]
 
@@ -696,11 +737,9 @@ class TransformerSummarizer(pl.LightningModule):
 
         overlaps = []
         for batch_idx, (extract_idx, implied_idx) in enumerate(zip(extract_idxs, implied_extract_idxs)):
-            source_sent_tags = source_sents[batch_idx]
-            n = len(source_sent_tags)
-            idxs = set([int(re.findall(r'\d+', tag)[0]) for tag in extract_idx])
-            intersection = set(implied_idx).intersection(idxs)
-            overlap_p = len(intersection) / len(idxs)
+            n = len(outputs['source'][batch_idx]['sents'])
+            intersection = set(implied_idx).intersection(extract_idx)
+            overlap_p = len(intersection) / len(extract_idx)
             overlap_r = len(intersection) / len(implied_idx)
             overlap_f1 = 0.0 if max(overlap_p, overlap_r) == 0 else 2 * overlap_p * overlap_r / (
                     overlap_p + overlap_r)
@@ -711,50 +750,50 @@ class TransformerSummarizer(pl.LightningModule):
                 'extract_implied_sent_f1': overlap_f1
             }
 
-            rand_plan = list(np.sort(list(np.random.choice(source_sent_tags, size=(min(n, 3)), replace=False))))
+            if 'score' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
+                rand_plan_idxs = list(np.sort(list(np.random.choice(np.arange(n), size=(min(n, 3)), replace=False))))
+                rand_plan = ''.join([f'<s{i}>' for i in rand_plan_idxs])
+                decoder_input_ids = self.tokenizer(
+                    '<s></s>' + rand_plan + '<sep>', add_special_tokens=False, return_tensors='pt'
+                )['input_ids'].to(self.device)
 
-            decoder_input_ids = self.tokenizer(
-                '<s></s>' + ''.join(rand_plan) + '<sep>', add_special_tokens=False, return_tensors='pt'
-            )['input_ids'].to(self.device)
+                default_kwargs = {  # Some of these values may get overridden by gen_kwargs
+                    'input_ids': batch['input_ids'][batch_idx].unsqueeze(0),
+                    'attention_mask': batch['attention_mask'][batch_idx].unsqueeze(0),
+                    'decoder_input_ids': decoder_input_ids,
+                    'num_return_sequences': 1,
+                    'max_length': self.hparams.max_output_length,
+                    'no_repeat_ngram_size': 3,
+                    'early_stopping': True,
+                    'output_scores': True
+                }
 
-            default_kwargs = {  # Some of these values may get overridden by gen_kwargs
-                'input_ids': batch['input_ids'][batch_idx].unsqueeze(0),
-                'attention_mask': batch['attention_mask'][batch_idx].unsqueeze(0),
-                'decoder_input_ids': decoder_input_ids,
-                'num_return_sequences': 1,
-                'max_length': self.hparams.max_output_length,
-                'no_repeat_ngram_size': 3,
-                'early_stopping': True,
-                'output_scores': True
-            }
+                default_kwargs.update(gen_kwargs)
+                default_kwargs.pop('references', None)
+                pred_ids = self.model.generate(**default_kwargs)
+                pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
 
-            default_kwargs.update(gen_kwargs)
-            default_kwargs.pop('references', None)
-            pred_ids = self.model.generate(**default_kwargs)
-            pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
+                pred_sents = convert_to_sents(pred, self.nlp)
+                from_rand_abstract_sents_tok = [[str(token.text) for token in sentence] for sentence in pred_sents]
 
-            pred_sents = list(self.nlp(pred).sents)
-            from_rand_abstract_sents_tok = [[str(token.text) for token in sentence] for sentence in pred_sents]
+                source_toks = outputs['source'][batch_idx]['sent_toks']
+                from_rand_implied_idx = gain_selection(
+                    source_toks, from_rand_abstract_sents_tok, 5, lower=True, sort=True
+                )[0]
 
-            source_toks = outputs['source'][batch_idx]['sent_toks'][0]
-            from_rand_implied_idx = gain_selection(
-                source_toks, from_rand_abstract_sents_tok, 5, lower=True, sort=True
-            )[0]
+                rand_plan_int = [int(x.lstrip('<s').rstrip('>')) for x in rand_plan]
+                rand_intersection = set(rand_plan_int).intersection(set(from_rand_implied_idx))
+                rand_overlap_p = len(rand_intersection) / len(rand_plan_int)
+                rand_overlap_r = len(rand_intersection) / len(from_rand_implied_idx)
+                rand_overlap_f1 = 0.0 if max(rand_overlap_p, rand_overlap_r) == 0 \
+                    else 2 * rand_overlap_p * rand_overlap_r / (rand_overlap_p + rand_overlap_r)
 
-            rand_plan_int = [int(x.lstrip('<s').rstrip('>')) for x in rand_plan]
-            rand_intersection = set(rand_plan_int).intersection(set(from_rand_implied_idx))
-            rand_overlap_p = len(rand_intersection) / len(rand_plan_int)
-            rand_overlap_r = len(rand_intersection) / len(from_rand_implied_idx)
-            rand_overlap_f1 = 0.0 if max(rand_overlap_p, rand_overlap_r) == 0 \
-                else 2 * rand_overlap_p * rand_overlap_r / (rand_overlap_p + rand_overlap_r)
-
-            rand_row = {
-                'rand_plan_implied_sent_precision': rand_overlap_p,
-                'rand_plan_implied_sent_recall': rand_overlap_r,
-                'rand_plan_implied_sent_f1': rand_overlap_f1
-            }
-
-            row.update(rand_row)
+                rand_row = {
+                    'rand_plan_implied_sent_precision': rand_overlap_p,
+                    'rand_plan_implied_sent_recall': rand_overlap_r,
+                    'rand_plan_implied_sent_f1': rand_overlap_f1
+                }
+                row.update(rand_row)
             overlaps.append(row)
         df = pd.DataFrame(overlaps)
         avgs = {k: df[k].mean() for k in df.columns}

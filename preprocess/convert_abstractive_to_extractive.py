@@ -525,8 +525,8 @@ def example_processor(inputs, args, oracle_mode="greedy", no_preprocess=False):
         oracle_combo_ids, oracle_combo_rouges = combination_selection(source_doc, target_doc, 3)
         pred_combo_ids, pred_combo_rouges = combination_selection(source_doc, prediction_doc, 3)
 
-        oracle_gain_ids, oracle_gain_rouges = gain_selection(source_doc, target_doc, 5)
-        pred_gain_ids, pred_gain_rouges = gain_selection(source_doc, prediction_doc, 5)
+        oracle_gain_ids, oracle_gain_rouges, _, _, _ = gain_selection(source_doc, target_doc, 5)
+        pred_gain_ids, pred_gain_rouges, _, _, _ = gain_selection(source_doc, prediction_doc, 5)
 
         if sum(oracle_combo_rouges.values()) > sum(oracle_gain_rouges.values()):
             oracle_ids, oracle_rouges = oracle_combo_ids, oracle_combo_rouges
@@ -542,8 +542,8 @@ def example_processor(inputs, args, oracle_mode="greedy", no_preprocess=False):
         if sum(pred_combo_rouges.values()) == sum(pred_gain_rouges.values()):
             selection = 'tie'
     else:
-        oracle_ids, oracle_rouges = gain_selection(source_doc, target_doc, 5)
-        pred_oracle_ids, pred_rouges = gain_selection(source_doc, prediction_doc, 5)
+        oracle_ids, oracle_rouges, _, _, _ = gain_selection(source_doc, target_doc, 5)
+        pred_oracle_ids, pred_rouges, _, _, _ = gain_selection(source_doc, prediction_doc, 5)
     oracle_sents = [source_doc[i] for i in oracle_ids]
     oracle_results = _calc_rouge(target_doc, oracle_sents)
     pred_sents = [source_doc[i] for i in pred_oracle_ids]
@@ -718,21 +718,29 @@ def gain_selection(doc_sent_list, abstract_sent_list, summary_size, lower=False,
     reference_2grams = _get_word_ngrams(2, [abstract])
 
     best_rouges = {'rouge_1': -1, 'rouge_2': -1}
-    impossible_sents = []
+    # impossible_sents = []
     max_idxs = []
+    r1_history = []
+    r2_history = []
+    best_history = []
     for s in range(summary_size + 1):
         best_rouge_1, best_rouge_2, best_idx = -1, -1, -1
+        row_r1 = []
+        row_r2 = []
         for source_idx in range(n):
-            if source_idx in impossible_sents:
-                continue
+            # if source_idx in impossible_sents:
+            #     continue
 
             candidates_1 = evaluated_1grams[source_idx].union(curr_summary_1grams)
             candidates_2 = evaluated_2grams[source_idx].union(curr_summary_2grams)
             rouge_1 = cal_rouge(candidates_1, reference_1grams)['f']
             rouge_2 = cal_rouge(candidates_2, reference_2grams)['f']
 
-            if s == 0 and rouge_1 + rouge_2 == 0:
-                impossible_sents.append(source_idx)
+            row_r1.append(str(rouge_1))
+            row_r2.append(str(rouge_2))
+
+            # if s == 0 and rouge_1 + rouge_2 == 0:
+            #     impossible_sents.append(source_idx)
             if rouge_1 + rouge_2 > best_rouge_1 + best_rouge_2:
                 best_rouge_1 = rouge_1
                 best_rouge_2 = rouge_2
@@ -740,14 +748,18 @@ def gain_selection(doc_sent_list, abstract_sent_list, summary_size, lower=False,
         if best_rouge_1 + best_rouge_2 > best_rouges['rouge_1'] + best_rouges['rouge_2']:
             best_rouges['rouge_1'] = best_rouge_1
             best_rouges['rouge_2'] = best_rouge_2
+            best_history.append(f'{best_rouge_1},{best_rouge_2}')
             max_idxs.append(best_idx)
             curr_summary_1grams = curr_summary_1grams.union(evaluated_1grams[best_idx])
             curr_summary_2grams = curr_summary_2grams.union(evaluated_2grams[best_idx])
+
+            r1_history.append(','.join(row_r1))
+            r2_history.append(','.join(row_r2))
         else:
             break
     if sort:
         max_idxs = list(sorted(max_idxs))
-    return max_idxs, best_rouges
+    return max_idxs, best_rouges, '|'.join(r1_history), '|'.join(r2_history), '|'.join(best_history)
 
 
 def greedy_selection(doc_sent_list, abstract_sent_list, summary_size):

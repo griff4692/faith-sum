@@ -90,13 +90,13 @@ def run(args):
         gradient_clip_val=0.1,
         accumulate_grad_batches=args.grad_accum,
         # TODO change back to 0.25
-        val_check_interval=1.0 if args.debug else 0.1,
+        val_check_interval=1.0 if args.debug else 0.25,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
-        num_sanity_val_steps=0 if args.debug else 2,
+        num_sanity_val_steps=1 if args.debug else 2,
         log_every_n_steps=25,
         max_steps=args.max_steps,
         plugins=plugins,
-        # detect_anomaly=args.debug
+        detect_anomaly=args.debug
     )
 
     if args.find_lr:
@@ -127,9 +127,11 @@ if __name__ == '__main__':
     parser.add_argument('-find_lr', default=False, action='store_true')
     # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
+    parser.add_argument('-sent_model_layer', default=False, action='store_true')
+    parser.add_argument('-use_kld', default=False, action='store_true')
 
     # Hyper-parameters
-    parser.add_argument('--lr', type=float, default=2.2e-4)
+    parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4
     # Gradient accumulation will adjust for the ratio between target_batch_size and per_device_train_bs
     parser.add_argument('--target_batch_size', type=int, default=16)
     parser.add_argument('--per_device_train_bs', type=int, default=8)
@@ -204,8 +206,8 @@ if __name__ == '__main__':
     # Won't held yet for multi-gpu
     args.grad_accum = args.target_batch_size // args.per_device_train_bs
 
-    if args.debug:  # Use small data and tiny BART model
-        args.hf_model = 'sshleifer/bart-tiny-random'
+    # if args.debug:  # Use small data and tiny BART model
+    #     args.hf_model = 'sshleifer/bart-tiny-random'
 
     # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {

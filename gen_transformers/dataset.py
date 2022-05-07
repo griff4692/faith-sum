@@ -5,12 +5,13 @@ import pytorch_lightning as pl
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
+from scipy.special import softmax
 from tqdm import tqdm
 
 from datasets import load_dataset
 from gen_transformers.data_utils import Seq2SeqCollate
-
 from sum_constants import summarization_name_mapping
+from preprocess.extract_oracles import convert_to_sents
 
 
 def remove_sent_from_plan(oracle_idxs):
@@ -34,14 +35,14 @@ class SummaryDataModule(pl.LightningDataModule):
 
     def get_split(self, split, max_examples=None, **dataloader_kwargs):
         split_dataset = self.dataset[split]
-        if self.args.debug and max_examples is None:
-            max_examples = 128
+        # if self.args.debug and max_examples is None:
+        #     max_examples = 128
         n = len(split_dataset)
         idxs = list(range(n))
         if max_examples is not None and max_examples < n:
             idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
             split_dataset = split_dataset.select(idxs)
-        oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}.csv')
+        oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_v2.csv')
         if not os.path.exists(oracle_fn):
             raise Exception(
                 f'Please first run: python preprocess/extract_oracles.py '
@@ -89,6 +90,7 @@ class SummarizationDataset(Dataset):
         self.split = split
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
         self.ids2oracles = ids2oracles
+        self.temperature = 5.0
 
         if self.args.oracle_filter and split == 'train':  # Only filter for training data
             keep_idxs = []
@@ -128,13 +130,15 @@ class SummarizationDataset(Dataset):
         oracle_idxs = list(map(int, oracle_obj['sent_idxs'].split(',')))
 
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
-        source_sents = list(self.nlp(inputs).sents)
+        # source_sents = list(self.nlp(inputs).sents)
+        source_sents = convert_to_sents(inputs, self.nlp)
         if self.args.add_sent_toks:
             source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
         # Sort oracle order or not
         target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs]).strip()
         oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs])
         plan_labels = None
+        plan_q = None
 
         if self.args.summary_style == 'extract':
             if self.split == 'train':
@@ -148,9 +152,18 @@ class SummarizationDataset(Dataset):
         elif self.args.summary_style == 'score_abstract':
             target_annotated = target
             plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
+            assert len(plan_labels) >= 1
         elif self.args.summary_style == 'score':
             target_annotated = None  # No generation, just sentence scoring and selection for extractive summarization
             plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
+            assert len(plan_labels) >= 1
+            r1s = [float(x) for x in oracle_obj['rouge1_history'].split('|')[0].split(',')]
+            r2s = [float(x) for x in oracle_obj['rouge2_history'].split('|')[0].split(',')]
+            avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1s, r2s)])
+            min_rs = min(avg_rs)
+            max_rs = max(avg_rs)
+            scaled_rs = (avg_rs - min_rs) / (max_rs - min_rs)
+            plan_q = softmax(self.temperature * scaled_rs)
         elif self.args.summary_style == 'abstract_plan':
             target_annotated = f'{target}<sep>{target_prefix}'
         elif self.args.summary_style == 'hybrid_control':
@@ -169,6 +182,7 @@ class SummarizationDataset(Dataset):
             'source': source_annotated,
             'target': target_annotated,
             'plan_labels': plan_labels,
+            'plan_q': plan_q,
             'reference': untouched_target,  # Use for evaluation
         }
         if self.split == 'train' and 'plan' in self.args.summary_style and len(self.args.contrast_modes) > 0:

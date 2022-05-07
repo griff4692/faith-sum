@@ -36,22 +36,39 @@ class Seq2SeqCollate:
         self.add_cols = [] if add_cols is None else add_cols
         self.split = split
         additional_ids = self.tokenizer.additional_special_tokens_ids
-        self.special_id_min = None if len(additional_ids) == 0 else min(self.tokenizer.additional_special_tokens_ids)
+        self.special_id_min = 999999 if len(additional_ids) == 0 else min(self.tokenizer.additional_special_tokens_ids)
         self.verbose = verbose
 
     def sent_extract_labels(self, batch_list, batch):
         batch_size = len(batch_list)
         num_cls_per_batch = batch['cls_mask'].sum(dim=1)
         batch_plan_labels = [x['plan_labels'] for x in batch_list]
+        batch_plan_q = [x['plan_q'] for x in batch_list]
         batch_plan_labels_pad = np.zeros(shape=(batch_size, batch['input_ids'].size()[1]), dtype=np.float)
         batch_plan_labels_pad.fill(-100)
+        batch_plan_q_pad = np.zeros(shape=(batch_size, batch['input_ids'].size()[1]), dtype=np.float)
+        batch_plan_q_pad.fill(-100)
+        has_q = False
+        valid_idxs = []
         for batch_idx in range(batch_size):
             sent_locs = batch['cls_mask'][batch_idx].nonzero().squeeze(1)
+            any_pos_labels = False
             for sent_idx, location in enumerate(sent_locs):
                 label = 1 if sent_idx in batch_plan_labels[batch_idx] else 0
+                if label == 1:
+                    any_pos_labels = True
                 batch_plan_labels_pad[batch_idx, location] = label
+                if batch_plan_q[batch_idx] is not None:
+                    batch_plan_q_pad[batch_idx, location] = batch_plan_q[batch_idx][sent_idx]
+                    has_q = True
+            if any_pos_labels:
+                valid_idxs.append(batch_idx)
         batch_plan_labels_pad = torch.from_numpy(batch_plan_labels_pad)
         batch['plan_labels'] = batch_plan_labels_pad
+        if has_q:
+            batch_plan_q_pad = torch.from_numpy(batch_plan_q_pad)
+            batch['plan_q'] = batch_plan_q_pad
+        return valid_idxs
 
     def __call__(self, batch_list):
         batch = {}
@@ -84,7 +101,12 @@ class Seq2SeqCollate:
             batch[col] = [x[col] for x in batch_list]
 
         if 'plan_labels' in batch_list[0] and batch_list[0]['plan_labels'] is not None:
-            self.sent_extract_labels(batch_list, batch)
+            valid_idxs = self.sent_extract_labels(batch_list, batch)
+            if len(valid_idxs) < len(batch_list):
+                num_to_remove = len(batch_list) - len(valid_idxs)
+                print(f'Removing {num_to_remove} examples where the plan label has been truncated bc after 1024 WPs')
+                new_batch_list = [batch_list[i] for i in valid_idxs]
+                return self(new_batch_list)
 
         if 'neg_plans' in batch_list[0]:
             neg_plans = list(itertools.chain(*[x['neg_plans'] for x in batch_list]))
