@@ -102,44 +102,44 @@ class Seq2SeqCollate:
 
         if 'plan_labels' in batch_list[0] and batch_list[0]['plan_labels'] is not None:
             valid_idxs = self.sent_extract_labels(batch_list, batch)
-            if len(valid_idxs) < len(batch_list):
+            if len(valid_idxs) < len(batch_list) and self.split == 'train':
                 num_to_remove = len(batch_list) - len(valid_idxs)
                 print(f'Removing {num_to_remove} examples where the plan label has been truncated bc after 1024 WPs')
                 new_batch_list = [batch_list[i] for i in valid_idxs]
                 return self(new_batch_list)
 
-        if 'neg_plans' in batch_list[0]:
-            neg_plans = list(itertools.chain(*[x['neg_plans'] for x in batch_list]))
-
-            with self.tokenizer.as_target_tokenizer():
-                neg_labels = self.tokenizer(
-                    neg_plans,
-                    padding='longest',
-                    truncation=True,
-                    max_length=self.max_output_length,
-                    return_tensors='pt'
-                )['input_ids']
-
-                batch['neg_labels'] = neg_labels
-                # We have to make sure that the PAD token is ignored
-                batch['neg_labels'][torch.where(batch['neg_labels'] == 1)] = -100
-                batch['neg_labels'][torch.where(batch['neg_labels'] == 2)] = -100
-        if 'pos_plans' in batch_list[0]:
-            neg_plans = list(itertools.chain(*[x['pos_plans'] for x in batch_list]))
-
-            with self.tokenizer.as_target_tokenizer():
-                pos_labels = self.tokenizer(
-                    neg_plans,
-                    padding='longest',
-                    truncation=True,
-                    max_length=self.max_output_length,
-                    return_tensors='pt'
-                )['input_ids']
-
-                batch['pos_labels'] = pos_labels
-                # We have to make sure that the PAD token is ignored
-                batch['pos_labels'][torch.where(batch['pos_labels'] == 1)] = -100
-                batch['pos_labels'][torch.where(batch['pos_labels'] == 2)] = -100
+        # if 'neg_plans' in batch_list[0]:
+        #     neg_plans = list(itertools.chain(*[x['neg_plans'] for x in batch_list]))
+        #
+        #     with self.tokenizer.as_target_tokenizer():
+        #         neg_labels = self.tokenizer(
+        #             neg_plans,
+        #             padding='longest',
+        #             truncation=True,
+        #             max_length=self.max_output_length,
+        #             return_tensors='pt'
+        #         )['input_ids']
+        #
+        #         batch['neg_labels'] = neg_labels
+        #         # We have to make sure that the PAD token is ignored
+        #         batch['neg_labels'][torch.where(batch['neg_labels'] == 1)] = -100
+        #         batch['neg_labels'][torch.where(batch['neg_labels'] == 2)] = -100
+        # if 'pos_plans' in batch_list[0]:
+        #     neg_plans = list(itertools.chain(*[x['pos_plans'] for x in batch_list]))
+        #
+        #     with self.tokenizer.as_target_tokenizer():
+        #         pos_labels = self.tokenizer(
+        #             neg_plans,
+        #             padding='longest',
+        #             truncation=True,
+        #             max_length=self.max_output_length,
+        #             return_tensors='pt'
+        #         )['input_ids']
+        #
+        #         batch['pos_labels'] = pos_labels
+        #         # We have to make sure that the PAD token is ignored
+        #         batch['pos_labels'][torch.where(batch['pos_labels'] == 1)] = -100
+        #         batch['pos_labels'][torch.where(batch['pos_labels'] == 2)] = -100
         return batch
 
 

@@ -127,7 +127,7 @@ class TransformerSummarizer(pl.LightningModule):
                 margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.contrast_margin, min=0))
         return margin_losses
 
-    def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
+    def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=4):
         all_summaries = []
         y_hat_cls = y_hat[np.where(y_hat > float('-inf'))]
         priority = expit(y_hat_cls.copy())
@@ -155,7 +155,9 @@ class TransformerSummarizer(pl.LightningModule):
             summary_at_k = prev_sents + [top_sent]
             all_summaries.append(summary_at_k)
         summary_idx = all_summaries[-1]
-        return self.get_summary_from_sent_idxs(source, summary_idx)
+        return_obj = self.get_summary_from_sent_idxs(source, summary_idx)
+        return_obj['sent_dist'] = y_hat_cls
+        return return_obj
 
     def score_sents(self, cls_mask, encoder_hidden_states):
         if self.sent_model is not None:
@@ -529,9 +531,13 @@ class TransformerSummarizer(pl.LightningModule):
 
             save_out = {
                 'abstract': abstract_flat, 'extract': extract_flat, 'implied_extract': implied_extract_flat,
-                'reference': reference, 'source': gen_output['source']['text'][0],
+                'reference': reference, 'source': gen_output['source']['text'],
                 'extract_idx': extract_idx_flat, 'implied_extract_idx': implied_extract_idx_flat,
             }
+
+            if len(gen_output['extracts']) > 0 and 'sent_dist' in gen_output['extracts'][0]:
+                dist_flat = '<cand>'.join([','.join(list(map(str, x['sent_dist']))) for x in gen_output['extracts']])
+                save_out['sent_scores'] = dist_flat
 
             if from_oracle_metrics is not None:
                 save_out.update(from_oracle_metrics[batch_idx])
@@ -643,7 +649,7 @@ class TransformerSummarizer(pl.LightningModule):
             extractive.append(str(closest_sent))
         return {'summary': ' '.join(extractive), 'idxs': idxs}
 
-    def get_summary_from_sent_idxs(self, source, extractive_idxs, sort=True):
+    def get_summary_from_sent_idxs(self, source, extractive_idxs, sort=False):
         if sort:
             extractive_idxs = list(sorted(extractive_idxs))
         summary = ' '.join([source['sents'][i].strip() for i in extractive_idxs])

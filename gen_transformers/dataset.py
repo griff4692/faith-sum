@@ -35,8 +35,8 @@ class SummaryDataModule(pl.LightningDataModule):
 
     def get_split(self, split, max_examples=None, **dataloader_kwargs):
         split_dataset = self.dataset[split]
-        # if self.args.debug and max_examples is None:
-        #     max_examples = 128
+        if self.args.debug and max_examples is None:
+            max_examples = 128
         n = len(split_dataset)
         idxs = list(range(n))
         if max_examples is not None and max_examples < n:
