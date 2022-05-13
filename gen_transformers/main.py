@@ -96,7 +96,7 @@ def run(args):
         log_every_n_steps=25,
         max_steps=args.max_steps,
         plugins=plugins,
-        detect_anomaly=args.debug
+        # detect_anomaly=args.debug
     )
 
     if args.find_lr:
@@ -206,8 +206,8 @@ if __name__ == '__main__':
     # Won't held yet for multi-gpu
     args.grad_accum = args.target_batch_size // args.per_device_train_bs
 
-    # if args.debug:  # Use small data and tiny BART model
-    #     args.hf_model = 'sshleifer/bart-tiny-random'
+    if args.debug:  # Use small data and tiny BART model
+        args.hf_model = 'sshleifer/bart-tiny-random'
 
     # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {

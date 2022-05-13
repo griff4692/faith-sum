@@ -127,7 +127,7 @@ class TransformerSummarizer(pl.LightningModule):
                 margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.contrast_margin, min=0))
         return margin_losses
 
-    def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=4):
+    def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
         all_summaries = []
         y_hat_cls = y_hat[np.where(y_hat > float('-inf'))]
         priority = expit(y_hat_cls.copy())
@@ -225,39 +225,21 @@ class TransformerSummarizer(pl.LightningModule):
             # Predict if a sentence is in oracle summary
             sent_preds = self.score_sents(cls_mask, encoder_h)
 
-            encoder_h_proj = torch.tanh(self.enc_transform(encoder_h))
-
             # cross_att_pool_layers
-            cross_weight = torch.softmax(cross_att_pool_layers, dim=1)
-            # sent_label_mask = (plan_labels == -100)
-            # sent_preds.masked_fill_(sent_label_mask, float('-inf'))
-            # sent_weight = torch.softmax(sent_preds, dim=1)
+            sent_label_mask = (plan_labels == -100)
+            cross_att_pool_layers.masked_fill_(sent_label_mask, float('-inf'))
+            sent_preds.masked_fill_(sent_label_mask, float('-inf'))
+            target_dist = torch.softmax(sent_preds, dim=1)
 
-            oracle_weight = (plan_labels == 1).float()
-            oracle_weight /= oracle_weight.sum(dim=1).unsqueeze(1)
-
-            even_sent_weight = (plan_labels != -100).float()
-            even_sent_weight /= even_sent_weight.sum(dim=1).unsqueeze(1)
-
-            oracle_sent_enc_h = (oracle_weight.unsqueeze(-1) * encoder_h_proj).sum(dim=1)
-            cross_enc_h = (cross_weight.unsqueeze(-1) * encoder_h_proj).sum(dim=1)
-            # pred_sent_enc_h = (sent_weight.unsqueeze(-1) * encoder_h_proj).sum(dim=1)
-            even_sent_enc_h = (even_sent_weight.unsqueeze(-1) * encoder_h_proj).sum(dim=1)
-
-            # oracle_cross_sim = (oracle_sent_enc_h * cross_enc_h).sum(dim=1)
-            oracle_cross_sim = self.sim(oracle_sent_enc_h, cross_enc_h)
-            # oracle_pred_sim = self.sim(oracle_sent_enc_h, pred_sent_enc_h)
-
-            even_cross_sim = self.sim(even_sent_enc_h, cross_enc_h)  # (even_sent_enc_h * cross_enc_h).sum(dim=1)
-            # even_pred_sim = self.sim(even_sent_enc_h, pred_sent_enc_h)
-
-            margin = 1.0
-            # pred_margin = torch.clamp_min(even_pred_sim - oracle_pred_sim + margin, 0).mean()
-            cross_margin = torch.clamp_min(even_cross_sim - oracle_cross_sim + margin, 0).mean()
-            # self.log('pred_margin', pred_margin, on_epoch=False, on_step=True, prog_bar=True)
-            self.log('cross_margin', cross_margin, on_epoch=False, on_step=True, prog_bar=True)
-            # TODO revert this back if you want the cross_margin loss
-            # full_loss += cross_margin  # + pred_margin
+            batch_size = len(target_dist)
+            klds = []
+            for batch_idx in range(batch_size):
+                p, q = cross_att_pool_layers[batch_idx, cls_mask[batch_idx]], target_dist[batch_idx, cls_mask[batch_idx]]
+                kld_loss = self.kld(p.unsqueeze(0) + 1e-4, q.unsqueeze(0))
+                klds.append(kld_loss)
+            consistency_loss = torch.stack(klds).mean()
+            self.log('train_consistency', consistency_loss, on_epoch=False, on_step=True, prog_bar=True)
+            full_loss += consistency_loss
 
             if self.hparams.use_kld:
                 extract_loss = self.compute_kld_extract_loss(sent_preds, plan_q, cls_mask)
@@ -403,7 +385,8 @@ class TransformerSummarizer(pl.LightningModule):
             all_metrics.update(self.compute_rouge(implied_extracts, references, prefix='implied_'))
 
         if len(output_dict['extracts']) > 0:
-            all_metrics.update(self.compute_rouge(output_dict['extracts'], references, prefix='extract_'))
+            extracts = [x['summary'] for x in output_dict['extracts']]
+            all_metrics.update(self.compute_rouge(extracts, references, prefix='extract_'))
 
         # Measure consistency between abstract (and implied extract) and generated extract
         if len(output_dict['abstracts']) > 0 and len(output_dict['extracts']) > 0:
@@ -411,8 +394,9 @@ class TransformerSummarizer(pl.LightningModule):
                 all_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
             # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
             # If the plan is working, this should be very high (the abstract should follow the plan)
+            extracts = [x['summary'] for x in output_dict['extracts']]
             all_metrics.update(
-                self.compute_rouge(output_dict['extracts'], output_dict['abstracts'], prefix='extract_gen_')
+                self.compute_rouge(extracts, output_dict['abstracts'], prefix='extract_gen_')
             )
 
         for k, v in all_metrics.items():

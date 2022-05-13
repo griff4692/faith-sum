@@ -136,13 +136,6 @@ if __name__ == '__main__':
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
 
-    # # TODO (this was just for debugging)
-    oracle_df = pd.read_csv('/nlp/projects/faithsum/cnn_dailymail/oracle/validation_v2.csv')
-    ids2oracles = {row['id']: row for row in oracle_df.to_dict('records')}
-    from datasets import load_dataset
-    dataset = load_dataset('cnn_dailymail', '3.0.0')['validation']
-    dataset_idx2id = dataset['id']
-
     exp_results = []
     for exp_id in range(args.bootstraps):
         # Override behavior during training
@@ -169,16 +162,6 @@ if __name__ == '__main__':
                 batch_stats = model.predict_step(batch, **gen_kwargs)
                 for j in range(actual_batch_size):
                     batch_stats[j]['dataset_idx'] = batch_dataset_idxs[j]
-                    # # TODO remove
-                    idx = batch_stats[j]['dataset_idx']
-                    ss = batch_stats[j]['sent_scores']
-
-                    oracle_obj = ids2oracles[dataset_idx2id[idx]]
-                    sss = len(oracle_obj['rouge2_history'].split('|')[0].split(','))
-
-                    print(idx, dataset_idx2id[idx], len(ss.split(',')), len(torch.where(plan_labels[j] > -100)[0]), sss)
-                    assert len(ss.split(',')) == len(torch.where(plan_labels[j] > -100)[0])
-                    assert len(ss.split(',')) <= sss
                 outputs += batch_stats
 
         outputs = pd.DataFrame(outputs)
