@@ -8,20 +8,33 @@ import pytorch_lightning as pl
 from nltk import trigrams
 import numpy as np
 import spacy
+from scipy.special import expit
 import torch
 import torch.nn as nn
+from scipy.stats import pearsonr
 from transformers import AutoModelForSeq2SeqLM
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
 from transformers.models.bart.modeling_bart import _expand_mask, BartEncoderLayer
-from preprocess.extract_oracles import convert_to_sents
 
-from scipy.special import expit
+from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from eval.rouge_metric import RougeMetric
 
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
+
+
+def sentence_mask(cls_mask, sent_idx_to_mask):
+    sent_mask = torch.zeros_like(cls_mask, device=cls_mask.device).long()
+    sent_locs = cls_mask.nonzero()[:, 1]
+    num_sents = len(sent_locs)
+    for sent_idx, sent_loc in enumerate(sent_locs):
+        sent_loc = sent_loc.item()
+        end_loc = sent_locs[sent_idx + 1].item() if sent_idx + 1 < num_sents else len(sent_locs)
+        if sent_idx in sent_idx_to_mask:
+            sent_mask[0, sent_loc:end_loc] = 1
+    return sent_mask
 
 
 class TransformerSummarizer(pl.LightningModule):
@@ -192,18 +205,100 @@ class TransformerSummarizer(pl.LightningModule):
         extract_loss = torch.stack(klds).mean()
         return extract_loss
 
-    def training_step(self, batch, batch_idx):
-        batch_size = len(batch['input_ids'])
+    def compute_correlation(self, sent_preds, plan_q, cls_mask):
+        batch_size = len(sent_preds)
+        corels = []
+        for batch_idx in range(batch_size):
+            p = sent_preds[batch_idx, cls_mask[batch_idx]].detach().cpu().numpy()
+            q = plan_q[batch_idx, cls_mask[batch_idx]].detach().cpu().numpy()
+            try:
+                corel = pearsonr(p, q)[0]
+            except ValueError:
+                print('Invalid Correlation Inputs.  Skipping.')
+                continue
+            corels.append(corel)
+        return np.mean(corels)
 
+    def brio_step(self, priority, cls_mask, batch, reference, encoder_h, mask_upperbound=10):
+        batch_size = len(priority)
+        margin_losses = []
+        pos_neg_gap = []
+        for batch_idx in range(batch_size):
+            p = priority[batch_idx]
+            input_ids = batch['input_ids'][batch_idx]
+            mask_range = list(range(1, mask_upperbound + 1))
+            masks = []
+            for num in mask_range:
+                if num > len(p):
+                    continue
+                masks.append(sentence_mask(cls_mask[batch_idx].unsqueeze(0), p[:num]))
+            all_masks = torch.cat(masks)
+            num_cand = len(all_masks)
+
+            input_ids_rep = input_ids.repeat(num_cand, 1)
+            kwargs = {
+                'input_ids': input_ids_rep,
+                'attention_mask': all_masks,
+                'num_return_sequences': 1,
+                'num_beams': 1,
+                'length_penalty': 4.0,
+                'max_length': 142,
+                'min_length': 56,
+                'no_repeat_ngram_size': 3,
+                'early_stopping': True,
+            }
+
+            with torch.no_grad():
+                pred_ids = self.model.generate(**kwargs)
+            pred_str = [x.strip() for x in self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)]
+
+            scores = []
+            for idx, x in enumerate(pred_str):
+                scores.append(self.compute_rouge([x], [reference], rouge_types=['rouge1'])['rouge1_f1'])
+            labels = pred_ids
+            labels[:, 0] = 0
+
+            encoder_outputs = encoder_h[batch_idx].unsqueeze(0).repeat(num_cand, 1, 1).contiguous().clone()
+            encoder_attention_mask = batch['attention_mask'][batch_idx].unsqueeze(0).repeat(num_cand, 1).contiguous()
+            inputs = {
+                'encoder_outputs': [encoder_outputs],
+                'attention_mask': encoder_attention_mask,
+                'labels': labels,
+            }
+
+            cand_outputs = self.model(**inputs, use_cache=False)
+            nll = []
+            for cand_idx in range(len(labels)):
+                label_row = labels[cand_idx]
+                loss_row_full = {'logits': cand_outputs['logits'][cand_idx]}
+                nll.append(self.label_smoother(loss_row_full, label_row))
+
+            ranks = np.argsort(-np.array(scores))
+
+            # Compute Rank Score (not for back-prop)
+            for a in range(num_cand - 1):
+                pos_idx = ranks[a]
+                for b in range(a + 1, num_cand):
+                    neg_idx = ranks[b]
+                    assert scores[neg_idx] <= scores[pos_idx]
+                    pos_ll = - nll[pos_idx]
+                    neg_ll = - nll[neg_idx]
+                    if scores[neg_idx] == scores[pos_idx]:  # Don't train on equal / identical candidates
+                        continue
+                    margin = self.hparams.contrast_margin * (b - a)
+                    margin_losses.append(torch.clamp(neg_ll - pos_ll + margin, min=0))
+                    pos_neg_gap.append(float((pos_ll - neg_ll).detach().item()))
+
+        avg_margin = torch.stack(margin_losses).mean()
+        return avg_margin
+
+    def training_step(self, batch, batch_idx):
         # Train on extractive labels
         plan_labels = batch.pop('plan_labels', None)
+        priority = batch.pop('priority', None)
         plan_q = batch.pop('plan_q', None)
         cls_mask = batch.pop('cls_mask')
-
-        # Perturbed Plans
-        neg_labels = batch.pop('neg_labels', None)
-        pos_labels = batch.pop('pos_labels', None)
-        _ = batch.pop('reference', None)
+        reference = batch.pop('reference', None)
 
         if self.hparams.summary_style != 'score':
             output = self.model(**batch, use_cache=False)
@@ -239,12 +334,16 @@ class TransformerSummarizer(pl.LightningModule):
                 klds.append(kld_loss)
             consistency_loss = torch.stack(klds).mean()
             self.log('train_consistency', consistency_loss, on_epoch=False, on_step=True, prog_bar=True)
-            full_loss += consistency_loss
+            if self.hparams.add_consistency:
+                full_loss += consistency_loss
 
             if self.hparams.use_kld:
                 extract_loss = self.compute_kld_extract_loss(sent_preds, plan_q, cls_mask)
             else:
                 extract_loss = self.compute_ll_extract_loss(sent_preds, plan_labels)
+
+            corel = self.compute_correlation(sent_preds, plan_q, cls_mask)
+            self.log('train_corel', corel, on_epoch=False, on_step=True, prog_bar=True)
             self.log('train_extract', extract_loss, on_epoch=False, on_step=True, prog_bar=True)
             if full_loss is None:
                 full_loss = extract_loss
@@ -252,53 +351,14 @@ class TransformerSummarizer(pl.LightningModule):
                 full_loss += extract_loss
                 self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
 
-        if pos_labels is not None:
-            # Single positive is ground-truth plan and abstractive reference
-            batch_plan_nll_pos, batch_abstract_nll_pos = self.compute_ll(batch, pos_labels, output)
-            # Neg labels are perturbed plans: add-1 sentence, remove-1 sentence, replace 1 sentence
-            batch_plan_nll_neg, batch_abstract_nll_neg = self.compute_ll(batch, neg_labels, output)
+            if self.hparams.add_brio:
+                avg_margin = self.brio_step(self, priority, cls_mask, batch, reference, encoder_h)
+                self.log('train_contrast', avg_margin, on_epoch=False, on_step=True, prog_bar=True)
+                full_loss += avg_margin
 
-            num_neg_cand = len(neg_labels) // batch_size
-
-            # Extractive Plan Contrast Loss
-            # Train log likelihood of generating ground-truth plan to be higher than perturbed
-            plan_batch_margins = self.contrast_loss(
-                batch_size, num_neg_cand, batch_plan_nll_pos, batch_plan_nll_neg
-            )
-
-            # Consistency Loss
-            # Train log likelihood of generating abstract to be higher
-            # when conditioned on oracle plan than when conditioned on corrupted plans (mismatched)
-            abstract_batch_margins = self.contrast_loss(
-                batch_size, num_neg_cand, batch_abstract_nll_pos, batch_abstract_nll_neg
-            )
-
-            # Average both and add to MLE language model loss depending on if plan and/or abstract in --contrast_modes
-            plan_avg_margin = torch.stack(plan_batch_margins).mean()
-            abstract_avg_margin = torch.stack(abstract_batch_margins).mean()
-
-            # 3 modes for contrastive learning
-            # 1) Just train on plan LL margin
-            # 2) Just on abstract LL margin
-            # 3) Both
-            if 'plan' in self.hparams.contrast_modes and 'abstract' in self.hparams.contrast_modes:
-                self.log('train_plan_margin', plan_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
-                self.log('train_abstract_margin', abstract_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
-                # --contrast_lambda determines the relative weight of LM versus contrast margin losses
-                full_loss += self.hparams.contrast_lambda * (plan_avg_margin + abstract_avg_margin)
-            elif 'plan' in self.hparams.contrast_modes:
-                self.log('train_plan_margin', plan_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
-                # --contrast_lambda determines the relative weight of LM versus contrast margin losses
-                full_loss += self.hparams.contrast_lambda * plan_avg_margin
-            else:  # Must be just abstract
-                assert self.hparams.contrast_modes == 'abstract'
-                self.log('train_abstract_margin', abstract_avg_margin, on_epoch=False, on_step=True, prog_bar=True)
-                # --contrast_lambda determines the relative weight of LM versus contrast margin losses
-                full_loss += self.hparams.contrast_lambda * abstract_avg_margin
-            self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
         return full_loss
 
-    def score_extracts(self, source, cls_mask, encoder_h, plan_labels):
+    def score_extracts(self, source, cls_mask, encoder_h, plan_labels, plan_q=None):
         batch_size = len(source)
         sent_preds = self.score_sents(cls_mask, encoder_h)
         extract_loss = self.compute_ll_extract_loss(sent_preds, plan_labels)
@@ -309,12 +369,15 @@ class TransformerSummarizer(pl.LightningModule):
             self.build_summaries(source=source[batch_idx], y_hat=y_hat_np[batch_idx, :])
             for batch_idx in range(batch_size)
         ]
-        return extractive_summaries, extract_loss
+        corel = None
+        if plan_q is not None:
+            corel = self.compute_correlation(sent_preds, plan_q, cls_mask)
+        return extractive_summaries, extract_loss, corel
 
     def validation_step(self, batch, batch_idx):
         # Train on extractive labels
         plan_labels = batch.pop('plan_labels', None)
-        _ = batch.pop('plan_q', None)
+        plan_q = batch.pop('plan_q', None)
         cls_mask = batch.pop('cls_mask')
         batch_size = len(batch['input_ids'])
         references = batch['reference']
@@ -343,7 +406,9 @@ class TransformerSummarizer(pl.LightningModule):
 
         score_outputs = [None for _ in range(batch_size)]
         if 'score' in self.hparams.summary_style:
-            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
+            extractive_summaries, extract_loss, corel = self.score_extracts(
+                source, cls_mask, encoder_h, plan_labels, plan_q
+            )
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],
@@ -351,6 +416,7 @@ class TransformerSummarizer(pl.LightningModule):
                     'extracts': [extractive_summaries[batch_idx]],
                     'reference': references[batch_idx],
                 }
+            self.log('val_corel', corel, on_epoch=True, on_step=False, prog_bar=True)
             self.log('val_extract', extract_loss, on_epoch=True, on_step=False, prog_bar=True)
             if loss is None:  # No generation
                 loss = extract_loss
@@ -462,7 +528,7 @@ class TransformerSummarizer(pl.LightningModule):
         references = batch.pop('reference')
         cls_mask = batch.pop('cls_mask')
         plan_labels = batch.pop('plan_labels', None)
-        _ = batch.pop('plan_q', None)
+        plan_q = batch.pop('plan_q', None)
         use_hf_rouge = gen_kwargs.pop('use_hf_rouge')
         eval = not use_hf_rouge
 
@@ -481,7 +547,9 @@ class TransformerSummarizer(pl.LightningModule):
             }
             output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
-            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
+            extractive_summaries, extract_loss, corel = self.score_extracts(
+                source, cls_mask, encoder_h, plan_labels, plan_q
+            )
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],
@@ -563,13 +631,6 @@ class TransformerSummarizer(pl.LightningModule):
                     save_out['extract_rouges'] = ','.join(
                         [str(x['best_extract_mean_f1']) for x in extract_cand_metrics]
                     )
-
-            # if gen_output['pyramid_extracts'] is not None:
-            #     save_out.update(
-            #         self.compute_rouge(
-            #             gen_output['pyramid_extracts'], [reference], prefix='pyramid_extract_', eval=eval
-            #         )
-            #     )
 
             # Measure consistency between abstract (and implied extract) and generated extract
             if gen_output['abstracts'] is not None and gen_output['extracts'] is not None:
@@ -696,18 +757,6 @@ class TransformerSummarizer(pl.LightningModule):
                     'summary': implied_oracle,
                 })
 
-        # TODO Add in for regular validation
-        # pyramid_extracts = None
-        # if eval and extracts is not None:
-        #     source_sents = source['sents'][0]
-        #     sent_idxs = list(itertools.chain(*[[int(y.lstrip('<s').rstrip('>')) for y in x['idxs']] for x in extracts]))
-        #     # If invalid sentence is generated, we can't include it in the Pyramid
-        #     sent_counts = Counter([x for x in sent_idxs if x < len(source_sents)])
-        #     num_to_extract = int(round(np.mean([len(x['idxs']) for x in extracts]), 0))  # Average of generated plans
-        #     pyramid_idxs = [x[0] for x in sent_counts.most_common(num_to_extract)]
-        #     pyramid_summary = ' '.join([str(source_sents[pyramid_idx]).strip() for pyramid_idx in pyramid_idxs])
-        #     pyramid_extracts = [pyramid_summary]
-
         return {
             'source': source,
             'reference': reference,
@@ -789,11 +838,9 @@ class TransformerSummarizer(pl.LightningModule):
         avgs = {k: df[k].mean() for k in df.columns}
         metrics.update(avgs)
 
-        # Sample 1 random plan and measure consistency
         return avgs
 
-    def compute_rouge(self, generated, gold, prefix='', eval=False):
-        rouge_types = ['rouge1', 'rouge2', 'rougeL']
+    def compute_rouge(self, generated, gold, prefix='', eval=False, rouge_types=['rouge1', 'rouge2', 'rougeL']):
         if eval:  # Use SummEval PERL script
             outputs = self.rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
             f1s = []

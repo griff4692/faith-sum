@@ -41,8 +41,13 @@ class Seq2SeqCollate:
 
     def sent_extract_labels(self, batch_list, batch):
         batch_size = len(batch_list)
-        num_cls_per_batch = batch['cls_mask'].sum(dim=1)
+        num_cls = batch['cls_mask'].sum(dim=1)
         batch_plan_labels = [x['plan_labels'] for x in batch_list]
+        if self.split == 'train':
+            priorities = [x['sent_priority'] for x in batch_list]
+            priorities_trunc = [x[:num_cls[batch_idx]] for batch_idx, x in enumerate(priorities)]
+            priorities_trunc = [list(np.argsort(-x)) for x in priorities_trunc]
+            batch['priority'] = priorities_trunc
         batch_plan_q = [x['plan_q'] for x in batch_list]
         batch_plan_labels_pad = np.zeros(shape=(batch_size, batch['input_ids'].size()[1]), dtype=np.float)
         batch_plan_labels_pad.fill(-100)
@@ -108,38 +113,6 @@ class Seq2SeqCollate:
                 new_batch_list = [batch_list[i] for i in valid_idxs]
                 return self(new_batch_list)
 
-        # if 'neg_plans' in batch_list[0]:
-        #     neg_plans = list(itertools.chain(*[x['neg_plans'] for x in batch_list]))
-        #
-        #     with self.tokenizer.as_target_tokenizer():
-        #         neg_labels = self.tokenizer(
-        #             neg_plans,
-        #             padding='longest',
-        #             truncation=True,
-        #             max_length=self.max_output_length,
-        #             return_tensors='pt'
-        #         )['input_ids']
-        #
-        #         batch['neg_labels'] = neg_labels
-        #         # We have to make sure that the PAD token is ignored
-        #         batch['neg_labels'][torch.where(batch['neg_labels'] == 1)] = -100
-        #         batch['neg_labels'][torch.where(batch['neg_labels'] == 2)] = -100
-        # if 'pos_plans' in batch_list[0]:
-        #     neg_plans = list(itertools.chain(*[x['pos_plans'] for x in batch_list]))
-        #
-        #     with self.tokenizer.as_target_tokenizer():
-        #         pos_labels = self.tokenizer(
-        #             neg_plans,
-        #             padding='longest',
-        #             truncation=True,
-        #             max_length=self.max_output_length,
-        #             return_tensors='pt'
-        #         )['input_ids']
-        #
-        #         batch['pos_labels'] = pos_labels
-        #         # We have to make sure that the PAD token is ignored
-        #         batch['pos_labels'][torch.where(batch['pos_labels'] == 1)] = -100
-        #         batch['pos_labels'][torch.where(batch['pos_labels'] == 2)] = -100
         return batch
 
 

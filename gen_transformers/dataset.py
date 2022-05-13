@@ -108,6 +108,19 @@ class SummarizationDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
+    def get_plan_q(self, oracle_obj):
+        r1s = [float(x) for x in oracle_obj['rouge1_history'].split('|')[0].split(',')]
+        r2s = [float(x) for x in oracle_obj['rouge2_history'].split('|')[0].split(',')]
+        avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1s, r2s)])
+        min_rs = min(avg_rs)
+        max_rs = max(avg_rs)
+        if max_rs == min_rs:
+            scaled_rs = avg_rs
+        else:
+            scaled_rs = (avg_rs - min_rs) / (max_rs - min_rs)
+        plan_q = softmax(self.temperature * scaled_rs)
+        return plan_q
+
     def __getitem__(self, idx):
         example = self.dataset[idx]
         inputs = example[self.input_col]
@@ -128,6 +141,11 @@ class SummarizationDataset(Dataset):
         # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
         oracle_obj = self.ids2oracles[example['id']]
         oracle_idxs = list(map(int, oracle_obj['sent_idxs'].split(',')))
+
+        r1s = [float(x) for x in oracle_obj['rouge1_history'].split('|')[0].split(',')]
+        r2s = [float(x) for x in oracle_obj['rouge2_history'].split('|')[0].split(',')]
+        avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1s, r2s)])
+        sent_priority = avg_rs
 
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
         # source_sents = list(self.nlp(inputs).sents)
@@ -153,17 +171,12 @@ class SummarizationDataset(Dataset):
             target_annotated = target
             plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
             assert len(plan_labels) >= 1
+            plan_q = self.get_plan_q(oracle_obj)
         elif self.args.summary_style == 'score':
             target_annotated = None  # No generation, just sentence scoring and selection for extractive summarization
             plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
             assert len(plan_labels) >= 1
-            r1s = [float(x) for x in oracle_obj['rouge1_history'].split('|')[0].split(',')]
-            r2s = [float(x) for x in oracle_obj['rouge2_history'].split('|')[0].split(',')]
-            avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1s, r2s)])
-            min_rs = min(avg_rs)
-            max_rs = max(avg_rs)
-            scaled_rs = (avg_rs - min_rs) / (max_rs - min_rs)
-            plan_q = softmax(self.temperature * scaled_rs)
+            plan_q = self.get_plan_q(oracle_obj)
         elif self.args.summary_style == 'abstract_plan':
             target_annotated = f'{target}<sep>{target_prefix}'
         elif self.args.summary_style == 'hybrid_control':
@@ -178,41 +191,11 @@ class SummarizationDataset(Dataset):
 
             target_annotated = oracle_summary if prefix == '<extract>' and self.split == 'train' else target
             source_annotated = prefix + source_annotated
-        output = {
+        return {
             'source': source_annotated,
             'target': target_annotated,
             'plan_labels': plan_labels,
             'plan_q': plan_q,
+            'sent_priority': sent_priority,
             'reference': untouched_target,  # Use for evaluation
         }
-        if self.split == 'train' and 'plan' in self.args.summary_style and len(self.args.contrast_modes) > 0:
-            perturb_prefixes = []  # Perturb the plan and fine-tune with unlikelihood training
-            remaining_idxs = np.sort(list(set(np.arange(len(source_sents))) - set(oracle_idxs)))
-
-            # Remove 1
-            perturb_prefixes.append(remove_sent_from_plan(oracle_idxs))
-
-            if len(remaining_idxs) > 0:
-                # Add-1
-                sample_add_idxs = np.sort([int(np.random.choice(remaining_idxs, size=(1,), )[0])] + oracle_idxs)
-                perturb_prefixes.append(''.join([f'<s{i}>' for i in sample_add_idxs]).strip())
-
-                # Replace 1
-                oracle_idxs_copy = oracle_idxs.copy()
-                list_idx_to_replace = int(np.random.choice(np.arange(len(oracle_idxs)), size=(1,))[0])
-                oracle_idxs_copy[list_idx_to_replace] = int(np.random.choice(remaining_idxs, size=(1,), )[0])
-                oracle_idxs_copy = list(np.sort(oracle_idxs_copy))
-                perturb_prefixes.append(''.join([f'<s{i}>' for i in oracle_idxs_copy]).strip())
-            else:  # duplicate the remove operation just to get batch to have constant size
-                # Remove 1
-                perturb_prefixes.append(remove_sent_from_plan(oracle_idxs))
-
-                # Remove 1
-                perturb_prefixes.append(remove_sent_from_plan(oracle_idxs))
-
-            neg_targets = [prefix + '<sep>' + target for prefix in perturb_prefixes]
-            pos_targets = [target_prefix + '<sep>' + target]
-            output['neg_plans'] = neg_targets
-            output['pos_plans'] = pos_targets
-
-        return output

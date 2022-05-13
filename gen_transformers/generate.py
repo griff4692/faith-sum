@@ -132,7 +132,6 @@ if __name__ == '__main__':
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style
     args.oracle_filter = False
-    args.contrast_modes = ''
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
 

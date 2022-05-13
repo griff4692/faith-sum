@@ -3,6 +3,7 @@ import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import pandas as pd
+import argparse
 import spacy
 import numpy as np
 from scipy.stats import pearsonr
@@ -71,17 +72,24 @@ def get_priority(source_toks, summary, nlp):
 
 
 if __name__ == '__main__':
-    extractor = 'abstract'
+    parser = argparse.ArgumentParser('Extract Oracles for dataset')
+
+    parser.add_argument('--extractor', default='oracle', choices=['oracle', 'abstract', 'extract'])
+    parser.add_argument('--gpu_device', default=1, type=int)
+    parser.add_argument('-debug', default=False, action='store_true')
+
+    args = parser.parse_args()
+
     oracle_df = pd.read_csv('/nlp/projects/faithsum/cnn_dailymail/oracle/validation_v2.csv')
     outputs = pd.read_csv('/nlp/projects/faithsum/results/score_abstract_v2/validation_beam_outputs.csv')
 
+    outputs = outputs.sample(n=1000, replace=False, random_state=1992)
     nlp = spacy.load('en_core_web_sm')
 
     dataset = load_dataset('cnn_dailymail', '3.0.0')['validation']
     dataset_idx2id = dataset['id']
     orig_sources = dataset['article']
 
-    gpu = 0
     data_dir = '/nlp/projects/faithsum'
     wandb_name = 'score_abstract_v2'
     hf_model = 'facebook/bart-base'
@@ -100,14 +108,13 @@ if __name__ == '__main__':
 
     print(f'Loading model from {ckpt_path}...')
     model = TransformerSummarizer.load_from_checkpoint(
-        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=hf_model, strict=False).to(gpu).eval()
+        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=hf_model, strict=False).to(args.gpu_device).eval()
 
-    target_lengths = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    target_lengths = list(range(1, 16))
 
     rouge_metric = RougeMetric()
     updated_records = []
     n = len(records)
-    correlations = []
     for record in tqdm(records, total=n):
         oracle_obj = ids2oracles[dataset_idx2id[record['dataset_idx']]]
         source = orig_sources[record['dataset_idx']]
@@ -132,13 +139,15 @@ if __name__ == '__main__':
         oc_ex = pearsonr(oracle_priority, extract_priority)[0]
         oc_abs = pearsonr(oracle_priority, abstract_priority)[0]
         ex_abs = pearsonr(extract_priority, abstract_priority)[0]
-        correlations.append({'oracle_extract': oc_ex, 'oracle_abstract': oc_abs, 'extract_abstract': ex_abs})
+        correlations = {
+            'oracle_extract_corel': oc_ex, 'oracle_abstract_corel': oc_abs, 'extract_abstract_corel': ex_abs
+        }
 
-        if extractor == 'abstract':
+        if args.extractor == 'abstract':
             priority = abstract_priority
-        elif extractor == 'extract':
+        elif args.extractor == 'extract':
             priority = extract_priority
-        elif extractor == 'oracle':
+        elif args.extractor == 'oracle':
             priority = oracle_priority
 
         inputs = tokenizer(
@@ -148,8 +157,8 @@ if __name__ == '__main__':
             max_length=1024,
             return_tensors='pt',
         )
-        input_ids = inputs['input_ids'].to(gpu)
-        attention_mask = inputs['attention_mask'].to(gpu)
+        input_ids = inputs['input_ids'].to(args.gpu_device)
+        attention_mask = inputs['attention_mask'].to(args.gpu_device)
         cls_mask = input_ids >= special_id_min
 
         idxs = []
@@ -160,17 +169,13 @@ if __name__ == '__main__':
             idxs.append(unmask_idxs)
             masks.append(sentence_mask(cls_mask, unmask_idxs))
 
-        order = [
-            'extract',
-            'implied',
-            'oracle',
-            'oracle_aligned',
-            'abstract_aligned',
-        ]
+        extracts_by_target_length = [' '.join(str(source_sents[i]) for i in idx) for idx in idxs]
+        row = {}
+        for idx, x in enumerate(extracts_by_target_length):
+            row.update(compute_rouge([x], [reference], rouge_metric, prefix=f'extract_at_{target_lengths[idx]}_'))
 
         all_masks = torch.cat(masks)
         num_cand = len(all_masks)
-
         input_ids_rep = input_ids.repeat(num_cand, 1)
         kwargs = {
             'input_ids': input_ids_rep,
@@ -187,28 +192,36 @@ if __name__ == '__main__':
         pred_ids = model.model.generate(**kwargs)
         pred_str = tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
 
-        row = {}
         for idx, x in enumerate(pred_str):
             row[f'from_{target_lengths[idx]}'] = x
             row.update(compute_rouge([x], [reference], rouge_metric, prefix=f'from_{target_lengths[idx]}_'))
 
         all_r1s = [v for k, v in row.items() if 'rouge1_f1' in k]
         best_r1 = max(all_r1s)
+        row['best_mask_num'] = int(np.argmax(all_r1s))
         row['best_rouge1_f1'] = best_r1
+        row.update(correlations)
 
         record.update(row)
         updated_records.append(record)
     updated_df = pd.DataFrame(updated_records)
-    out_fn = 'updated.csv'
+    out_fn = f'{args.extractor}.csv'
+    print(f'Saving to {out_fn}')
     updated_df.to_csv(out_fn, index=False)
 
+    for target in target_lengths:
+        cols = [f'extract_at_{target}_rouge1_precision', f'extract_at_{target}_rouge1_recall', f'extract_at_{target}_rouge1_f1']
+        row = [str(target)]
+        for col in cols:
+            row.append(str(updated_df[col].mean()))
+        print(','.join(row))
     cols_to_print = [
         f'from_{l}_rouge1_f1' for l in target_lengths
     ]
     cols_to_print.append('best_rouge1_f1')
+    cols_to_print.append('best_mask_num')
+    cols_to_print += [
+        'oracle_extract_corel', 'oracle_abstract_corel', 'extract_abstract_corel'
+    ]
     for col in cols_to_print:
         print(updated_df[col].mean())
-
-    correlations = pd.DataFrame(correlations)
-    for col in correlations.columns:
-        print(f'{col} -> {correlations[col].mean()}')

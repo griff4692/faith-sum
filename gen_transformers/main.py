@@ -129,6 +129,8 @@ if __name__ == '__main__':
     parser.add_argument('--num_dataloaders', default=8, type=int)
     parser.add_argument('-sent_model_layer', default=False, action='store_true')
     parser.add_argument('-use_kld', default=False, action='store_true')
+    parser.add_argument('-add_consistency', default=False, action='store_true')
+    parser.add_argument('-add_brio', default=False, action='store_true')
 
     # Hyper-parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4
@@ -180,26 +182,6 @@ if __name__ == '__main__':
     # Oracle Filter - remove examples from training set whose extractive oracle is < avg R1, R2 against reference
     # In other words, only keep training examples where the abstractive reference can be explained well by an oracle
     parser.add_argument('-oracle_filter', default=False, action='store_true')
-
-    # CONTRAST controls
-    # empty string '' means no contrast loss
-    # plan means we just use contrastive learning on extractive plan portion of the target
-    # abstract means just on abstract
-    # plan,abstract means we compute both contrast losses -- on the plan and the abstract
-    # We generate negatives by adding / removing / swapping sentences from plan
-    # Abstract loss is more of a consistency loss
-    # i.e., We shouldn't assign a high probability on generating the reference from a mis-aligned plan
-    # The plan loss directly encourages generating the oracle extractive plan irrespective of subsequent abstact.
-    parser.add_argument('--contrast_modes', default='', choices=[
-        'abstract,plan',  # Make sure you get the order right when calling this ("plan,abstract" will err out)
-        'abstract',
-        'plan'
-        ''
-    ])
-    # Margin for contrast loss
-    parser.add_argument('--contrast_margin', default=0.5, type=float)
-    # Relative contribution to overall loss for contrastive loss (versus regular LM MLE loss)
-    parser.add_argument('--contrast_lambda', default=1.0, type=float)
 
     args = parser.parse_args()
 
