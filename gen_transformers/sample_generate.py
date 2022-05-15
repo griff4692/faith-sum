@@ -1,6 +1,7 @@
 import itertools
 import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+import ujson
 
 import pandas as pd
 import argparse
@@ -10,6 +11,7 @@ from scipy.stats import pearsonr
 import torch
 from transformers import AutoTokenizer
 from tqdm import tqdm
+from scipy.special import expit
 
 from data_utils import get_path_from_exp
 from eval.rouge_metric import RougeMetric
@@ -19,6 +21,7 @@ from preprocess.extract_oracles import convert_to_sents
 from datasets import load_dataset
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
+np.random.seed(1992)
 
 
 def sentence_mask(cls_mask, sent_idx_to_mask):
@@ -68,21 +71,20 @@ def get_priority(source_toks, summary, nlp):
     sent_r2s = list(map(lambda x: float(x), gs[3].split(',')))
     assert len(sent_r1s) == len(source_toks)
     avg_rs = np.array([(a + b) / 2.0 for (a, b) in zip(sent_r1s, sent_r2s)])
-    return np.argsort(- avg_rs)
+    return np.argsort(- avg_rs), avg_rs
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Extract Oracles for dataset')
+    parser = argparse.ArgumentParser('Mask Cross Attention and Generate')
 
-    parser.add_argument('--extractor', default='extract', choices=['oracle', 'abstract', 'extract'])
+    parser.add_argument('--extractor', default='extract', choices=['oracle', 'extract'])
     parser.add_argument('--gpu_device', default=1, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--wandb_name', default='score_abstract_kld')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--hf_model', default='facebook/bart-base')
     parser.add_argument('--max_examples', default=1000, type=int)
-    parser.add_argument('--min_k', default=1, type=int)
-    parser.add_argument('--max_k', default=10, type=int)
+    parser.add_argument('--k', default=10, type=int)
 
     args = parser.parse_args()
 
@@ -114,11 +116,10 @@ if __name__ == '__main__':
     model = TransformerSummarizer.load_from_checkpoint(
         checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(args.gpu_device).eval()
 
-    target_lengths = list(range(args.min_k, args.max_k + 1))
-
     rouge_metric = RougeMetric()
-    updated_records = []
     n = len(records)
+    sample_out = []
+    rank_dataset = []
     for record in tqdm(records, total=n):
         oracle_obj = ids2oracles[dataset_idx2id[record['dataset_idx']]]
         source = orig_sources[record['dataset_idx']]
@@ -130,6 +131,23 @@ if __name__ == '__main__':
         assert num_trunc_sent <= len(source_sents)
         source_sents = source_sents[:num_trunc_sent]
 
+        rank_example = {
+            'dataset_idx': record['dataset_idx'],
+            'source_sents': [str(x) for x in source_sents],
+            'reference': record['reference'],
+            'abstract': record['abstract'],
+            'priority': {
+                'prob': [],
+                'source_idxs': []
+            },
+            'sampled': {
+                'source_idxs': [],
+                'scores': [],
+                'extracts': [],
+                'abstracts': [],
+            }
+        }
+
         source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
         # Get source tokens
         source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
@@ -137,19 +155,14 @@ if __name__ == '__main__':
         reference = record['reference']
 
         extract_priority = (-sent_scores).argsort()
-        oracle_priority = get_priority(source_sents_tok, reference, nlp)
-        abstract_priority = get_priority(source_sents_tok, pred_abstract, nlp)
+        extract_scores = sent_scores[extract_priority]
+        extract_scores_norm = expit(extract_scores)
+        # extract_scores_norm[extract_scores_norm < 0.1] = 0.0
+        # emin, emax = extract_scores_norm.min(), extract_scores_norm.max()
+        # extract_scores_norm = (extract_scores_norm - emin) / (emax - emin)
+        oracle_priority, oracle_scores = get_priority(source_sents_tok, reference, nlp)
 
-        oc_ex = pearsonr(oracle_priority, extract_priority)[0]
-        oc_abs = pearsonr(oracle_priority, abstract_priority)[0]
-        ex_abs = pearsonr(extract_priority, abstract_priority)[0]
-        correlations = {
-            'oracle_extract_corel': oc_ex, 'oracle_abstract_corel': oc_abs, 'extract_abstract_corel': ex_abs
-        }
-
-        if args.extractor == 'abstract':
-            priority = abstract_priority
-        elif args.extractor == 'extract':
+        if args.extractor == 'extract':
             priority = extract_priority
         elif args.extractor == 'oracle':
             priority = oracle_priority
@@ -167,17 +180,16 @@ if __name__ == '__main__':
 
         idxs = []
         masks = []
-        for length in target_lengths:
-            end_range = min(n, length)
-            unmask_idxs = list(sorted(priority[:end_range]))
+        for exp in range(args.k):
+            unmask_idxs = []
+            for source_idx in range(len(extract_scores_norm)):
+                should_select = np.random.random() <= extract_scores_norm[source_idx]
+                if should_select:
+                    unmask_idxs.append(extract_priority[source_idx])
             idxs.append(unmask_idxs)
             masks.append(sentence_mask(cls_mask, unmask_idxs))
 
-        extracts_by_target_length = [' '.join(str(source_sents[i]) for i in idx) for idx in idxs]
-        row = {}
-        for idx, x in enumerate(extracts_by_target_length):
-            row.update(compute_rouge([x], [reference], rouge_metric, prefix=f'extract_at_{target_lengths[idx]}_'))
-
+        sampled_extracts = [''.join('<s{i}>' + str(source_sents[i]) for i in idx) for idx in idxs]
         all_masks = torch.cat(masks)
         num_cand = len(all_masks)
         input_ids_rep = input_ids.repeat(num_cand, 1)
@@ -196,39 +208,48 @@ if __name__ == '__main__':
         pred_ids = model.model.generate(**kwargs)
         pred_str = tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
 
+        rank_example['priority']['prob'] = list(extract_scores_norm)
+        rank_example['priority']['source_idxs'] = list(extract_priority)
+        rank_example['sampled']['source_idxs'] = idxs
+        rank_example['sampled']['abstracts'] = pred_str
+        rank_example['sampled']['extracts'] = sampled_extracts
+
+        rouges = []
+        r1s = []
         for idx, x in enumerate(pred_str):
-            row[f'from_{target_lengths[idx]}'] = x
-            row.update(compute_rouge([x], [reference], rouge_metric, prefix=f'from_{target_lengths[idx]}_'))
-
-        all_r1s = [v for k, v in row.items() if 'rouge1_f1' in k]
-        best_r1 = max(all_r1s)
-        row['best_mask_num'] = int(np.argmax(all_r1s))
-        row['best_rouge1_f1'] = best_r1
-        row.update(correlations)
-
-        record.update(row)
-        updated_records.append(record)
-    updated_df = pd.DataFrame(updated_records)
-    out_fn = os.path.join(results_dir, f'{args.extractor}_masked.csv')
-    print(f'Saving to {out_fn}')
-    updated_df.to_csv(out_fn, index=False)
-
-    for target in target_lengths:
-        cols = [
-            f'extract_at_{target}_rouge1_precision', f'extract_at_{target}_rouge1_recall',
-            f'extract_at_{target}_rouge1_f1'
-        ]
-        row = [str(target)]
+            rr = compute_rouge([x], [reference], rouge_metric)
+            rank_example['sampled']['scores'].append(rr)
+            rouges.append(rr)
+            r1s.append(rr['rouge1_f1'])
+        best_idx = np.argmax(r1s)
+        best_input = list(map(str, idxs[best_idx]))
+        num_source_sent = len(best_input)
+        rouge_df = pd.DataFrame(rouges)
+        cols = ['rouge1_f1', 'rouge2_f1', 'rougeL_f1']
+        row = {
+            'best_num_source_sents': num_source_sent, 'best_source_sent_idxs': ','.join(best_input),
+            'num_source_sents': num_trunc_sent,
+            'sent_compression': num_trunc_sent / num_source_sent
+        }
         for col in cols:
-            row.append(str(updated_df[col].mean()))
-        print(','.join(row))
-    cols_to_print = [
-        f'from_{l}_rouge1_f1' for l in target_lengths
-    ]
-    cols_to_print.append('best_rouge1_f1')
-    cols_to_print.append('best_mask_num')
-    # cols_to_print += [
-    #     'oracle_extract_corel', 'oracle_abstract_corel', 'extract_abstract_corel'
-    # ]
-    for col in cols_to_print:
-        print(updated_df[col].mean())
+            row[f'{col}_avg'] = rouge_df[col].mean()
+            row[f'{col}_max'] = rouge_df[col].max()
+            row[f'{col}_min'] = rouge_df[col].min()
+        sample_out.append(row)
+        rank_dataset.append(rank_example)
+
+    sample_out = pd.DataFrame(sample_out)
+    for col in list(sample_out.columns):
+        try:
+            print(col, sample_out[col].dropna().mean())
+        except:
+            print(col, ' not a valid column to average')
+
+    out_fn = os.path.join(results_dir, f'{args.extractor}_sampled.csv')
+    print(f'Saving to {out_fn}')
+    sample_out.to_csv(out_fn, index=False)
+
+    out_fn = os.path.join(results_dir, 'sample_dataset.json')
+    print(f'Saving Rank dataset to {out_fn}...')
+    with open(out_fn, 'w') as fd:
+        ujson.dump(out_fn, fd)

@@ -1,5 +1,6 @@
 import os
 
+import regex as re
 import numpy as np
 import pytorch_lightning as pl
 import pandas as pd
@@ -121,6 +122,33 @@ class SummarizationDataset(Dataset):
         plan_q = softmax(self.temperature * scaled_rs)
         return plan_q
 
+    # def replace(self, source_sents, target):
+    #     source_sents = [str(x) for x in source_sents]
+    #     source_toks = [[z.lower() for z in str(x).split(' ')] for x in source_sents]
+    #     target_sents = convert_to_sents(target, self.nlp)
+    #     target_sents = [str(x) for x in target_sents]
+    #     target_toks = [[z.lower() for z in x.split(' ')] for x in target_sents]
+    #     new_labels = []
+    #     for ref_idx, ref_sent in enumerate(target_sents):
+    #         ref_sent = str(ref_sent)
+    #         if len(ref_sent.split(' ')) <= 3:
+    #             continue
+    #
+    #         most_covered = -1
+    #         best_source_idx = -1
+    #         target_tok_set = set(target_toks[ref_idx])
+    #         for source_idx, source_tok in enumerate(source_toks):
+    #             ss = set(source_tok)
+    #             covered = len(ss.intersection(target_tok_set))
+    #             if covered >= most_covered and source_idx not in new_labels:
+    #                 best_source_idx = source_idx
+    #                 most_covered = covered
+    #
+    #         new_labels.append(best_source_idx)
+    #         source_sents[best_source_idx] = re.sub(' \.$', '.', ref_sent)
+    #     source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
+    #     return source_annotated, new_labels
+
     def __getitem__(self, idx):
         example = self.dataset[idx]
         inputs = example[self.input_col]
@@ -177,6 +205,8 @@ class SummarizationDataset(Dataset):
             plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
             assert len(plan_labels) >= 1
             plan_q = self.get_plan_q(oracle_obj)
+            # if self.split == 'train' and self.args.score_replace:
+            #     source_annotated, plan_labels = self.replace(source_sents, untouched_target)
         elif self.args.summary_style == 'abstract_plan':
             target_annotated = f'{target}<sep>{target_prefix}'
         elif self.args.summary_style == 'hybrid_control':

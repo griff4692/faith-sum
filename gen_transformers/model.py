@@ -315,27 +315,30 @@ class TransformerSummarizer(pl.LightningModule):
             full_loss = 0
             output = self.model.model.encoder(**batch)
             encoder_h = output.last_hidden_state
+            cross_att_pool_layers = None
 
         if plan_labels is not None:
             # Predict if a sentence is in oracle summary
             sent_preds = self.score_sents(cls_mask, encoder_h)
 
-            # cross_att_pool_layers
-            sent_label_mask = (plan_labels == -100)
-            cross_att_pool_layers.masked_fill_(sent_label_mask, float('-inf'))
-            sent_preds.masked_fill_(sent_label_mask, float('-inf'))
-            target_dist = torch.softmax(sent_preds, dim=1)
+            if cross_att_pool_layers is not None:
+                # cross_att_pool_layers
+                sent_label_mask = (plan_labels == -100)
+                cross_att_pool_layers.masked_fill_(sent_label_mask, float('-inf'))
+                sent_preds.masked_fill_(sent_label_mask, float('-inf'))
+                target_dist = torch.softmax(sent_preds, dim=1)
 
-            batch_size = len(target_dist)
-            klds = []
-            for batch_idx in range(batch_size):
-                p, q = cross_att_pool_layers[batch_idx, cls_mask[batch_idx]], target_dist[batch_idx, cls_mask[batch_idx]]
-                kld_loss = self.kld(p.unsqueeze(0) + 1e-4, q.unsqueeze(0))
-                klds.append(kld_loss)
-            consistency_loss = torch.stack(klds).mean()
-            self.log('train_consistency', consistency_loss, on_epoch=False, on_step=True, prog_bar=True)
-            if self.hparams.add_consistency:
-                full_loss += consistency_loss
+                batch_size = len(target_dist)
+                klds = []
+                for batch_idx in range(batch_size):
+                    p = cross_att_pool_layers[batch_idx, cls_mask[batch_idx]]
+                    q = target_dist[batch_idx, cls_mask[batch_idx]]
+                    kld_loss = self.kld(p.unsqueeze(0) + 1e-4, q.unsqueeze(0))
+                    klds.append(kld_loss)
+                consistency_loss = torch.stack(klds).mean()
+                self.log('train_consistency', consistency_loss, on_epoch=False, on_step=True, prog_bar=True)
+                if self.hparams.add_consistency:
+                    full_loss += consistency_loss
 
             if self.hparams.use_kld:
                 extract_loss = self.compute_kld_extract_loss(sent_preds, plan_q, cls_mask)
@@ -509,6 +512,8 @@ class TransformerSummarizer(pl.LightningModule):
         return results
 
     def merge_outputs(self, gen_outputs, score_outputs):
+        if self.hparams.summary_style == 'score':
+            return score_outputs
         merged = []
         assert len(score_outputs) == len(gen_outputs)
         for batch_idx in range(len(score_outputs)):
