@@ -152,7 +152,6 @@ if __name__ == '__main__':
         'facebook/bart-large',
         'Yale-LILY/brio-cnndm-uncased',
     ])
-    # parser.add_argument('-score_replace', default=False, action='store_true')
 
     # Task-specific / Project-specific parameters
     parser.add_argument(
