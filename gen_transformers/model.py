@@ -15,7 +15,7 @@ from scipy.stats import pearsonr
 from transformers import AutoModelForSeq2SeqLM
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
-from transformers.models.bart.modeling_bart import _expand_mask, BartEncoderLayer
+from transformers.models.bart.modeling_bart import BartForConditionalCopy
 
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
@@ -44,7 +44,8 @@ class TransformerSummarizer(pl.LightningModule):
         self.tokenizer = tokenizer
         assert self.hparams.max_input_length <= self.tokenizer.model_max_length
         self.model = AutoModelForSeq2SeqLM.from_pretrained(hf_model)
-        self.model.config.output_attentions = True  # Keep track of them
+        self.config = self.model.config
+        self.config.output_attentions = True  # Keep track of them
         self.model.resize_token_embeddings(len(tokenizer))
         self.lr = self.hparams.lr  # Necessary for tune_lr to work with PytorchLightning
         self.rouge = load_metric('rouge')
@@ -55,18 +56,16 @@ class TransformerSummarizer(pl.LightningModule):
         if 'plan' in self.hparams.summary_style:
             self.special_id_cutoff = self.tokenizer.convert_tokens_to_ids('<sep>')
 
-        self.sent_classifier, self.sent_loss = None, None
+        self.sent_bart = None
         if 'score' in self.hparams.summary_style:
-            self.sent_classifier = nn.Linear(self.model.config.d_model, 1)
-            pos_weight = torch.FloatTensor([1.0])
-            self.sent_loss = torch.nn.BCEWithLogitsLoss(reduction='none', pos_weight=pos_weight)
-            self.sent_model = None
-            # if self.hparams.sent_model_layer:
-            #     self.sent_model = BartEncoderLayer(self.model.config)
-            #     self.sent_model.load_state_dict(self.model.model.encoder.layers[-1].state_dict())
-            self.kld_loss = nn.KLDivLoss(log_target=False, reduction='batchmean')
-            self.enc_transform = nn.Linear(self.model.config.d_model, 200, bias=True)
-        self.sim = nn.CosineSimilarity()
+            self.sent_config = self.config
+            self.sent_config.encoder_layers = 2
+            self.sent_config.decoder_layers = 2
+            # (everything else is copied from other BARTEncoder)
+            self.sent_config.vocab_size = 3  # <s> <pad> </s>
+            self.sent_bart = BartForConditionalCopy(self.sent_config)
+            # self.sent_bart.model.encoder.layers[-1].load_state_dict(self.model.model.encoder.layers[-1].state_dict())
+            self.stop_embed = nn.Embedding(num_embeddings=1, embedding_dim=self.config.d_model, padding_idx=None)
 
     def parse_source_text_from_inputs(self, batch):
         source_special = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
@@ -172,16 +171,6 @@ class TransformerSummarizer(pl.LightningModule):
         return_obj['sent_dist'] = y_hat_cls
         return return_obj
 
-    def score_sents(self, cls_mask, encoder_hidden_states):
-        if self.sent_model is not None:
-            cls_attention_mask = cls_mask.float()
-            cls_attention_mask[:, 0] = 1.0  # Document BOS should be un-masked
-            cls_attention_mask_exp = _expand_mask(cls_attention_mask, dtype=encoder_hidden_states.dtype)
-            encoder_hidden_states = self.sent_model(
-                hidden_states=encoder_hidden_states, attention_mask=cls_attention_mask_exp, layer_head_mask=None
-            )[0]
-        return self.sent_classifier(encoder_hidden_states).squeeze(-1)
-
     def kld(self, y_hat_scores, y_dist):
         y_hat_lprob = torch.log_softmax(y_hat_scores, dim=-1)
         return self.kld_loss(y_hat_lprob, y_dist.float())
@@ -218,6 +207,25 @@ class TransformerSummarizer(pl.LightningModule):
                 continue
             corels.append(corel)
         return np.mean(corels)
+
+    def plan_loss(self, cls_mask, encoder_h, plan_labels):
+        # Decoder inputs embeds
+        # Take Oracle, concatenate it with sentence markers
+        batch_size = len(cls_mask)
+        losses = []
+        stop_input_id = torch.LongTensor([0]).to(self.device)
+        for batch_idx in range(batch_size):
+            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
+            seq_len = cls_h.size()[1]
+            labels = (plan_labels[batch_idx, cls_mask[batch_idx]] >= 1).nonzero().squeeze(1)
+            eos_dummy = torch.LongTensor([seq_len]).to(self.device)
+            labels = torch.cat([labels, eos_dummy]).unsqueeze(0)
+            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
+            # Concatenate
+            outputs = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
+            loss = self.label_smoother(outputs, labels)
+            losses.append(loss)
+        return torch.stack(losses).mean()
 
     def brio_step(self, priority, cls_mask, batch, reference, encoder_h, mask_upperbound=10):
         batch_size = len(priority)
@@ -308,50 +316,20 @@ class TransformerSummarizer(pl.LightningModule):
             # Return label-smoothed loss
             full_loss = self.label_smoother(output, batch['labels'])
             encoder_h = output.encoder_last_hidden_state
-            cross_attentions = output.cross_attentions
-            cross_att_head_pooled = [x.mean(dim=1) for x in cross_attentions]
-            cross_att_pool_layers = torch.stack([x.max(dim=1)[0] for x in cross_att_head_pooled]).mean(dim=0)
         else:
             full_loss = 0
             output = self.model.model.encoder(**batch)
             encoder_h = output.last_hidden_state
-            cross_att_pool_layers = None
 
         if plan_labels is not None:
             # Predict if a sentence is in oracle summary
-            sent_preds = self.score_sents(cls_mask, encoder_h)
+            plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels)
 
-            if cross_att_pool_layers is not None:
-                # cross_att_pool_layers
-                sent_label_mask = (plan_labels == -100)
-                cross_att_pool_layers.masked_fill_(sent_label_mask, float('-inf'))
-                sent_preds.masked_fill_(sent_label_mask, float('-inf'))
-                target_dist = torch.softmax(sent_preds, dim=1)
-
-                batch_size = len(target_dist)
-                klds = []
-                for batch_idx in range(batch_size):
-                    p = cross_att_pool_layers[batch_idx, cls_mask[batch_idx]]
-                    q = target_dist[batch_idx, cls_mask[batch_idx]]
-                    kld_loss = self.kld(p.unsqueeze(0) + 1e-4, q.unsqueeze(0))
-                    klds.append(kld_loss)
-                consistency_loss = torch.stack(klds).mean()
-                self.log('train_consistency', consistency_loss, on_epoch=False, on_step=True, prog_bar=True)
-                if self.hparams.add_consistency:
-                    full_loss += consistency_loss
-
-            if self.hparams.use_kld:
-                extract_loss = self.compute_kld_extract_loss(sent_preds, plan_q, cls_mask)
-            else:
-                extract_loss = self.compute_ll_extract_loss(sent_preds, plan_labels)
-
-            corel = self.compute_correlation(sent_preds, plan_q, cls_mask)
-            self.log('train_corel', corel, on_epoch=False, on_step=True, prog_bar=True)
-            self.log('train_extract', extract_loss, on_epoch=False, on_step=True, prog_bar=True)
+            self.log('train_plan', plan_loss, on_epoch=False, on_step=True, prog_bar=True)
             if full_loss is None:
-                full_loss = extract_loss
+                full_loss = plan_loss
             else:
-                full_loss += extract_loss
+                full_loss += plan_loss
                 self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
 
             if self.hparams.add_brio:
@@ -361,21 +339,36 @@ class TransformerSummarizer(pl.LightningModule):
 
         return full_loss
 
-    def score_extracts(self, source, cls_mask, encoder_h, plan_labels, plan_q=None):
-        batch_size = len(source)
-        sent_preds = self.score_sents(cls_mask, encoder_h)
-        extract_loss = self.compute_ll_extract_loss(sent_preds, plan_labels)
-        # Only predict positively for CLS tokens
-        sent_preds.masked_fill_(~ cls_mask, float('-inf'))
-        y_hat_np = sent_preds.detach().cpu().numpy()
-        extractive_summaries = [
-            self.build_summaries(source=source[batch_idx], y_hat=y_hat_np[batch_idx, :])
-            for batch_idx in range(batch_size)
-        ]
-        corel = None
-        if plan_q is not None:
-            corel = self.compute_correlation(sent_preds, plan_q, cls_mask)
-        return extractive_summaries, extract_loss, corel
+    def score_extracts(self, source, cls_mask, encoder_h, plan_labels):
+        plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels)
+        extractive_summaries = []
+        batch_size = len(cls_mask)
+        stop_input_id = torch.LongTensor([0]).to(self.device)
+        for batch_idx in range(batch_size):
+            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
+            seq_len = cls_h.size()[1]
+            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
+            kwargs = {
+                'inputs_embeds': inputs_embeds,
+                'eos_token_id': seq_len,
+                'num_return_sequences': 1,
+                'min_length': 3,
+                'max_length': 10,
+                'no_repeat_ngram_size': 1,
+                'early_stopping': True,
+                'output_scores': True,
+                'num_beams': 1,
+            }
+
+            pred_ids = self.sent_bart.generate(**kwargs)
+            summary_idx = pred_ids.tolist()[0]
+            assert summary_idx[0] == self.config.decoder_start_token_id
+            summary_idx_no_special = summary_idx[1:]
+            assert summary_idx[-1] in {seq_len, self.config.decoder_start_token_id}
+            summary_idx_no_special = summary_idx_no_special[:-1]
+            return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
+            extractive_summaries.append(return_obj)
+        return extractive_summaries, plan_loss
 
     def validation_step(self, batch, batch_idx):
         # Train on extractive labels
@@ -409,9 +402,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         score_outputs = [None for _ in range(batch_size)]
         if 'score' in self.hparams.summary_style:
-            extractive_summaries, extract_loss, corel = self.score_extracts(
-                source, cls_mask, encoder_h, plan_labels, plan_q
-            )
+            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],
@@ -419,7 +410,6 @@ class TransformerSummarizer(pl.LightningModule):
                     'extracts': [extractive_summaries[batch_idx]],
                     'reference': references[batch_idx],
                 }
-            self.log('val_corel', corel, on_epoch=True, on_step=False, prog_bar=True)
             self.log('val_extract', extract_loss, on_epoch=True, on_step=False, prog_bar=True)
             if loss is None:  # No generation
                 loss = extract_loss
@@ -552,9 +542,7 @@ class TransformerSummarizer(pl.LightningModule):
             }
             output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
-            extractive_summaries, extract_loss, corel = self.score_extracts(
-                source, cls_mask, encoder_h, plan_labels, plan_q
-            )
+            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],
