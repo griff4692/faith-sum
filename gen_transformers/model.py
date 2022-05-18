@@ -1,5 +1,6 @@
 from collections import defaultdict
 import os
+from copy import deepcopy
 import regex as re
 
 from datasets import load_metric
@@ -11,7 +12,6 @@ import spacy
 from scipy.special import expit
 import torch
 import torch.nn as nn
-from scipy.stats import pearsonr
 from transformers import AutoModelForSeq2SeqLM
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
@@ -45,7 +45,7 @@ class TransformerSummarizer(pl.LightningModule):
         assert self.hparams.max_input_length <= self.tokenizer.model_max_length
         self.model = AutoModelForSeq2SeqLM.from_pretrained(hf_model)
         self.config = self.model.config
-        self.config.output_attentions = True  # Keep track of them
+        # self.config.output_attentions = True  # Keep track of them
         self.model.resize_token_embeddings(len(tokenizer))
         self.lr = self.hparams.lr  # Necessary for tune_lr to work with PytorchLightning
         self.rouge = load_metric('rouge')
@@ -58,14 +58,14 @@ class TransformerSummarizer(pl.LightningModule):
 
         self.sent_bart = None
         if 'score' in self.hparams.summary_style:
-            self.sent_config = self.config
+            self.sent_config = deepcopy(self.config)
             self.sent_config.encoder_layers = 2
             self.sent_config.decoder_layers = 2
             # (everything else is copied from other BARTEncoder)
             self.sent_config.vocab_size = 3  # <s> <pad> </s>
             self.sent_bart = BartForConditionalCopy(self.sent_config)
             # self.sent_bart.model.encoder.layers[-1].load_state_dict(self.model.model.encoder.layers[-1].state_dict())
-            self.stop_embed = nn.Embedding(num_embeddings=1, embedding_dim=self.config.d_model, padding_idx=None)
+            self.stop_embed = nn.Embedding(num_embeddings=1, embedding_dim=self.sent_config.d_model, padding_idx=None)
 
     def parse_source_text_from_inputs(self, batch):
         source_special = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
@@ -324,9 +324,9 @@ class TransformerSummarizer(pl.LightningModule):
 
             pred_ids = self.sent_bart.generate(**kwargs)
             summary_idx = pred_ids.tolist()[0]
-            assert summary_idx[0] == self.config.decoder_start_token_id
+            assert summary_idx[0] == self.sent_config.decoder_start_token_id
             summary_idx_no_special = summary_idx[1:]
-            assert summary_idx[-1] in {seq_len, self.config.decoder_start_token_id}
+            assert summary_idx[-1] in {seq_len, self.sent_config.decoder_start_token_id}
             summary_idx_no_special = summary_idx_no_special[:-1]
             # Generation could end in padded ids? (if num_return_sequences > 1)
             assert seq_len not in summary_idx_no_special
@@ -340,7 +340,6 @@ class TransformerSummarizer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         # Train on extractive labels
         plan_labels = batch.pop('plan_labels', None)
-        plan_q = batch.pop('plan_q', None)
         cls_mask = batch.pop('cls_mask')
         batch_size = len(batch['input_ids'])
         references = batch['reference']
