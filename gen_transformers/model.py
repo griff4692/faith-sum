@@ -171,44 +171,6 @@ class TransformerSummarizer(pl.LightningModule):
         return_obj['sent_dist'] = y_hat_cls
         return return_obj
 
-    def kld(self, y_hat_scores, y_dist):
-        kld_loss = nn.KLDivLoss(log_target=False, reduction='batchmean')
-        y_hat_lprob = torch.log_softmax(y_hat_scores, dim=-1)
-        return kld_loss(y_hat_lprob, y_dist.float())
-
-    def compute_ll_extract_loss(self, sent_preds, plan_labels):
-        sent_loss = self.sent_loss(sent_preds.flatten(), plan_labels.flatten())
-
-        # These are the document [CLS] token and padding
-        sent_label_mask = (plan_labels == -100).flatten()
-        sent_loss.masked_fill_(sent_label_mask, 0)
-        extract_loss = sent_loss.sum() / (plan_labels != -100).sum()
-        return extract_loss
-
-    def compute_kld_extract_loss(self, sent_preds, plan_q, cls_mask):
-        batch_size = len(sent_preds)
-        klds = []
-        for batch_idx in range(batch_size):
-            p, q = sent_preds[batch_idx, cls_mask[batch_idx]], plan_q[batch_idx, cls_mask[batch_idx]]
-            kld_loss = self.kld(p.unsqueeze(0), q.unsqueeze(0))
-            klds.append(kld_loss)
-        extract_loss = torch.stack(klds).mean()
-        return extract_loss
-
-    def compute_correlation(self, sent_preds, plan_q, cls_mask):
-        batch_size = len(sent_preds)
-        corels = []
-        for batch_idx in range(batch_size):
-            p = sent_preds[batch_idx, cls_mask[batch_idx]].detach().cpu().numpy()
-            q = plan_q[batch_idx, cls_mask[batch_idx]].detach().cpu().numpy()
-            try:
-                corel = pearsonr(p, q)[0]
-            except ValueError:
-                print('Invalid Correlation Inputs.  Skipping.')
-                continue
-            corels.append(corel)
-        return np.mean(corels)
-
     def plan_loss(self, cls_mask, encoder_h, plan_labels):
         # Decoder inputs embeds
         # Take Oracle, concatenate it with sentence markers
@@ -218,7 +180,7 @@ class TransformerSummarizer(pl.LightningModule):
         for batch_idx in range(batch_size):
             cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
             seq_len = cls_h.size()[1]
-            labels = (plan_labels[batch_idx, cls_mask[batch_idx]] >= 1).nonzero().squeeze(1)
+            labels = plan_labels[batch_idx]
             eos_dummy = torch.LongTensor([seq_len]).to(self.device)
             labels = torch.cat([labels, eos_dummy]).unsqueeze(0)
             # Concatenate
@@ -305,7 +267,6 @@ class TransformerSummarizer(pl.LightningModule):
         # Train on extractive labels
         plan_labels = batch.pop('plan_labels', None)
         priority = batch.pop('priority', None)
-        plan_q = batch.pop('plan_q', None)
         cls_mask = batch.pop('cls_mask')
         reference = batch.pop('reference', None)
 
@@ -369,7 +330,6 @@ class TransformerSummarizer(pl.LightningModule):
             summary_idx_no_special = summary_idx_no_special[:-1]
             # Generation could end in padded ids? (if num_return_sequences > 1)
             assert seq_len not in summary_idx_no_special
-            print(summary_idx_no_special)
             return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
             extractive_summaries.append(return_obj)
         if plan_labels is None:

@@ -1,24 +1,16 @@
 import os
 
-import regex as re
 import numpy as np
 import pytorch_lightning as pl
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
-from scipy.special import softmax
 from tqdm import tqdm
 
 from datasets import load_dataset
 from gen_transformers.data_utils import Seq2SeqCollate
 from sum_constants import summarization_name_mapping
 from preprocess.extract_oracles import convert_to_sents
-
-
-def remove_sent_from_plan(oracle_idxs):
-    list_idx_to_remove = int(np.random.choice(np.arange(len(oracle_idxs)), size=(1,))[0])
-    remove_idxs = oracle_idxs[:list_idx_to_remove] + oracle_idxs[list_idx_to_remove + 1:]
-    return ''.join([f'<s{i}>' for i in remove_idxs]).strip()
 
 
 class SummaryDataModule(pl.LightningDataModule):
@@ -109,34 +101,6 @@ class SummarizationDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def get_plan_q(self, oracle_obj):
-        r1s = [[float(x) for x in y.split(',')] for y in oracle_obj['rouge1_history'].split('|')]
-        r2s = [[float(x) for x in y.split(',')] for y in oracle_obj['rouge2_history'].split('|')]
-        steps = len(r1s)
-        num_sents = len(r1s[0])
-        # add a label for <STOP> extracting which is dynamically set to the last sequence
-        q = np.zeros([steps, num_sents])
-        curr_baseline = 0
-        for step in range(len(r1s)):
-            r1 = r1s[step]
-            r2 = r2s[step]
-            avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1, r2)])
-            next_baseline = max(avg_rs)
-            avg_rs -= curr_baseline
-            curr_baseline = next_baseline
-            min_rs = min(avg_rs)
-            max_rs = max(avg_rs)
-            if max_rs == min_rs:
-                scaled_rs = avg_rs
-            else:
-                scaled_rs = (avg_rs - min_rs) / (max_rs - min_rs)
-            plan_q = softmax(self.temperature * scaled_rs)
-            q[step] = plan_q
-        # q[steps, -1] = 1
-        # # Soften the distribution on the STOP token
-        # q[steps, :] = softmax(self.temperature * q[steps, :])
-        return q
-
     def __getitem__(self, idx):
         example = self.dataset[idx]
         inputs = example[self.input_col]
@@ -156,7 +120,9 @@ class SummarizationDataset(Dataset):
 
         # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
         oracle_obj = self.ids2oracles[example['id']]
-        oracle_idxs = list(map(int, oracle_obj['sent_idxs'].split(',')))
+        # Empirically, better performance from generating extracts in order in which they appear in source
+        # Rather than by "relevance" as defined by ROUGE, for instance
+        oracle_idxs = list(sorted(list(map(int, oracle_obj['sent_idxs'].split(',')))))
 
         r1s = [float(x) for x in oracle_obj['rouge1_history'].split('|')[0].split(',')]
         r2s = [float(x) for x in oracle_obj['rouge2_history'].split('|')[0].split(',')]
@@ -164,7 +130,6 @@ class SummarizationDataset(Dataset):
         sent_priority = avg_rs
 
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
-        # source_sents = list(self.nlp(inputs).sents)
         source_sents = convert_to_sents(inputs, self.nlp)
         if self.args.add_sent_toks:
             source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
@@ -172,7 +137,6 @@ class SummarizationDataset(Dataset):
         target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs]).strip()
         oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs])
         plan_labels = None
-        plan_q = None
 
         if self.args.summary_style == 'extract':
             if self.split == 'train':
@@ -187,12 +151,10 @@ class SummarizationDataset(Dataset):
             target_annotated = target
             plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
             assert len(plan_labels) >= 1
-            plan_q = self.get_plan_q(oracle_obj)
         elif self.args.summary_style == 'score':
             target_annotated = None  # No generation, just sentence scoring and selection for extractive summarization
             plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
             assert len(plan_labels) >= 1
-            plan_q = self.get_plan_q(oracle_obj)
         elif self.args.summary_style == 'abstract_plan':
             target_annotated = f'{target}<sep>{target_prefix}'
         elif self.args.summary_style == 'hybrid_control':
@@ -211,7 +173,6 @@ class SummarizationDataset(Dataset):
             'source': source_annotated,
             'target': target_annotated,
             'plan_labels': plan_labels,
-            'plan_q': plan_q,
             'sent_priority': sent_priority,
             'reference': untouched_target,  # Use for evaluation
         }

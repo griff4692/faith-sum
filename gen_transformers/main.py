@@ -66,13 +66,22 @@ def run(args):
         entity='griffinadams',
     )
 
+    monitor_metric = 'val_loss'
+    mode = 'min'
+    if args.summary_style == 'score':
+        monitor_metric = 'extract_mean_f1'
+        mode = 'max'
+    elif args.summary_style == 'score_abstract':
+        monitor_metric = 'mean_f1'
+        mode = 'max'
+
     checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
+        monitor=monitor_metric,
         save_top_k=1,
         save_last=False,
-        mode='min'
+        mode=mode
     )
-    early_stopping = EarlyStopping('val_loss', patience=10, verbose=True)
+    early_stopping = EarlyStopping(monitor_metric, patience=10, verbose=True)
     callbacks = [checkpoint_callback, early_stopping]
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')

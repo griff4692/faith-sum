@@ -42,49 +42,24 @@ class Seq2SeqCollate:
     def sent_extract_labels(self, batch_list, batch):
         batch_size = len(batch_list)
         num_cls = batch['cls_mask'].sum(dim=1)
-        batch_plan_labels = [x['plan_labels'] for x in batch_list]
+        labels = [x['plan_labels'] for x in batch_list]
         if self.split == 'train':
             priorities = [x['sent_priority'] for x in batch_list]
             priorities_trunc = [x[:num_cls[batch_idx]] for batch_idx, x in enumerate(priorities)]
             priorities_trunc = [list(np.argsort(-x)) for x in priorities_trunc]
             batch['priority'] = priorities_trunc
-        batch_plan_q = [x['plan_q'] for x in batch_list]
-        batch_plan_labels_pad = np.zeros(shape=(batch_size, batch['input_ids'].size()[1]), dtype=np.float)
-        batch_plan_labels_pad.fill(-100)
         valid_idxs = []
+        labels_trunc = []
         for batch_idx in range(batch_size):
-            sent_locs = batch['cls_mask'][batch_idx].nonzero().squeeze(1)
-            any_pos_labels = False
-            for sent_idx, location in enumerate(sent_locs):
-                label = 1 if sent_idx in batch_plan_labels[batch_idx] else 0
-                if label == 1:
-                    any_pos_labels = True
-                batch_plan_labels_pad[batch_idx, location] = label
-            if any_pos_labels:
+            valid_labels = [i for i in labels[batch_idx] if i < num_cls[batch_idx]]
+            if len(valid_labels) > 0:
+                labels_trunc.append(torch.LongTensor(valid_labels))
                 valid_idxs.append(batch_idx)
-        batch_plan_labels_pad = torch.from_numpy(batch_plan_labels_pad)
-        batch['plan_labels'] = batch_plan_labels_pad
-        if batch_plan_q[0] is not None:
-            trunc_qs = []
-            trunc_sent_nums = batch['cls_mask'].sum(dim=1).tolist()
-            trunc_plan_nums = (batch_plan_labels_pad == 1).sum(dim=1).tolist()
-            for sent_num, plan_n, q in zip(trunc_sent_nums, trunc_plan_nums, batch_plan_q):
-                q_plan_n, q_sent_num = q.shape
-                q_labels = q.argmax(axis=1)
-                assert q_sent_num >= sent_num
-                q = q[:, :sent_num]
-                non_trunc_steps = []
-                for step, label in enumerate(q_labels):
-                    if label < sent_num:
-                        non_trunc_steps.append(step)
-                q = q[non_trunc_steps, :]
-                assert plan_n == len(non_trunc_steps)
-                q = np.vstack([q, np.zeros([1, q.shape[-1]])])
-                q = np.hstack([q, np.zeros([q.shape[0], 1])])
-                q[-1, -1] = 1  # Last token is the stop token
-                trunc_qs.append(torch.from_numpy(q))
-
-            batch['plan_q'] = trunc_qs
+            else:
+                # Dummy Label is first sentence (for validation loss)
+                # During training, we filter out these examples
+                labels_trunc.append(torch.LongTensor([0]))
+        batch['plan_labels'] = labels_trunc
         return valid_idxs
 
     def __call__(self, batch_list):
