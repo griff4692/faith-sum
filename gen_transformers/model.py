@@ -172,8 +172,9 @@ class TransformerSummarizer(pl.LightningModule):
         return return_obj
 
     def kld(self, y_hat_scores, y_dist):
+        kld_loss = nn.KLDivLoss(log_target=False, reduction='batchmean')
         y_hat_lprob = torch.log_softmax(y_hat_scores, dim=-1)
-        return self.kld_loss(y_hat_lprob, y_dist.float())
+        return kld_loss(y_hat_lprob, y_dist.float())
 
     def compute_ll_extract_loss(self, sent_preds, plan_labels):
         sent_loss = self.sent_loss(sent_preds.flatten(), plan_labels.flatten())
@@ -208,22 +209,24 @@ class TransformerSummarizer(pl.LightningModule):
             corels.append(corel)
         return np.mean(corels)
 
-    def plan_loss(self, cls_mask, encoder_h, plan_labels):
+    def plan_loss(self, cls_mask, encoder_h, plan_labels, plan_q):
         # Decoder inputs embeds
         # Take Oracle, concatenate it with sentence markers
         batch_size = len(cls_mask)
         losses = []
         stop_input_id = torch.LongTensor([0]).to(self.device)
         for batch_idx in range(batch_size):
+            loss_labels = plan_q[batch_idx].unsqueeze(0)
             cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
             seq_len = cls_h.size()[1]
             labels = (plan_labels[batch_idx, cls_mask[batch_idx]] >= 1).nonzero().squeeze(1)
             eos_dummy = torch.LongTensor([seq_len]).to(self.device)
             labels = torch.cat([labels, eos_dummy]).unsqueeze(0)
-            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
             # Concatenate
-            outputs = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
-            loss = self.label_smoother(outputs, labels)
+            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
+            outputs = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels, loss_labels=loss_labels)
+            # loss = self.label_smoother(outputs, labels)
+            loss = outputs.loss
             losses.append(loss)
         return torch.stack(losses).mean()
 
@@ -323,7 +326,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         if plan_labels is not None:
             # Predict if a sentence is in oracle summary
-            plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels)
+            plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels, plan_q)
 
             self.log('train_plan', plan_loss, on_epoch=False, on_step=True, prog_bar=True)
             if full_loss is None:
@@ -339,8 +342,8 @@ class TransformerSummarizer(pl.LightningModule):
 
         return full_loss
 
-    def score_extracts(self, source, cls_mask, encoder_h, plan_labels):
-        plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels)
+    def score_extracts(self, source, cls_mask, encoder_h, plan_labels, plan_q):
+        plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels, plan_q)
         extractive_summaries = []
         batch_size = len(cls_mask)
         stop_input_id = torch.LongTensor([0]).to(self.device)
@@ -402,7 +405,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         score_outputs = [None for _ in range(batch_size)]
         if 'score' in self.hparams.summary_style:
-            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
+            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels, plan_q)
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],

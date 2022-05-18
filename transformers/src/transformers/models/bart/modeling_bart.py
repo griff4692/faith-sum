@@ -1599,6 +1599,7 @@ class BartForConditionalCopy(BartPretrainedModel):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
+        loss_labels: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -1653,8 +1654,12 @@ class BartForConditionalCopy(BartPretrainedModel):
 
         masked_lm_loss = None
         if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            masked_lm_loss = loss_fct(lm_logits.squeeze(0), labels.squeeze(0))
+            assert loss_labels is not None
+            # loss_fct = CrossEntropyLoss()
+            # masked_lm_loss = loss_fct(lm_logits.squeeze(0), labels.squeeze(0))
+            kld_loss = nn.KLDivLoss(log_target=False, reduction='batchmean')
+            lm_logits_lprob = torch.log_softmax(lm_logits.squeeze(0), dim=-1)
+            masked_lm_loss = kld_loss(lm_logits_lprob, loss_labels.squeeze(0).float())
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]

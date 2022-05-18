@@ -66,7 +66,6 @@ if __name__ == '__main__':
         help='For summary_style=hybrid_control, summaries with ranking above this will be trained as extracts'
              '(to generate the oracle extractive summary).  Below, abstracts (to generate original reference). '
     )
-    # parser.add_argument('-sent_model_layer', default=False, action='store_true')
     parser.add_argument('--bootstraps', default=1, type=int)
     parser.add_argument(
         '--summary_style',

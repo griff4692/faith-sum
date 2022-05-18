@@ -72,7 +72,7 @@ def run(args):
         save_last=False,
         mode='min'
     )
-    early_stopping = EarlyStopping('val_loss', patience=5, verbose=True)
+    early_stopping = EarlyStopping('val_loss', patience=10, verbose=True)
     callbacks = [checkpoint_callback, early_stopping]
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')
@@ -127,7 +127,6 @@ if __name__ == '__main__':
     parser.add_argument('-find_lr', default=False, action='store_true')
     # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
-    parser.add_argument('-sent_model_layer', default=False, action='store_true')
     parser.add_argument('-use_kld', default=False, action='store_true')
     parser.add_argument('-add_consistency', default=False, action='store_true')
     parser.add_argument('-add_brio', default=False, action='store_true')

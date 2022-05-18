@@ -110,17 +110,32 @@ class SummarizationDataset(Dataset):
         return len(self.dataset)
 
     def get_plan_q(self, oracle_obj):
-        r1s = [float(x) for x in oracle_obj['rouge1_history'].split('|')[0].split(',')]
-        r2s = [float(x) for x in oracle_obj['rouge2_history'].split('|')[0].split(',')]
-        avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1s, r2s)])
-        min_rs = min(avg_rs)
-        max_rs = max(avg_rs)
-        if max_rs == min_rs:
-            scaled_rs = avg_rs
-        else:
-            scaled_rs = (avg_rs - min_rs) / (max_rs - min_rs)
-        plan_q = softmax(self.temperature * scaled_rs)
-        return plan_q
+        r1s = [[float(x) for x in y.split(',')] for y in oracle_obj['rouge1_history'].split('|')]
+        r2s = [[float(x) for x in y.split(',')] for y in oracle_obj['rouge2_history'].split('|')]
+        steps = len(r1s)
+        num_sents = len(r1s[0])
+        # add a label for <STOP> extracting which is dynamically set to the last sequence
+        q = np.zeros([steps, num_sents])
+        curr_baseline = 0
+        for step in range(len(r1s)):
+            r1 = r1s[step]
+            r2 = r2s[step]
+            avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1, r2)])
+            next_baseline = max(avg_rs)
+            avg_rs -= curr_baseline
+            curr_baseline = next_baseline
+            min_rs = min(avg_rs)
+            max_rs = max(avg_rs)
+            if max_rs == min_rs:
+                scaled_rs = avg_rs
+            else:
+                scaled_rs = (avg_rs - min_rs) / (max_rs - min_rs)
+            plan_q = softmax(self.temperature * scaled_rs)
+            q[step] = plan_q
+        # q[steps, -1] = 1
+        # # Soften the distribution on the STOP token
+        # q[steps, :] = softmax(self.temperature * q[steps, :])
+        return q
 
     def __getitem__(self, idx):
         example = self.dataset[idx]

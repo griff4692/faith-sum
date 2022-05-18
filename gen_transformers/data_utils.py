@@ -51,9 +51,6 @@ class Seq2SeqCollate:
         batch_plan_q = [x['plan_q'] for x in batch_list]
         batch_plan_labels_pad = np.zeros(shape=(batch_size, batch['input_ids'].size()[1]), dtype=np.float)
         batch_plan_labels_pad.fill(-100)
-        batch_plan_q_pad = np.zeros(shape=(batch_size, batch['input_ids'].size()[1]), dtype=np.float)
-        batch_plan_q_pad.fill(-100)
-        has_q = False
         valid_idxs = []
         for batch_idx in range(batch_size):
             sent_locs = batch['cls_mask'][batch_idx].nonzero().squeeze(1)
@@ -63,16 +60,31 @@ class Seq2SeqCollate:
                 if label == 1:
                     any_pos_labels = True
                 batch_plan_labels_pad[batch_idx, location] = label
-                if batch_plan_q[batch_idx] is not None:
-                    batch_plan_q_pad[batch_idx, location] = batch_plan_q[batch_idx][sent_idx]
-                    has_q = True
             if any_pos_labels:
                 valid_idxs.append(batch_idx)
         batch_plan_labels_pad = torch.from_numpy(batch_plan_labels_pad)
         batch['plan_labels'] = batch_plan_labels_pad
-        if has_q:
-            batch_plan_q_pad = torch.from_numpy(batch_plan_q_pad)
-            batch['plan_q'] = batch_plan_q_pad
+        if batch_plan_q[0] is not None:
+            trunc_qs = []
+            trunc_sent_nums = batch['cls_mask'].sum(dim=1).tolist()
+            trunc_plan_nums = (batch_plan_labels_pad == 1).sum(dim=1).tolist()
+            for sent_num, plan_n, q in zip(trunc_sent_nums, trunc_plan_nums, batch_plan_q):
+                q_plan_n, q_sent_num = q.shape
+                q_labels = q.argmax(axis=1)
+                assert q_sent_num >= sent_num
+                q = q[:, :sent_num]
+                non_trunc_steps = []
+                for step, label in enumerate(q_labels):
+                    if label < sent_num:
+                        non_trunc_steps.append(step)
+                q = q[non_trunc_steps, :]
+                assert plan_n == len(non_trunc_steps)
+                q = np.vstack([q, np.zeros([1, q.shape[-1]])])
+                q = np.hstack([q, np.zeros([q.shape[0], 1])])
+                q[-1, -1] = 1  # Last token is the stop token
+                trunc_qs.append(torch.from_numpy(q))
+
+            batch['plan_q'] = trunc_qs
         return valid_idxs
 
     def __call__(self, batch_list):
