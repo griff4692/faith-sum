@@ -209,14 +209,13 @@ class TransformerSummarizer(pl.LightningModule):
             corels.append(corel)
         return np.mean(corels)
 
-    def plan_loss(self, cls_mask, encoder_h, plan_labels, plan_q):
+    def plan_loss(self, cls_mask, encoder_h, plan_labels):
         # Decoder inputs embeds
         # Take Oracle, concatenate it with sentence markers
         batch_size = len(cls_mask)
         losses = []
         stop_input_id = torch.LongTensor([0]).to(self.device)
         for batch_idx in range(batch_size):
-            loss_labels = plan_q[batch_idx].unsqueeze(0)
             cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
             seq_len = cls_h.size()[1]
             labels = (plan_labels[batch_idx, cls_mask[batch_idx]] >= 1).nonzero().squeeze(1)
@@ -224,9 +223,8 @@ class TransformerSummarizer(pl.LightningModule):
             labels = torch.cat([labels, eos_dummy]).unsqueeze(0)
             # Concatenate
             inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
-            outputs = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels, loss_labels=loss_labels)
-            # loss = self.label_smoother(outputs, labels)
-            loss = outputs.loss
+            outputs = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
+            loss = self.label_smoother(outputs, labels)
             losses.append(loss)
         return torch.stack(losses).mean()
 
@@ -326,7 +324,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         if plan_labels is not None:
             # Predict if a sentence is in oracle summary
-            plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels, plan_q)
+            plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels)
 
             self.log('train_plan', plan_loss, on_epoch=False, on_step=True, prog_bar=True)
             if full_loss is None:
@@ -342,8 +340,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         return full_loss
 
-    def score_extracts(self, source, cls_mask, encoder_h, plan_labels, plan_q):
-        plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels, plan_q)
+    def score_extracts(self, source, cls_mask, encoder_h, plan_labels=None):
         extractive_summaries = []
         batch_size = len(cls_mask)
         stop_input_id = torch.LongTensor([0]).to(self.device)
@@ -353,14 +350,15 @@ class TransformerSummarizer(pl.LightningModule):
             inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
             kwargs = {
                 'inputs_embeds': inputs_embeds,
+                # 'length_penalty': 1.0,  # Didn't find a better value than not setting it at all on very small set
                 'eos_token_id': seq_len,
                 'num_return_sequences': 1,
                 'min_length': 3,
                 'max_length': 10,
-                'no_repeat_ngram_size': 1,
+                # 'no_repeat_ngram_size': 1,
                 'early_stopping': True,
                 'output_scores': True,
-                'num_beams': 1,
+                'num_beams': 4,
             }
 
             pred_ids = self.sent_bart.generate(**kwargs)
@@ -369,8 +367,14 @@ class TransformerSummarizer(pl.LightningModule):
             summary_idx_no_special = summary_idx[1:]
             assert summary_idx[-1] in {seq_len, self.config.decoder_start_token_id}
             summary_idx_no_special = summary_idx_no_special[:-1]
+            # Generation could end in padded ids? (if num_return_sequences > 1)
+            assert seq_len not in summary_idx_no_special
+            print(summary_idx_no_special)
             return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
             extractive_summaries.append(return_obj)
+        if plan_labels is None:
+            return extractive_summaries
+        plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels)
         return extractive_summaries, plan_loss
 
     def validation_step(self, batch, batch_idx):
@@ -405,7 +409,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         score_outputs = [None for _ in range(batch_size)]
         if 'score' in self.hparams.summary_style:
-            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels, plan_q)
+            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],
@@ -545,7 +549,7 @@ class TransformerSummarizer(pl.LightningModule):
             }
             output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
-            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
+            extractive_summaries = self.score_extracts(source, cls_mask, encoder_h)
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],

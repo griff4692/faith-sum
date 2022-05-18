@@ -1505,14 +1505,21 @@ class BartCopyModel(BartPretrainedModel):
             )
 
         encoder_hidden_states = encoder_outputs[0]
-
         if past_key_values is None:
-            decoder_inputs_embeds = encoder_hidden_states[0, decoder_input_ids[0, 1:]].unsqueeze(0)
-            start_e = self.shared(decoder_input_ids[0, :1]).unsqueeze(1)
+            decoder_inputs_embeds = []
+            num_beams = len(encoder_hidden_states)
+            for beam in range(num_beams):
+                decoder_inputs_embeds.append(encoder_hidden_states[beam, decoder_input_ids[beam, 1:], :])
+            decoder_inputs_embeds = torch.stack(decoder_inputs_embeds)
+            start_e = self.shared(decoder_input_ids[:, :1])
             decoder_inputs_embeds = torch.cat([start_e, decoder_inputs_embeds], dim=1)
         else:
             assert len(decoder_input_ids[0, :]) == 1
-            decoder_inputs_embeds = encoder_hidden_states[0, decoder_input_ids[0, :]].unsqueeze(0)
+            num_beams = len(encoder_hidden_states)
+            decoder_inputs_embeds = []
+            for beam in range(num_beams):
+                decoder_inputs_embeds.append(encoder_hidden_states[beam, decoder_input_ids[beam, :1], :])
+            decoder_inputs_embeds = torch.stack(decoder_inputs_embeds)
 
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
@@ -1599,7 +1606,6 @@ class BartForConditionalCopy(BartPretrainedModel):
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
-        loss_labels: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -1646,20 +1652,21 @@ class BartForConditionalCopy(BartPretrainedModel):
 
         dec_steps = decoder_h.size()[1]
         enc_steps = encoder_h.size()[1]
-        encoder_h_rep = encoder_h.unsqueeze(1).repeat(1, dec_steps, 1, 1).view(enc_steps * dec_steps, -1)
-        decoder_h_rep = decoder_h.unsqueeze(2).repeat(1, 1, enc_steps, 1).view(enc_steps * dec_steps, -1)
+        num_beams = encoder_h.size()[0]
+        encoder_h_rep = encoder_h.unsqueeze(1).repeat(1, dec_steps, 1, 1).view(num_beams, enc_steps * dec_steps, -1)
+        decoder_h_rep = decoder_h.unsqueeze(2).repeat(1, 1, enc_steps, 1).view(num_beams, enc_steps * dec_steps, -1)
 
-        class_input = torch.cat([encoder_h_rep, decoder_h_rep], dim=1)
-        lm_logits = self.cand_classifier(class_input).view(1, dec_steps, enc_steps)
+        class_input = torch.cat([encoder_h_rep, decoder_h_rep], dim=-1)
+        lm_logits = self.cand_classifier(class_input).view(num_beams, dec_steps, enc_steps)
 
         masked_lm_loss = None
         if labels is not None:
-            assert loss_labels is not None
-            # loss_fct = CrossEntropyLoss()
-            # masked_lm_loss = loss_fct(lm_logits.squeeze(0), labels.squeeze(0))
-            kld_loss = nn.KLDivLoss(log_target=False, reduction='batchmean')
-            lm_logits_lprob = torch.log_softmax(lm_logits.squeeze(0), dim=-1)
-            masked_lm_loss = kld_loss(lm_logits_lprob, loss_labels.squeeze(0).float())
+            assert num_beams == 1
+            loss_fct = CrossEntropyLoss()
+            masked_lm_loss = loss_fct(lm_logits.squeeze(0), labels.squeeze(0))
+            # kld_loss = nn.KLDivLoss(log_target=False, reduction='batchmean')
+            # lm_logits_lprob = torch.log_softmax(lm_logits.squeeze(0), dim=-1)
+            # masked_lm_loss = kld_loss(lm_logits_lprob, loss_labels.squeeze(0).float())
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]

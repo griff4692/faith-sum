@@ -152,7 +152,6 @@ if __name__ == '__main__':
         for batch_idx, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
             batch = {k: v.to(gpu) if type(v) == torch.Tensor else v for k, v in batch.items()}
             start = args.batch_size * batch_idx
-            plan_labels = batch['plan_labels']
             actual_batch_size = len(batch['input_ids'])
             end = start + actual_batch_size
             batch_dataset_idxs = dataset_idxs[start:end]
