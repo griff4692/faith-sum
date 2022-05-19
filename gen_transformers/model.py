@@ -25,15 +25,18 @@ from eval.rouge_metric import RougeMetric
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 
 
-def sentence_mask(cls_mask, sent_idx_to_mask):
+def sentence_mask(cls_mask, sent_idx_to_mask, prev_mask):
     sent_mask = torch.zeros_like(cls_mask, device=cls_mask.device).long()
     sent_locs = cls_mask.nonzero()[:, 1]
+    max_seq_len = cls_mask.size()[1]
     num_sents = len(sent_locs)
     for sent_idx, sent_loc in enumerate(sent_locs):
         sent_loc = sent_loc.item()
-        end_loc = sent_locs[sent_idx + 1].item() if sent_idx + 1 < num_sents else len(sent_locs)
+        end_loc = sent_locs[sent_idx + 1].item() if sent_idx + 1 < num_sents else max_seq_len
         if sent_idx in sent_idx_to_mask:
             sent_mask[0, sent_loc:end_loc] = 1
+    sent_mask[:, 0] = 1  # Always attend to the BOS token
+    sent_mask.masked_fill_(prev_mask == 0, 0)
     return sent_mask
 
 
@@ -121,23 +124,23 @@ class TransformerSummarizer(pl.LightningModule):
 
         return plan_nll, abstract_nll
 
-    def contrast_loss(self, batch_size, num_neg_cand, batch_nll_pos, batch_nll_neg):
-        """
-        :param batch_size: Batch Size
-        :param num_neg_cand: Number of negative targets for each example in batch (batch_size * num_neg_cand total)
-        :param batch_nll_pos: Negative Log Likelihoods for generating the 'positive' ground-truth
-        :param batch_nll_neg: Negative Log Likelihoods for generating the 'negative' ground-truth
-        :return: Margin losses for each pair of pos and neg.  Positive targets should have a higher LL than negatives,
-        with a margin defined by --contrast_margin.
-        """
-        margin_losses = []
-        for batch_idx in range(batch_size):
-            pos_ll = - batch_nll_pos[batch_idx]
-            neg_nll_cands = batch_nll_neg[batch_idx * num_neg_cand: (batch_idx + 1) * num_neg_cand]
-            for neg_nll_cand in neg_nll_cands:
-                neg_ll_cand = - neg_nll_cand
-                margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.contrast_margin, min=0))
-        return margin_losses
+    # def contrast_loss(self, batch_size, num_neg_cand, batch_nll_pos, batch_nll_neg):
+    #     """
+    #     :param batch_size: Batch Size
+    #     :param num_neg_cand: Number of negative targets for each example in batch (batch_size * num_neg_cand total)
+    #     :param batch_nll_pos: Negative Log Likelihoods for generating the 'positive' ground-truth
+    #     :param batch_nll_neg: Negative Log Likelihoods for generating the 'negative' ground-truth
+    #     :return: Margin losses for each pair of pos and neg.  Positive targets should have a higher LL than negatives,
+    #     with a margin defined by --contrast_margin.
+    #     """
+    #     margin_losses = []
+    #     for batch_idx in range(batch_size):
+    #         pos_ll = - batch_nll_pos[batch_idx]
+    #         neg_nll_cands = batch_nll_neg[batch_idx * num_neg_cand: (batch_idx + 1) * num_neg_cand]
+    #         for neg_nll_cand in neg_nll_cands:
+    #             neg_ll_cand = - neg_nll_cand
+    #             margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.contrast_margin, min=0))
+    #     return margin_losses
 
     def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
         all_summaries = []
@@ -190,80 +193,80 @@ class TransformerSummarizer(pl.LightningModule):
             losses.append(loss)
         return torch.stack(losses).mean()
 
-    def brio_step(self, priority, cls_mask, batch, reference, encoder_h, mask_upperbound=10):
-        batch_size = len(priority)
-        margin_losses = []
-        pos_neg_gap = []
-        for batch_idx in range(batch_size):
-            p = priority[batch_idx]
-            input_ids = batch['input_ids'][batch_idx]
-            mask_range = list(range(1, mask_upperbound + 1))
-            masks = []
-            for num in mask_range:
-                if num > len(p):
-                    continue
-                masks.append(sentence_mask(cls_mask[batch_idx].unsqueeze(0), p[:num]))
-            all_masks = torch.cat(masks)
-            num_cand = len(all_masks)
+    # def brio_step(self, priority, cls_mask, batch, reference, encoder_h, mask_upperbound=10):
+    #     batch_size = len(priority)
+    #     margin_losses = []
+    #     pos_neg_gap = []
+    #     for batch_idx in range(batch_size):
+    #         p = priority[batch_idx]
+    #         input_ids = batch['input_ids'][batch_idx]
+    #         mask_range = list(range(1, mask_upperbound + 1))
+    #         masks = []
+    #         for num in mask_range:
+    #             if num > len(p):
+    #                 continue
+    #             masks.append(sentence_mask(cls_mask[batch_idx].unsqueeze(0), p[:num], batch['attention_mask']))
+    #         all_masks = torch.cat(masks)
+    #         num_cand = len(all_masks)
+    #
+    #         input_ids_rep = input_ids.repeat(num_cand, 1)
+    #         kwargs = {
+    #             'input_ids': input_ids_rep,
+    #             'attention_mask': all_masks,
+    #             'num_return_sequences': 1,
+    #             'num_beams': 1,
+    #             'length_penalty': 4.0,
+    #             'max_length': 142,
+    #             'min_length': 56,
+    #             'no_repeat_ngram_size': 3,
+    #             'early_stopping': True,
+    #         }
+    #
+    #         with torch.no_grad():
+    #             pred_ids = self.model.generate(**kwargs)
+    #         pred_str = [x.strip() for x in self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)]
+    #
+    #         scores = []
+    #         for idx, x in enumerate(pred_str):
+    #             scores.append(self.compute_rouge([x], [reference], rouge_types=['rouge1'])['rouge1_f1'])
+    #         labels = pred_ids
+    #         labels[:, 0] = 0
+    #
+    #         encoder_outputs = encoder_h[batch_idx].unsqueeze(0).repeat(num_cand, 1, 1).contiguous().clone()
+    #         encoder_attention_mask = batch['attention_mask'][batch_idx].unsqueeze(0).repeat(num_cand, 1).contiguous()
+    #         inputs = {
+    #             'encoder_outputs': [encoder_outputs],
+    #             'attention_mask': encoder_attention_mask,
+    #             'labels': labels,
+    #         }
+    #
+    #         cand_outputs = self.model(**inputs, use_cache=False)
+    #         nll = []
+    #         for cand_idx in range(len(labels)):
+    #             label_row = labels[cand_idx]
+    #             loss_row_full = {'logits': cand_outputs['logits'][cand_idx]}
+    #             nll.append(self.label_smoother(loss_row_full, label_row))
+    #
+    #         ranks = np.argsort(-np.array(scores))
+    #
+    #         # Compute Rank Score (not for back-prop)
+    #         for a in range(num_cand - 1):
+    #             pos_idx = ranks[a]
+    #             for b in range(a + 1, num_cand):
+    #                 neg_idx = ranks[b]
+    #                 assert scores[neg_idx] <= scores[pos_idx]
+    #                 pos_ll = - nll[pos_idx]
+    #                 neg_ll = - nll[neg_idx]
+    #                 if scores[neg_idx] == scores[pos_idx]:  # Don't train on equal / identical candidates
+    #                     continue
+    #                 margin = self.hparams.contrast_margin * (b - a)
+    #                 margin_losses.append(torch.clamp(neg_ll - pos_ll + margin, min=0))
+    #                 pos_neg_gap.append(float((pos_ll - neg_ll).detach().item()))
+    #
+    #     avg_margin = torch.stack(margin_losses).mean()
+    #     return avg_margin
 
-            input_ids_rep = input_ids.repeat(num_cand, 1)
-            kwargs = {
-                'input_ids': input_ids_rep,
-                'attention_mask': all_masks,
-                'num_return_sequences': 1,
-                'num_beams': 1,
-                'length_penalty': 4.0,
-                'max_length': 142,
-                'min_length': 56,
-                'no_repeat_ngram_size': 3,
-                'early_stopping': True,
-            }
-
-            with torch.no_grad():
-                pred_ids = self.model.generate(**kwargs)
-            pred_str = [x.strip() for x in self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)]
-
-            scores = []
-            for idx, x in enumerate(pred_str):
-                scores.append(self.compute_rouge([x], [reference], rouge_types=['rouge1'])['rouge1_f1'])
-            labels = pred_ids
-            labels[:, 0] = 0
-
-            encoder_outputs = encoder_h[batch_idx].unsqueeze(0).repeat(num_cand, 1, 1).contiguous().clone()
-            encoder_attention_mask = batch['attention_mask'][batch_idx].unsqueeze(0).repeat(num_cand, 1).contiguous()
-            inputs = {
-                'encoder_outputs': [encoder_outputs],
-                'attention_mask': encoder_attention_mask,
-                'labels': labels,
-            }
-
-            cand_outputs = self.model(**inputs, use_cache=False)
-            nll = []
-            for cand_idx in range(len(labels)):
-                label_row = labels[cand_idx]
-                loss_row_full = {'logits': cand_outputs['logits'][cand_idx]}
-                nll.append(self.label_smoother(loss_row_full, label_row))
-
-            ranks = np.argsort(-np.array(scores))
-
-            # Compute Rank Score (not for back-prop)
-            for a in range(num_cand - 1):
-                pos_idx = ranks[a]
-                for b in range(a + 1, num_cand):
-                    neg_idx = ranks[b]
-                    assert scores[neg_idx] <= scores[pos_idx]
-                    pos_ll = - nll[pos_idx]
-                    neg_ll = - nll[neg_idx]
-                    if scores[neg_idx] == scores[pos_idx]:  # Don't train on equal / identical candidates
-                        continue
-                    margin = self.hparams.contrast_margin * (b - a)
-                    margin_losses.append(torch.clamp(neg_ll - pos_ll + margin, min=0))
-                    pos_neg_gap.append(float((pos_ll - neg_ll).detach().item()))
-
-        avg_margin = torch.stack(margin_losses).mean()
-        return avg_margin
-
-    def implement_oracle_masking(self, cls_mask, priority):
+    def implement_oracle_masking(self, cls_mask, priority, prev_attention_mask):
         # Update Cross Attention Masking to cover top K relevant sentences from source text
         # K determined by --oracle_mask_k
         # Relevance, here, determined by average of ROUGE-1 and ROUGE-2 F1 (order is given by priority)
@@ -273,11 +276,12 @@ class TransformerSummarizer(pl.LightningModule):
             p = priority[batch_idx]
             trunc_idx = min(len(p), self.hparams.oracle_mask_k)
             cls_locations = cls_mask[batch_idx].unsqueeze(0)
+            prev_mask = prev_attention_mask[batch_idx].unsqueeze(0)
             idx_to_keep = p[:trunc_idx]
             # Masks everything but the sentences specified by idx_to_keep
             # cls_locations is True if there's a <s{idx}> tag in the spot, 0 otherwise.
             # Used for sentence boundary detection in the method.
-            updated_mask = sentence_mask(cls_locations, idx_to_keep)
+            updated_mask = sentence_mask(cls_locations, idx_to_keep, prev_mask)
             updated_attention_masks.append(updated_mask)
         return torch.cat(updated_attention_masks)
 
@@ -295,14 +299,13 @@ class TransformerSummarizer(pl.LightningModule):
         encoder_h = output.last_hidden_state
 
         # Do this after the Encoder Step to ensure full self attention in encoder
-        attention_mask = (
-            self.implement_oracle_masking(cls_mask, priority)
-            if self.hparams.oracle_cross_mask else batch['attention_mask']
-        )
+        if self.hparams.oracle_cross_mask:
+            batch['attention_mask'] = self.implement_oracle_masking(cls_mask, priority, batch['attention_mask'])
+
         if self.hparams.summary_style != 'score':  # score is just extraction (no word-level generation)
             updated_inputs = {
                 'encoder_outputs': [encoder_h],
-                'attention_mask': attention_mask,
+                'attention_mask': batch['attention_mask'],
                 'labels': labels,
             }
             output = self.model(**updated_inputs, use_cache=False)
@@ -381,7 +384,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         # Do this after the Encoder Step to ensure full self attention in encoder
         if self.hparams.oracle_cross_mask:
-            batch['attention_mask'] = self.implement_oracle_masking(cls_mask, priority)
+            batch['attention_mask'] = self.implement_oracle_masking(cls_mask, priority, batch['attention_mask'])
 
         if self.hparams.summary_style != 'score':  # score is just extraction (no word-level generation)
             updated_inputs = {
