@@ -81,7 +81,7 @@ def run(args):
         save_last=False,
         mode=mode
     )
-    early_stopping = EarlyStopping(monitor_metric, patience=10, verbose=True)
+    early_stopping = EarlyStopping(monitor_metric, patience=25, verbose=True)
     callbacks = [checkpoint_callback, early_stopping]
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')
@@ -139,6 +139,9 @@ if __name__ == '__main__':
     parser.add_argument('-use_kld', default=False, action='store_true')
     parser.add_argument('-add_consistency', default=False, action='store_true')
     parser.add_argument('-add_brio', default=False, action='store_true')
+    parser.add_argument('-oracle_cross_mask', default=False, action='store_true')
+    # How many sentences to make visible to the decoder (5 is randomly set based on summary lengths of ~2-5 sentences)
+    parser.add_argument('--oracle_mask_k', default=5, type=int)
 
     # Hyper-parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4

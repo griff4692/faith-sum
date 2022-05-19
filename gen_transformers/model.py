@@ -263,41 +263,62 @@ class TransformerSummarizer(pl.LightningModule):
         avg_margin = torch.stack(margin_losses).mean()
         return avg_margin
 
+    def implement_oracle_masking(self, cls_mask, priority):
+        # Update Cross Attention Masking to cover top K relevant sentences from source text
+        # K determined by --oracle_mask_k
+        # Relevance, here, determined by average of ROUGE-1 and ROUGE-2 F1 (order is given by priority)
+        updated_attention_masks = []
+        batch_size = len(priority)
+        for batch_idx in range(batch_size):
+            p = priority[batch_idx]
+            trunc_idx = min(len(p), self.hparams.oracle_mask_k)
+            cls_locations = cls_mask[batch_idx].unsqueeze(0)
+            idx_to_keep = p[:trunc_idx]
+            # Masks everything but the sentences specified by idx_to_keep
+            # cls_locations is True if there's a <s{idx}> tag in the spot, 0 otherwise.
+            # Used for sentence boundary detection in the method.
+            updated_mask = sentence_mask(cls_locations, idx_to_keep)
+            updated_attention_masks.append(updated_mask)
+        return torch.cat(updated_attention_masks)
+
     def training_step(self, batch, batch_idx):
         # Train on extractive labels
         plan_labels = batch.pop('plan_labels', None)
         priority = batch.pop('priority', None)
         cls_mask = batch.pop('cls_mask')
+        # Can't be passed into BART (unused in training_step but helpful for debugging purposes)
         reference = batch.pop('reference', None)
 
-        if self.hparams.summary_style != 'score':
-            output = self.model(**batch, use_cache=False)
+        full_loss = 0
+        labels = batch.pop('labels', None)
+        output = self.model.model.encoder(**batch)
+        encoder_h = output.last_hidden_state
+
+        # Do this after the Encoder Step to ensure full self attention in encoder
+        attention_mask = (
+            self.implement_oracle_masking(cls_mask, priority)
+            if self.hparams.oracle_cross_mask else batch['attention_mask']
+        )
+        if self.hparams.summary_style != 'score':  # score is just extraction (no word-level generation)
+            updated_inputs = {
+                'encoder_outputs': [encoder_h],
+                'attention_mask': attention_mask,
+                'labels': labels,
+            }
+            output = self.model(**updated_inputs, use_cache=False)
             # Regular MLE decoder loss
             loss = output.loss
             self.log('train_loss', loss, on_epoch=False, on_step=True, prog_bar=True)
             # Return label-smoothed loss
-            full_loss = self.label_smoother(output, batch['labels'])
-            encoder_h = output.encoder_last_hidden_state
-        else:
-            full_loss = 0
-            output = self.model.model.encoder(**batch)
-            encoder_h = output.last_hidden_state
+            full_loss = self.label_smoother(output, labels)
 
         if plan_labels is not None:
-            # Predict if a sentence is in oracle summary
+            assert 'score' in self.hparams.summary_style
+            # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
             plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels)
-
             self.log('train_plan', plan_loss, on_epoch=False, on_step=True, prog_bar=True)
-            if full_loss is None:
-                full_loss = plan_loss
-            else:
-                full_loss += plan_loss
-                self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
-
-            if self.hparams.add_brio:
-                avg_margin = self.brio_step(self, priority, cls_mask, batch, reference, encoder_h)
-                self.log('train_contrast', avg_margin, on_epoch=False, on_step=True, prog_bar=True)
-                full_loss += avg_margin
+            full_loss += plan_loss
+            self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
 
         return full_loss
 
@@ -340,6 +361,7 @@ class TransformerSummarizer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         # Train on extractive labels
         plan_labels = batch.pop('plan_labels', None)
+        priority = batch.pop('priority', None)
         cls_mask = batch.pop('cls_mask')
         batch_size = len(batch['input_ids'])
         references = batch['reference']
@@ -352,19 +374,25 @@ class TransformerSummarizer(pl.LightningModule):
             'references': batch.pop('reference'),
         }
 
-        if self.hparams.summary_style != 'score':
-            output = self.model(**batch, use_cache=False)
+        labels = batch.pop('labels', None)  # Can't pass labels into encoder
+        output = self.model.model.encoder(**batch)
+        encoder_h = output.last_hidden_state
+        batch['labels'] = labels
+
+        # Do this after the Encoder Step to ensure full self attention in encoder
+        if self.hparams.oracle_cross_mask:
+            batch['attention_mask'] = self.implement_oracle_masking(cls_mask, priority)
+
+        if self.hparams.summary_style != 'score':  # score is just extraction (no word-level generation)
+            updated_inputs = {
+                'encoder_outputs': [encoder_h],
+                'attention_mask': batch['attention_mask'],
+                'labels': labels,
+            }
+            output = self.model(**updated_inputs, use_cache=False)
             # Regular MLE decoder loss
             loss = output.loss
-            encoder_h = output.encoder_last_hidden_state
-        else:
-            loss = 0
-            encoder_kwargs = {
-                'input_ids': batch['input_ids'],
-                'attention_mask': batch['attention_mask']
-            }
-            output = self.model.model.encoder(**encoder_kwargs)
-            encoder_h = output.last_hidden_state
+            self.log('val_loss', loss, on_epoch=True, on_step=False, prog_bar=True)
 
         score_outputs = [None for _ in range(batch_size)]
         if 'score' in self.hparams.summary_style:
@@ -390,7 +418,7 @@ class TransformerSummarizer(pl.LightningModule):
         # Merge the two if needed (score_abstract only)
         gen_outputs_resolved = self.merge_outputs(gen_outputs, score_outputs)
 
-        all_metrics = {'val_loss': loss}
+        all_metrics = {}
         # It's a list of dictionaries --> convert into dictionary of lists and process as a batch (for ROUGE)
         output_dict = defaultdict(list)
         for item in gen_outputs_resolved:
@@ -489,6 +517,7 @@ class TransformerSummarizer(pl.LightningModule):
         references = batch.pop('reference')
         cls_mask = batch.pop('cls_mask')
         plan_labels = batch.pop('plan_labels', None)
+        priority = batch.pop('priority', None)
         plan_q = batch.pop('plan_q', None)
         use_hf_rouge = gen_kwargs.pop('use_hf_rouge')
         eval = not use_hf_rouge

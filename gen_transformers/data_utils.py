@@ -43,11 +43,10 @@ class Seq2SeqCollate:
         batch_size = len(batch_list)
         num_cls = batch['cls_mask'].sum(dim=1)
         labels = [x['plan_labels'] for x in batch_list]
-        if self.split == 'train':
-            priorities = [x['sent_priority'] for x in batch_list]
-            priorities_trunc = [x[:num_cls[batch_idx]] for batch_idx, x in enumerate(priorities)]
-            priorities_trunc = [list(np.argsort(-x)) for x in priorities_trunc]
-            batch['priority'] = priorities_trunc
+        priorities = [x['sent_priority'] for x in batch_list]
+        priorities_trunc = [x[:num_cls[batch_idx]] for batch_idx, x in enumerate(priorities)]
+        priorities_trunc = [list(np.argsort(-x)) for x in priorities_trunc]
+        batch['priority'] = priorities_trunc
         valid_idxs = []
         labels_trunc = []
         for batch_idx in range(batch_size):
