@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-import itertools
 import nltk
 import numpy as np
 import torch
@@ -11,21 +10,8 @@ def postprocess_text(texts):
     return ['\n'.join(nltk.sent_tokenize(text.strip())) for text in texts]
 
 
-def source_from_ids(input_ids, nlp, tokenizer):
-    source = tokenizer.batch_decode(input_ids.tolist(), skip_special_tokens=True)
-    source_docs = [list(nlp(x).sents) for x in source]
-    source_doc_sents_tok = [
-        [[str(token.text) for token in sentence] for sentence in doc] for doc in source_docs
-    ]
-    return {
-        'text': source,
-        'sents': source_docs,
-        'sent_toks': source_doc_sents_tok
-    }
-
-
 class Seq2SeqCollate:
-    def __init__(self, tokenizer, max_input_length=8192, max_output_length=512, add_cols=None, split=None, verbose=False):
+    def __init__(self, tokenizer, max_input_length=8192, max_output_length=512, split=None, verbose=False):
         self.tokenizer = tokenizer
         self.max_input_length = max_input_length
         assert self.max_input_length <= tokenizer.model_max_length
@@ -33,7 +19,6 @@ class Seq2SeqCollate:
         self.pad_id = tokenizer.pad_token_id
         self.cls_token_id = tokenizer.cls_token_id
         self.eos_token_id = tokenizer.eos_token_id
-        self.add_cols = [] if add_cols is None else add_cols
         self.split = split
         additional_ids = self.tokenizer.additional_special_tokens_ids
         self.special_id_min = 999999 if len(additional_ids) == 0 else min(self.tokenizer.additional_special_tokens_ids)
@@ -88,14 +73,16 @@ class Seq2SeqCollate:
         batch['input_ids'] = inputs.input_ids
         batch['attention_mask'] = inputs.attention_mask
         batch['cls_mask'] = batch['input_ids'] >= self.special_id_min
-        for col in self.add_cols:
-            batch[col] = [x[col] for x in batch_list]
+        batch['references'] = [x['reference'] for x in batch_list]
 
         if 'plan_labels' in batch_list[0] and batch_list[0]['plan_labels'] is not None:
             valid_idxs = self.sent_extract_labels(batch_list, batch)
             if len(valid_idxs) < len(batch_list) and self.split == 'train':
                 num_to_remove = len(batch_list) - len(valid_idxs)
-                print(f'Removing {num_to_remove} examples where the plan label has been truncated bc after 1024 WPs')
+                if self.verbose:
+                    print(
+                        f'Removing {num_to_remove} examples where the plan label has been truncated bc after 1024 WPs'
+                    )
                 new_batch_list = [batch_list[i] for i in valid_idxs]
                 return self(new_batch_list)
 

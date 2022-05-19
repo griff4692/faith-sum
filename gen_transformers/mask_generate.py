@@ -15,22 +15,11 @@ from data_utils import get_path_from_exp
 from eval.rouge_metric import RougeMetric
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from gen_transformers.model import TransformerSummarizer
+from gen_transformers.model_utils import sentence_mask
 from preprocess.extract_oracles import convert_to_sents
 from datasets import load_dataset
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
-
-
-def sentence_mask(cls_mask, sent_idx_to_mask):
-    sent_mask = torch.zeros_like(cls_mask, device=cls_mask.device).long()
-    sent_locs = cls_mask.nonzero()[:, 1]
-    num_sents = len(sent_locs)
-    for sent_idx, sent_loc in enumerate(sent_locs):
-        sent_loc = sent_loc.item()
-        end_loc = sent_locs[sent_idx + 1].item() if sent_idx + 1 < num_sents else len(sent_locs)
-        if sent_idx in sent_idx_to_mask:
-            sent_mask[0, sent_loc:end_loc] = 1
-    return sent_mask
 
 
 def compute_rouge(generated, gold, rouge_metric, prefix=''):
@@ -171,7 +160,7 @@ if __name__ == '__main__':
             end_range = min(n, length)
             unmask_idxs = list(sorted(priority[:end_range]))
             idxs.append(unmask_idxs)
-            masks.append(sentence_mask(cls_mask, unmask_idxs))
+            masks.append(sentence_mask(cls_mask, unmask_idxs, attention_mask))
 
         extracts_by_target_length = [' '.join(str(source_sents[i]) for i in idx) for idx in idxs]
         row = {}

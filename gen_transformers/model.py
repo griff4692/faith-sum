@@ -18,26 +18,12 @@ from transformers.trainer_pt_utils import LabelSmoother
 from transformers.models.bart.modeling_bart import BartForConditionalCopy
 
 from preprocess.extract_oracles import convert_to_sents
+from gen_transformers.model_utils import implement_oracle_masking
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from eval.rouge_metric import RougeMetric
 
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
-
-
-def sentence_mask(cls_mask, sent_idx_to_mask, prev_mask):
-    sent_mask = torch.zeros_like(cls_mask, device=cls_mask.device).long()
-    sent_locs = cls_mask.nonzero()[:, 1]
-    max_seq_len = cls_mask.size()[1]
-    num_sents = len(sent_locs)
-    for sent_idx, sent_loc in enumerate(sent_locs):
-        sent_loc = sent_loc.item()
-        end_loc = sent_locs[sent_idx + 1].item() if sent_idx + 1 < num_sents else max_seq_len
-        if sent_idx in sent_idx_to_mask:
-            sent_mask[0, sent_loc:end_loc] = 1
-    sent_mask[:, 0] = 1  # Always attend to the BOS token
-    sent_mask.masked_fill_(prev_mask == 0, 0)
-    return sent_mask
 
 
 class TransformerSummarizer(pl.LightningModule):
@@ -48,20 +34,17 @@ class TransformerSummarizer(pl.LightningModule):
         assert self.hparams.max_input_length <= self.tokenizer.model_max_length
         self.model = AutoModelForSeq2SeqLM.from_pretrained(hf_model)
         self.config = self.model.config
-        # self.config.output_attentions = True  # Keep track of them
         self.model.resize_token_embeddings(len(tokenizer))
         self.lr = self.hparams.lr  # Necessary for tune_lr to work with PytorchLightning
         self.rouge = load_metric('rouge')
         self.label_smoother = LabelSmoother(epsilon=0.1)
         self.nlp = spacy.load('en_core_web_sm')
         self.rouge_metric = RougeMetric()
-        # <sep> separates plan from abstract for plan models
-        if 'plan' in self.hparams.summary_style:
-            self.special_id_cutoff = self.tokenizer.convert_tokens_to_ids('<sep>')
 
         self.sent_bart = None
         if 'score' in self.hparams.summary_style:
             self.sent_config = deepcopy(self.config)
+            # Should be tunable
             self.sent_config.encoder_layers = 2
             self.sent_config.decoder_layers = 2
             # (everything else is copied from other BARTEncoder)
@@ -70,358 +53,78 @@ class TransformerSummarizer(pl.LightningModule):
             # self.sent_bart.model.encoder.layers[-1].load_state_dict(self.model.model.encoder.layers[-1].state_dict())
             self.stop_embed = nn.Embedding(num_embeddings=1, embedding_dim=self.sent_config.d_model, padding_idx=None)
 
-    def parse_source_text_from_inputs(self, batch):
-        source_special = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
-        source_no_special = self.tokenizer.batch_decode(batch['input_ids'].tolist(), skip_special_tokens=True)
-        if self.hparams.add_sent_toks:  # If we have sentences demarcated in the source text
-            source_sents = list(map(lambda x: re.split(
-                r'<s\d*>', x.replace('<s>', '').replace('</s>', '').replace('<pad>', '').strip())[1:], source_special))
-            source_sents = list(map(lambda ss: list(map(lambda x: x.strip(), ss)), source_sents))
-            source_sent_toks = [
-                [[str(t.text).strip() for t in self.nlp(sentence) if len(str(t.text).strip()) > 0] for sentence in doc]
-                for doc in source_sents
-            ]
-        else:  # We have to sentence split ourselves
-            source_sents = [convert_to_sents(x, self.nlp) for x in source_no_special]
-            source_sent_toks = [
-                [[str(t.text).strip() for t in sentence if len(str(t.text).strip()) > 0] for sentence in doc]
-                for doc in source_sents
-            ]
-            source_sents = list(map(lambda ss: [str(x).strip() for x in ss], source_sents))
-        return [{'text': a.strip(), 'sents': b, 'sent_toks': c} for a, b, c in
-                zip(source_no_special, source_sents, source_sent_toks)]
+    def shared_step(self, batch):
+        metrics = {}
+        return_loss = 0
 
-    def compute_ll(self, batch, labels, output):
-        batch_size = len(output[1])
-        num_cand = len(labels) // batch_size
-        # Ignore the <eos> token
-        # Tile this for each num_neg or num_pos decoder target
-        model_dim = self.model.config.d_model  # 768 for BART (24 for debug shleifer/tiny-random)
-        encoder_outputs = output.encoder_last_hidden_state.unsqueeze(1).repeat(
-            1, num_cand, 1, 1).contiguous().view(batch_size * num_cand, -1, model_dim).clone()
-        encoder_attention_mask = batch['attention_mask'].unsqueeze(1).repeat(
-            1, num_cand, 1).contiguous().view(batch_size * num_cand, -1)
-        inputs = {
-            'encoder_outputs': [encoder_outputs],
-            'attention_mask': encoder_attention_mask,
-            'labels': labels,
-        }
-
-        outputs = self.model(**inputs, use_cache=False)
-        # Separately compute NLL for plan (pre <sep>) and NLL for abstract (post <sep>)
-        plan_nll, abstract_nll = [], []
-        for cand_idx in range(len(labels)):
-            label_row = labels[cand_idx]
-            cutoff = int(torch.where(label_row == self.special_id_cutoff)[0])
-
-            label_row_plan = label_row[:cutoff]
-            loss_row_plan = {'logits': outputs['logits'][cand_idx, : cutoff, :]}
-            plan_nll.append(self.label_smoother(loss_row_plan, label_row_plan))
-
-            label_row_abstract = label_row[cutoff + 1:]
-            loss_row_abstract = {'logits': outputs['logits'][cand_idx, cutoff + 1:, :]}
-            abstract_nll.append(self.label_smoother(loss_row_abstract, label_row_abstract))
-
-        return plan_nll, abstract_nll
-
-    # def contrast_loss(self, batch_size, num_neg_cand, batch_nll_pos, batch_nll_neg):
-    #     """
-    #     :param batch_size: Batch Size
-    #     :param num_neg_cand: Number of negative targets for each example in batch (batch_size * num_neg_cand total)
-    #     :param batch_nll_pos: Negative Log Likelihoods for generating the 'positive' ground-truth
-    #     :param batch_nll_neg: Negative Log Likelihoods for generating the 'negative' ground-truth
-    #     :return: Margin losses for each pair of pos and neg.  Positive targets should have a higher LL than negatives,
-    #     with a margin defined by --contrast_margin.
-    #     """
-    #     margin_losses = []
-    #     for batch_idx in range(batch_size):
-    #         pos_ll = - batch_nll_pos[batch_idx]
-    #         neg_nll_cands = batch_nll_neg[batch_idx * num_neg_cand: (batch_idx + 1) * num_neg_cand]
-    #         for neg_nll_cand in neg_nll_cands:
-    #             neg_ll_cand = - neg_nll_cand
-    #             margin_losses.append(torch.clamp(neg_ll_cand - pos_ll + self.hparams.contrast_margin, min=0))
-    #     return margin_losses
-
-    def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
-        all_summaries = []
-        y_hat_cls = y_hat[np.where(y_hat > float('-inf'))]
-        priority = expit(y_hat_cls.copy())
-        trigram_to_sent_idx = sent_idx_to_trigram = None
-        if trigram_block:
-            trigram_to_sent_idx = defaultdict(list)
-            sent_idx_to_trigram = defaultdict(list)
-
-            for sent_idx, sent in enumerate(source['sents']):
-                sent_toks = [t for t in re.sub('\W+', ' ', sent.lower()).split(' ') if len(t) > 0]
-                sent_trigrams = list(trigrams(sent_toks))
-                for trigram in sent_trigrams:
-                    trigram_to_sent_idx[trigram].append(sent_idx)
-                    sent_idx_to_trigram[sent_idx].append(trigram)
-
-        for k in range(min(max_num_sents, len(source['sents']))):
-            top_sent = np.argmax(priority)
-            priority[top_sent] = float('-inf')
-            if trigram_block:
-                for trigram in sent_idx_to_trigram[top_sent]:
-                    for other_sent_idx in trigram_to_sent_idx[trigram]:
-                        priority[other_sent_idx] = float('-inf')
-            # Matching Trigrams
-            prev_sents = [] if k == 0 else all_summaries[k - 1]
-            summary_at_k = prev_sents + [top_sent]
-            all_summaries.append(summary_at_k)
-        summary_idx = all_summaries[-1]
-        return_obj = self.get_summary_from_sent_idxs(source, summary_idx)
-        return_obj['sent_dist'] = y_hat_cls
-        return return_obj
-
-    def plan_loss(self, cls_mask, encoder_h, plan_labels):
-        # Decoder inputs embeds
-        # Take Oracle, concatenate it with sentence markers
-        batch_size = len(cls_mask)
-        losses = []
-        stop_input_id = torch.LongTensor([0]).to(self.device)
-        for batch_idx in range(batch_size):
-            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
-            seq_len = cls_h.size()[1]
-            labels = plan_labels[batch_idx]
-            eos_dummy = torch.LongTensor([seq_len]).to(self.device)
-            labels = torch.cat([labels, eos_dummy]).unsqueeze(0)
-            # Concatenate
-            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
-            outputs = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
-            loss = self.label_smoother(outputs, labels)
-            losses.append(loss)
-        return torch.stack(losses).mean()
-
-    # def brio_step(self, priority, cls_mask, batch, reference, encoder_h, mask_upperbound=10):
-    #     batch_size = len(priority)
-    #     margin_losses = []
-    #     pos_neg_gap = []
-    #     for batch_idx in range(batch_size):
-    #         p = priority[batch_idx]
-    #         input_ids = batch['input_ids'][batch_idx]
-    #         mask_range = list(range(1, mask_upperbound + 1))
-    #         masks = []
-    #         for num in mask_range:
-    #             if num > len(p):
-    #                 continue
-    #             masks.append(sentence_mask(cls_mask[batch_idx].unsqueeze(0), p[:num], batch['attention_mask']))
-    #         all_masks = torch.cat(masks)
-    #         num_cand = len(all_masks)
-    #
-    #         input_ids_rep = input_ids.repeat(num_cand, 1)
-    #         kwargs = {
-    #             'input_ids': input_ids_rep,
-    #             'attention_mask': all_masks,
-    #             'num_return_sequences': 1,
-    #             'num_beams': 1,
-    #             'length_penalty': 4.0,
-    #             'max_length': 142,
-    #             'min_length': 56,
-    #             'no_repeat_ngram_size': 3,
-    #             'early_stopping': True,
-    #         }
-    #
-    #         with torch.no_grad():
-    #             pred_ids = self.model.generate(**kwargs)
-    #         pred_str = [x.strip() for x in self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)]
-    #
-    #         scores = []
-    #         for idx, x in enumerate(pred_str):
-    #             scores.append(self.compute_rouge([x], [reference], rouge_types=['rouge1'])['rouge1_f1'])
-    #         labels = pred_ids
-    #         labels[:, 0] = 0
-    #
-    #         encoder_outputs = encoder_h[batch_idx].unsqueeze(0).repeat(num_cand, 1, 1).contiguous().clone()
-    #         encoder_attention_mask = batch['attention_mask'][batch_idx].unsqueeze(0).repeat(num_cand, 1).contiguous()
-    #         inputs = {
-    #             'encoder_outputs': [encoder_outputs],
-    #             'attention_mask': encoder_attention_mask,
-    #             'labels': labels,
-    #         }
-    #
-    #         cand_outputs = self.model(**inputs, use_cache=False)
-    #         nll = []
-    #         for cand_idx in range(len(labels)):
-    #             label_row = labels[cand_idx]
-    #             loss_row_full = {'logits': cand_outputs['logits'][cand_idx]}
-    #             nll.append(self.label_smoother(loss_row_full, label_row))
-    #
-    #         ranks = np.argsort(-np.array(scores))
-    #
-    #         # Compute Rank Score (not for back-prop)
-    #         for a in range(num_cand - 1):
-    #             pos_idx = ranks[a]
-    #             for b in range(a + 1, num_cand):
-    #                 neg_idx = ranks[b]
-    #                 assert scores[neg_idx] <= scores[pos_idx]
-    #                 pos_ll = - nll[pos_idx]
-    #                 neg_ll = - nll[neg_idx]
-    #                 if scores[neg_idx] == scores[pos_idx]:  # Don't train on equal / identical candidates
-    #                     continue
-    #                 margin = self.hparams.contrast_margin * (b - a)
-    #                 margin_losses.append(torch.clamp(neg_ll - pos_ll + margin, min=0))
-    #                 pos_neg_gap.append(float((pos_ll - neg_ll).detach().item()))
-    #
-    #     avg_margin = torch.stack(margin_losses).mean()
-    #     return avg_margin
-
-    def implement_oracle_masking(self, cls_mask, priority, prev_attention_mask):
-        # Update Cross Attention Masking to cover top K relevant sentences from source text
-        # K determined by --oracle_mask_k
-        # Relevance, here, determined by average of ROUGE-1 and ROUGE-2 F1 (order is given by priority)
-        updated_attention_masks = []
-        batch_size = len(priority)
-        for batch_idx in range(batch_size):
-            p = priority[batch_idx]
-            trunc_idx = min(len(p), self.hparams.oracle_mask_k)
-            cls_locations = cls_mask[batch_idx].unsqueeze(0)
-            prev_mask = prev_attention_mask[batch_idx].unsqueeze(0)
-            idx_to_keep = p[:trunc_idx]
-            # Masks everything but the sentences specified by idx_to_keep
-            # cls_locations is True if there's a <s{idx}> tag in the spot, 0 otherwise.
-            # Used for sentence boundary detection in the method.
-            updated_mask = sentence_mask(cls_locations, idx_to_keep, prev_mask)
-            updated_attention_masks.append(updated_mask)
-        return torch.cat(updated_attention_masks)
-
-    def training_step(self, batch, batch_idx):
-        # Train on extractive labels
-        plan_labels = batch.pop('plan_labels', None)
-        priority = batch.pop('priority', None)
-        cls_mask = batch.pop('cls_mask')
-        # Can't be passed into BART (unused in training_step but helpful for debugging purposes)
-        reference = batch.pop('reference', None)
-
-        full_loss = 0
-        labels = batch.pop('labels', None)
-        output = self.model.model.encoder(**batch)
-        encoder_h = output.last_hidden_state
+        encoder_h = self.get_encoder_h({'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask']})
 
         # Do this after the Encoder Step to ensure full self attention in encoder
         if self.hparams.oracle_cross_mask:
-            batch['attention_mask'] = self.implement_oracle_masking(cls_mask, priority, batch['attention_mask'])
+            batch['attention_mask'] = implement_oracle_masking(batch, oracle_mask_k=self.hparams.oracle_mask_k)
 
-        if self.hparams.summary_style != 'score':  # score is just extraction (no word-level generation)
-            updated_inputs = {
-                'encoder_outputs': [encoder_h],
-                'attention_mask': batch['attention_mask'],
-                'labels': labels,
-            }
-            output = self.model(**updated_inputs, use_cache=False)
-            # Regular MLE decoder loss
-            loss = output.loss
-            self.log('train_loss', loss, on_epoch=False, on_step=True, prog_bar=True)
-            # Return label-smoothed loss
-            full_loss = self.label_smoother(output, labels)
-
-        if plan_labels is not None:
+        if batch['plan_labels'] is not None:
             assert 'score' in self.hparams.summary_style
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
-            plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels)
-            self.log('train_plan', plan_loss, on_epoch=False, on_step=True, prog_bar=True)
-            full_loss += plan_loss
-            self.log('train_combined', full_loss, on_epoch=False, on_step=True, prog_bar=True)
+            plan_loss = self.plan_loss(batch['cls_mask'], encoder_h, batch['plan_labels'])
+            metrics['extract'] = plan_loss
+            return_loss += plan_loss
 
-        return full_loss
-
-    def score_extracts(self, source, cls_mask, encoder_h, plan_labels=None):
-        extractive_summaries = []
-        batch_size = len(cls_mask)
-        stop_input_id = torch.LongTensor([0]).to(self.device)
-        for batch_idx in range(batch_size):
-            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
-            seq_len = cls_h.size()[1]
-            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
-            kwargs = {
-                'inputs_embeds': inputs_embeds,
-                # 'length_penalty': 1.0,  # Didn't find a better value than not setting it at all on very small set
-                'eos_token_id': seq_len,
-                'num_return_sequences': 1,
-                'min_length': 3,
-                'max_length': 10,
-                # 'no_repeat_ngram_size': 1,
-                'early_stopping': True,
-                'output_scores': True,
-                'num_beams': 4,
-            }
-
-            pred_ids = self.sent_bart.generate(**kwargs)
-            summary_idx = pred_ids.tolist()[0]
-            assert summary_idx[0] == self.sent_config.decoder_start_token_id
-            summary_idx_no_special = summary_idx[1:]
-            assert summary_idx[-1] in {seq_len, self.sent_config.decoder_start_token_id}
-            summary_idx_no_special = summary_idx_no_special[:-1]
-            # Generation could end in padded ids? (if num_return_sequences > 1)
-            assert seq_len not in summary_idx_no_special
-            return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
-            extractive_summaries.append(return_obj)
-        if plan_labels is None:
-            return extractive_summaries
-        plan_loss = self.plan_loss(cls_mask, encoder_h, plan_labels)
-        return extractive_summaries, plan_loss
-
-    def validation_step(self, batch, batch_idx):
-        # Train on extractive labels
-        plan_labels = batch.pop('plan_labels', None)
-        priority = batch.pop('priority', None)
-        cls_mask = batch.pop('cls_mask')
-        batch_size = len(batch['input_ids'])
-        references = batch['reference']
-
-        source = self.parse_source_text_from_inputs(batch)
-
-        validation_kwargs = {
-            'num_beams': 1,
-            'num_return_sequences': 1,  # Don't over-generate for validation
-            'references': batch.pop('reference'),
-        }
-
-        labels = batch.pop('labels', None)  # Can't pass labels into encoder
-        output = self.model.model.encoder(**batch)
-        encoder_h = output.last_hidden_state
-        batch['labels'] = labels
-
-        # Do this after the Encoder Step to ensure full self attention in encoder
-        if self.hparams.oracle_cross_mask:
-            batch['attention_mask'] = self.implement_oracle_masking(cls_mask, priority, batch['attention_mask'])
-
-        if self.hparams.summary_style != 'score':  # score is just extraction (no word-level generation)
+        # score is just extraction (no word-level generation)
+        if self.hparams.summary_style != 'score':
             updated_inputs = {
                 'encoder_outputs': [encoder_h],
                 'attention_mask': batch['attention_mask'],
-                'labels': labels,
+                'labels': batch['labels'],
             }
             output = self.model(**updated_inputs, use_cache=False)
             # Regular MLE decoder loss
-            loss = output.loss
-            self.log('val_loss', loss, on_epoch=True, on_step=False, prog_bar=True)
+            metrics['loss'] = output.loss  # Log unsmoothed loss for comparison to earlier runs.
+            # Return label-smoothed loss for BART Decoder
+            smooth_lm_loss = self.label_smoother(output, batch['labels'])
+            return_loss += smooth_lm_loss
+        return {'metrics': metrics, 'return_loss': return_loss, 'encoder_h': encoder_h}
 
+    def training_step(self, batch, batch_idx):
+        shared_output = self.shared_step(batch)
+        metrics, return_loss = shared_output['metrics'], shared_output['return_loss']
+        metrics['combined'] = return_loss
+        self.log_metrics(metrics, is_train=True, prefix='train_')
+        return return_loss
+
+    def validation_step(self, batch, batch_idx):
+        batch_size = len(batch['input_ids'])
+
+        source = self.parse_source_text_from_inputs(batch)
+        shared_output = self.shared_step(batch)
+        metrics, return_loss = shared_output['metrics'], shared_output['return_loss']
+        metrics['combined'] = return_loss
+        self.log_metrics(metrics, is_train=False, prefix='val_')
+
+        encoder_h = shared_output['encoder_h']
         score_outputs = [None for _ in range(batch_size)]
         if 'score' in self.hparams.summary_style:
-            extractive_summaries, extract_loss = self.score_extracts(source, cls_mask, encoder_h, plan_labels)
+            extractive_summaries, extract_loss = self.score_extracts(batch, source, encoder_h)
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],
                     'abstracts': None, 'implied_extracts': None,
                     'extracts': [extractive_summaries[batch_idx]],
-                    'reference': references[batch_idx],
+                    'reference': batch['references'][batch_idx],
                 }
-            self.log('val_extract', extract_loss, on_epoch=True, on_step=False, prog_bar=True)
-            if loss is None:  # No generation
-                loss = extract_loss
-            else:
-                loss += extract_loss
-                self.log('val_combined', loss, on_epoch=True, on_step=False, prog_bar=True)
 
         gen_outputs = [None for _ in range(batch_size)]
+        validation_kwargs = {
+            'num_beams': 1,
+            'num_return_sequences': 1,  # Don't over-generate for validation
+            'references': batch['references'],
+        }
         if self.hparams.summary_style != 'score':
             gen_outputs = self.shared_generate(batch, source, **validation_kwargs)
 
         # Merge the two if needed (score_abstract only)
         gen_outputs_resolved = self.merge_outputs(gen_outputs, score_outputs)
 
-        all_metrics = {}
         # It's a list of dictionaries --> convert into dictionary of lists and process as a batch (for ROUGE)
         output_dict = defaultdict(list)
         for item in gen_outputs_resolved:
@@ -431,105 +134,40 @@ class TransformerSummarizer(pl.LightningModule):
                 elif v is not None:
                     output_dict[k].append(v)
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
+        eval_metrics = {}
         if self.hparams.summary_style in {'abstract_plan', 'plan_abstract'}:
             from_oracle_rouge = self.generate_from_oracle(batch, reduce=True, **validation_kwargs)
-            all_metrics.update(from_oracle_rouge)
+            eval_metrics.update(from_oracle_rouge)
 
         if len(output_dict['abstracts']) > 0:
-            all_metrics.update(self.compute_rouge(output_dict['abstracts'], references))
+            eval_metrics.update(self.compute_rouge(output_dict['abstracts'], batch['references']))
             implied_extracts = [x['summary'] for x in output_dict['implied_extracts']]
-            all_metrics.update(self.compute_rouge(implied_extracts, references, prefix='implied_'))
+            eval_metrics.update(self.compute_rouge(implied_extracts, batch['references'], prefix='implied_'))
 
         if len(output_dict['extracts']) > 0:
             extracts = [x['summary'] for x in output_dict['extracts']]
-            all_metrics.update(self.compute_rouge(extracts, references, prefix='extract_'))
+            eval_metrics.update(self.compute_rouge(extracts, batch['references'], prefix='extract_'))
 
         # Measure consistency between abstract (and implied extract) and generated extract
         if len(output_dict['abstracts']) > 0 and len(output_dict['extracts']) > 0:
             if 'score' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
-                all_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
+                eval_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
             # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
             # If the plan is working, this should be very high (the abstract should follow the plan)
             extracts = [x['summary'] for x in output_dict['extracts']]
-            all_metrics.update(
+            eval_metrics.update(
                 self.compute_rouge(extracts, output_dict['abstracts'], prefix='extract_gen_')
             )
 
-        for k, v in all_metrics.items():
-            self.log(k, v, on_step=False, on_epoch=True, prog_bar=True)
-
-        return loss
-
-    def score_candidates(self, reference, candidates, prefix, eval=False):
-        cand_metrics = [self.compute_rouge(
-            [abstract], reference, prefix=f'best_{prefix}_', eval=eval
-        ) for abstract in candidates]
-        best_metric = sorted(cand_metrics, key=lambda x: x[f'best_{prefix}_mean_f1'])[-1]
-        return cand_metrics, best_metric
-
-    def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
-        oracle_strs = [x.split('<sep>')[0].replace('<s>', '') for x in self.tokenizer.batch_decode(batch['labels'])]
-        references = gen_kwargs.pop('references')
-        results = []
-        for batch_idx in range(len(batch['input_ids'])):
-            decoder_input_ids = self.tokenizer.encode(
-                '<s></s>' + oracle_strs[batch_idx] + '<sep>',
-                add_special_tokens=False, return_tensors='pt'
-            ).to(self.device)
-
-            default_kwargs = {  # Some of these values may get overridden by gen_kwargs
-                'input_ids': batch['input_ids'][batch_idx].unsqueeze(0),
-                'attention_mask': batch['attention_mask'][batch_idx].unsqueeze(0),
-                'decoder_input_ids': decoder_input_ids,
-                'num_return_sequences': 1,
-                'max_length': self.hparams.max_output_length,
-                'no_repeat_ngram_size': 3,
-                'early_stopping': True,
-                'output_scores': True
-            }
-
-            default_kwargs.update(gen_kwargs)
-            pred_ids = self.model.generate(**default_kwargs)
-            pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
-            row = self.compute_rouge([pred], [references[batch_idx]], prefix='oracle_prompt_', eval=eval)
-            results.append(row)
-        if reduce:
-            df = pd.DataFrame(results)
-            return {col: df[col].dropna().mean for col in df.columns}
-        return results
-
-    def merge_outputs(self, gen_outputs, score_outputs):
-        if self.hparams.summary_style == 'score':
-            return score_outputs
-        merged = []
-        assert len(score_outputs) == len(gen_outputs)
-        for batch_idx in range(len(score_outputs)):
-            row = {}
-            if gen_outputs[batch_idx] is not None:
-                row.update(gen_outputs[batch_idx])
-            if score_outputs[batch_idx] is not None:
-                for k, v in score_outputs[batch_idx].items():
-                    if v is None or row[k] is not None:
-                        continue
-                    row[k] = v
-            merged.append(row)
-        return merged
+        self.log_metrics(eval_metrics, is_train=False, prefix='')
+        return return_loss
 
     def predict_step(self, batch, batch_idx=None, **gen_kwargs):
         source = self.parse_source_text_from_inputs(batch)
-        references = batch.pop('reference')
-        cls_mask = batch.pop('cls_mask')
-        plan_labels = batch.pop('plan_labels', None)
-        priority = batch.pop('priority', None)
-        plan_q = batch.pop('plan_q', None)
         use_hf_rouge = gen_kwargs.pop('use_hf_rouge')
         eval = not use_hf_rouge
-
+        references = batch['references']
         batch_size = len(references)
-        gen_kwargs.update({
-            'references': references
-        })
-
         score_outputs = [None for _ in range(batch_size)]
         if 'score' in self.hparams.summary_style:
             assert 'score' in self.hparams.summary_style
@@ -540,7 +178,7 @@ class TransformerSummarizer(pl.LightningModule):
             }
             output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
-            extractive_summaries = self.score_extracts(source, cls_mask, encoder_h)
+            extractive_summaries = self.score_extracts(batch, source, encoder_h)
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],
@@ -550,6 +188,9 @@ class TransformerSummarizer(pl.LightningModule):
                 }
 
         gen_outputs = [None for _ in range(batch_size)]
+        gen_kwargs.update({
+            'references': references
+        })
         if self.hparams.summary_style != 'score':
             gen_outputs = self.shared_generate(batch, source, **gen_kwargs)
 
@@ -636,6 +277,128 @@ class TransformerSummarizer(pl.LightningModule):
             batch_outputs.append(save_out)
 
         return batch_outputs
+
+    def get_encoder_h(self, batch):
+        return self.model.model.encoder(**batch).last_hidden_state
+
+    def plan_loss(self, cls_mask, encoder_h, plan_labels):
+        # Decoder inputs embeds
+        # Take Oracle, concatenate it with sentence markers
+        batch_size = len(cls_mask)
+        losses = []
+        stop_input_id = torch.LongTensor([0]).to(self.device)
+        for batch_idx in range(batch_size):
+            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
+            seq_len = cls_h.size()[1]
+            labels = plan_labels[batch_idx]
+            eos_dummy = torch.LongTensor([seq_len]).to(self.device)
+            labels = torch.cat([labels, eos_dummy]).unsqueeze(0)
+            # Concatenate
+            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
+            outputs = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
+            loss = self.label_smoother(outputs, labels)
+            losses.append(loss)
+        return torch.stack(losses).mean()
+
+    def score_extracts(self, batch, source, encoder_h):
+        extractive_summaries = []
+        cls_mask = batch['cls_mask']
+        batch_size = len(cls_mask)
+        stop_input_id = torch.LongTensor([0]).to(self.device)
+        for batch_idx in range(batch_size):
+            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
+            seq_len = cls_h.size()[1]
+            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
+            kwargs = {
+                'inputs_embeds': inputs_embeds,
+                # 'length_penalty': 1.0,  # Didn't find a better value than not setting it at all on very small set
+                'eos_token_id': seq_len,
+                'num_return_sequences': 1,
+                'min_length': 3,
+                'max_length': 10,
+                # 'no_repeat_ngram_size': 1,
+                'early_stopping': True,
+                'output_scores': True,
+                'num_beams': 4,
+            }
+
+            pred_ids = self.sent_bart.generate(**kwargs)
+            summary_idx = pred_ids.tolist()[0]
+            assert summary_idx[0] == self.sent_config.decoder_start_token_id
+            summary_idx_no_special = summary_idx[1:]
+            assert summary_idx[-1] in {seq_len, self.sent_config.decoder_start_token_id}
+            summary_idx_no_special = summary_idx_no_special[:-1]
+            # Generation could end in padded ids? (if num_return_sequences > 1)
+            assert seq_len not in summary_idx_no_special
+            return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
+            extractive_summaries.append(return_obj)
+        if batch['plan_labels'] is None:
+            return extractive_summaries
+        plan_loss = self.plan_loss(cls_mask, encoder_h, batch['plan_labels'])
+        return extractive_summaries, plan_loss
+
+    def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
+        all_summaries = []
+        y_hat_cls = y_hat[np.where(y_hat > float('-inf'))]
+        priority = expit(y_hat_cls.copy())
+        trigram_to_sent_idx = sent_idx_to_trigram = None
+        if trigram_block:
+            trigram_to_sent_idx = defaultdict(list)
+            sent_idx_to_trigram = defaultdict(list)
+
+            for sent_idx, sent in enumerate(source['sents']):
+                sent_toks = [t for t in re.sub('\W+', ' ', sent.lower()).split(' ') if len(t) > 0]
+                sent_trigrams = list(trigrams(sent_toks))
+                for trigram in sent_trigrams:
+                    trigram_to_sent_idx[trigram].append(sent_idx)
+                    sent_idx_to_trigram[sent_idx].append(trigram)
+
+        for k in range(min(max_num_sents, len(source['sents']))):
+            top_sent = np.argmax(priority)
+            priority[top_sent] = float('-inf')
+            if trigram_block:
+                for trigram in sent_idx_to_trigram[top_sent]:
+                    for other_sent_idx in trigram_to_sent_idx[trigram]:
+                        priority[other_sent_idx] = float('-inf')
+            # Matching Trigrams
+            prev_sents = [] if k == 0 else all_summaries[k - 1]
+            summary_at_k = prev_sents + [top_sent]
+            all_summaries.append(summary_at_k)
+        summary_idx = all_summaries[-1]
+        return_obj = self.get_summary_from_sent_idxs(source, summary_idx)
+        return_obj['sent_dist'] = y_hat_cls
+        return return_obj
+
+    def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
+        oracle_strs = [x.split('<sep>')[0].replace('<s>', '') for x in self.tokenizer.batch_decode(batch['labels'])]
+        references = gen_kwargs.pop('references')
+        results = []
+        for batch_idx in range(len(batch['input_ids'])):
+            decoder_input_ids = self.tokenizer.encode(
+                '<s></s>' + oracle_strs[batch_idx] + '<sep>',
+                add_special_tokens=False, return_tensors='pt'
+            ).to(self.device)
+
+            default_kwargs = {  # Some of these values may get overridden by gen_kwargs
+                'input_ids': batch['input_ids'][batch_idx].unsqueeze(0),
+                'attention_mask': batch['attention_mask'][batch_idx].unsqueeze(0),
+                'decoder_input_ids': decoder_input_ids,
+                'num_return_sequences': 1,
+                'max_length': self.hparams.max_output_length,
+                'no_repeat_ngram_size': 3,
+                'early_stopping': True,
+                'output_scores': True
+            }
+
+            default_kwargs.update(gen_kwargs)
+            pred_ids = self.model.generate(**default_kwargs)
+            pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
+            row = self.compute_rouge([pred], [references[batch_idx]], prefix='oracle_prompt_', eval=eval)
+            results.append(row)
+        if reduce:
+            df = pd.DataFrame(results)
+            return {col: df[col].dropna().mean for col in df.columns}
+        return results
 
     def shared_generate(self, batch, source, references, **gen_kwargs):
         default_kwargs = {  # Some of these values may get overridden by gen_kwargs
@@ -854,6 +617,51 @@ class TransformerSummarizer(pl.LightningModule):
         stats[f'{prefix}mean_f1'] = np.array(f1s).mean()
         return stats
 
+    def parse_source_text_from_inputs(self, batch):
+        source_special = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
+        source_no_special = self.tokenizer.batch_decode(batch['input_ids'].tolist(), skip_special_tokens=True)
+        if self.hparams.add_sent_toks:  # If we have sentences demarcated in the source text
+            source_sents = list(map(lambda x: re.split(
+                r'<s\d*>', x.replace('<s>', '').replace('</s>', '').replace('<pad>', '').strip())[1:], source_special))
+            source_sents = list(map(lambda ss: list(map(lambda x: x.strip(), ss)), source_sents))
+            source_sent_toks = [
+                [[str(t.text).strip() for t in self.nlp(sentence) if len(str(t.text).strip()) > 0] for sentence in doc]
+                for doc in source_sents
+            ]
+        else:  # We have to sentence split ourselves
+            source_sents = [convert_to_sents(x, self.nlp) for x in source_no_special]
+            source_sent_toks = [
+                [[str(t.text).strip() for t in sentence if len(str(t.text).strip()) > 0] for sentence in doc]
+                for doc in source_sents
+            ]
+            source_sents = list(map(lambda ss: [str(x).strip() for x in ss], source_sents))
+        return [{'text': a.strip(), 'sents': b, 'sent_toks': c} for a, b, c in
+                zip(source_no_special, source_sents, source_sent_toks)]
+
+    def merge_outputs(self, gen_outputs, score_outputs):
+        if self.hparams.summary_style == 'score':
+            return score_outputs
+        merged = []
+        assert len(score_outputs) == len(gen_outputs)
+        for batch_idx in range(len(score_outputs)):
+            row = {}
+            if gen_outputs[batch_idx] is not None:
+                row.update(gen_outputs[batch_idx])
+            if score_outputs[batch_idx] is not None:
+                for k, v in score_outputs[batch_idx].items():
+                    if v is None or row[k] is not None:
+                        continue
+                    row[k] = v
+            merged.append(row)
+        return merged
+
+    def score_candidates(self, reference, candidates, prefix, eval=False):
+        cand_metrics = [self.compute_rouge(
+            [abstract], reference, prefix=f'best_{prefix}_', eval=eval
+        ) for abstract in candidates]
+        best_metric = sorted(cand_metrics, key=lambda x: x[f'best_{prefix}_mean_f1'])[-1]
+        return cand_metrics, best_metric
+
     def configure_optimizers(self):
         no_decay = ['bias', 'LayerNorm.weight']
         nps = list(self.named_parameters())
@@ -890,3 +698,7 @@ class TransformerSummarizer(pl.LightningModule):
         items = super().get_progress_bar_dict()
         items.pop('v_num', None)
         return items
+
+    def log_metrics(self, metrics, is_train, prefix=''):
+        for k, v in metrics.items():
+            self.log(f'{prefix}{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)

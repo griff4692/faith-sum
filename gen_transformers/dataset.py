@@ -5,7 +5,6 @@ import pytorch_lightning as pl
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
-from tqdm import tqdm
 
 from datasets import load_dataset
 from gen_transformers.data_utils import Seq2SeqCollate
@@ -46,12 +45,10 @@ class SummaryDataModule(pl.LightningDataModule):
         ids2oracles = {row['id']: row for row in oracle_df.to_dict('records')}
 
         split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, self.nlp, ids2oracles=ids2oracles)
-        add_cols = ['reference']
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
             max_output_length=self.args.max_output_length,
-            add_cols=add_cols,
             split=split
         )
         batch_size = self.args.per_device_train_bs if split == 'train' else self.args.per_device_eval_bs
@@ -83,20 +80,6 @@ class SummarizationDataset(Dataset):
         self.split = split
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
         self.ids2oracles = ids2oracles
-        self.temperature = 5.0
-
-        if self.args.oracle_filter and split == 'train':  # Only filter for training data
-            keep_idxs = []
-            n = len(self.dataset)
-            print(f'Filtering training dataset for high-quality oracles only: avg R1/R2 >= {self.args.oracle_cutoff}')
-            for idx, example in tqdm(enumerate(self.dataset), total=n):
-                oracle_obj = self.ids2oracles[example['id']]
-                avg_oracle_rouge = (oracle_obj['rouge_1'] + oracle_obj['rouge_2']) / 2.0
-                good_oracle = avg_oracle_rouge >= self.args.oracle_cutoff
-                if good_oracle:
-                    keep_idxs.append(idx)
-            self.dataset = self.dataset.select(keep_idxs)
-            print(f'Truncated training data from {n} to {len(self.dataset)}')
 
     def __len__(self):
         return len(self.dataset)
@@ -135,15 +118,8 @@ class SummarizationDataset(Dataset):
             source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
         # Sort oracle order or not
         target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs]).strip()
-        oracle_summary = ' '.join([str(source_sents[i]) for i in oracle_idxs])
         plan_labels = None
-
-        if self.args.summary_style == 'extract':
-            if self.split == 'train':
-                target_annotated = oracle_summary
-            else:
-                target_annotated = target  # We are evaluating on the abstractive summary
-        elif self.args.summary_style == 'plan':
+        if self.args.summary_style == 'plan':
             target_annotated = target_prefix
         elif self.args.summary_style == 'plan_abstract':
             target_annotated = f'{target_prefix}<sep>{target}'
@@ -157,18 +133,6 @@ class SummarizationDataset(Dataset):
             assert len(plan_labels) >= 1
         elif self.args.summary_style == 'abstract_plan':
             target_annotated = f'{target}<sep>{target_prefix}'
-        elif self.args.summary_style == 'hybrid_control':
-            if self.split == 'train':
-                avg_oracle_rouge = (oracle_obj['rouge_1'] + oracle_obj['rouge_2']) / 2.0
-                good_oracle = avg_oracle_rouge >= self.args.oracle_cutoff
-                prefix = '<extract>' if good_oracle else '<abstract>'
-            else:
-                # TODO We can do better than this ultimately for evaluation
-                prefix = '<extract>'  # <abstract>
-                # prefix = str(np.random.choice(['<abstract>', '<extract>'], size=(1,))[0])
-
-            target_annotated = oracle_summary if prefix == '<extract>' and self.split == 'train' else target
-            source_annotated = prefix + source_annotated
         return {
             'source': source_annotated,
             'target': target_annotated,

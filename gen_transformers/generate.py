@@ -61,11 +61,6 @@ if __name__ == '__main__':
     parser.add_argument('--num_return_sequences', default=16, type=int)
     parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('-use_hf_rouge', default=False, action='store_true')  # Much faster to use HF implementation
-    parser.add_argument(
-        '--oracle_cutoff', default=0.75, type=float,
-        help='For summary_style=hybrid_control, summaries with ranking above this will be trained as extracts'
-             '(to generate the oracle extractive summary).  Below, abstracts (to generate original reference). '
-    )
     parser.add_argument('--bootstraps', default=1, type=int)
     parser.add_argument(
         '--summary_style',
@@ -78,7 +73,6 @@ if __name__ == '__main__':
             'extract',
             'plan',
             'abstract',
-            'hybrid_control',
         ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
                 'abstract is original reference'
     )
@@ -130,7 +124,6 @@ if __name__ == '__main__':
 
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style
-    args.oracle_filter = False
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
 
@@ -143,9 +136,6 @@ if __name__ == '__main__':
         gen_kwargs = SAMPLE_KWARGS[args.dataset] if args.sample_gen else GEN_KWARGS[args.dataset]
         gen_kwargs['length_penalty'] = args.length_penalty
         gen_kwargs['use_hf_rouge'] = args.use_hf_rouge
-
-        if args.summary_style == 'plan':
-            gen_kwargs['max_length'] = 7
 
         # No reason to over-generate
         gen_kwargs['num_return_sequences'] = args.num_return_sequences if args.sample_gen else 1

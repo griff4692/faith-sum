@@ -136,15 +136,13 @@ if __name__ == '__main__':
     parser.add_argument('-find_lr', default=False, action='store_true')
     # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
-    parser.add_argument('-use_kld', default=False, action='store_true')
-    parser.add_argument('-add_consistency', default=False, action='store_true')
-    parser.add_argument('-add_brio', default=False, action='store_true')
     parser.add_argument('-oracle_cross_mask', default=False, action='store_true')
     # How many sentences to make visible to the decoder (5 is randomly set based on summary lengths of ~2-5 sentences)
     parser.add_argument('--oracle_mask_k', default=5, type=int)
 
     # Hyper-parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4
+    parser.add_argument('--weight_decay', type=float, default=5e-5)
     # Gradient accumulation will adjust for the ratio between target_batch_size and per_device_train_bs
     parser.add_argument('--target_batch_size', type=int, default=16)
     parser.add_argument('--per_device_train_bs', type=int, default=8)
@@ -152,7 +150,6 @@ if __name__ == '__main__':
     parser.add_argument('--warmup_steps', type=int, default=200)
     parser.add_argument('--max_steps', default=150000, type=int)
     parser.add_argument('--max_epochs', default=20, type=int)
-    parser.add_argument('--weight_decay', type=float, default=5e-5)
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('--max_input_length', type=int, default=1024)
@@ -206,7 +203,11 @@ if __name__ == '__main__':
     args.add_sent_toks = args.add_sent_toks or args.summary_style in {
         'plan_abstract', 'plan', 'abstract_plan', 'score_abstract', 'score',
     }
+    if args.add_sent_toks:
+        print('Pre-pending each sentence in the source document with special token <s{idx}>.')
+
     args.weight_dir = os.path.join(args.data_dir, 'weights')
+    print(f'Setting up {args.weight_dir} to store model weights, metrics, and results.')
     os.makedirs(args.weight_dir, exist_ok=True)
 
     # Set same random seed for each run
