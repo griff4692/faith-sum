@@ -40,7 +40,7 @@ def run(args):
 
     if args.add_sent_toks:
         add_tokens = [f'<s{i}>' for i in range(args.max_num_sents)]
-        add_tokens.append('<sep>')
+        add_tokens.append('<sep>')  # Not used right now
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
@@ -66,23 +66,16 @@ def run(args):
         entity='griffinadams',
     )
 
-    monitor_metric = 'val_loss'
+    monitor_metric = 'val_combined'
     mode = 'min'
-    if args.summary_style == 'score':
-        monitor_metric = 'extract_mean_f1'
-        mode = 'max'
-    elif args.summary_style == 'score_abstract':
-        monitor_metric = 'mean_f1'
-        mode = 'max'
-
     checkpoint_callback = ModelCheckpoint(
         monitor=monitor_metric,
         save_top_k=1,
         save_last=False,
         mode=mode
     )
-    early_stopping = EarlyStopping(monitor_metric, patience=25, verbose=True)
-    callbacks = [checkpoint_callback, early_stopping]
+    # early_stopping = EarlyStopping(monitor_metric, patience=20, verbose=True)
+    callbacks = [checkpoint_callback]
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')
         callbacks.append(lr_monitor)
@@ -179,17 +172,6 @@ if __name__ == '__main__':
     )
     # This will be automatically determine by summary_style (i.e., 'plan' or not)
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
-    # This is only used by summary_style=hybrid_control to determine how to partition data (doesn't really work for CNN)
-    parser.add_argument(
-        '--oracle_cutoff', default=0.42, type=float,  # 0.42 is not tuned but roughly splits CNN/DM in half
-        help='For summary_style=hybrid_control, summaries with ranking above this (avg R1 / R2)'
-             'will be trained as extracts (to generate the oracle extractive summary).'
-             'Below, abstracts (to generate original reference). '
-    )
-
-    # Oracle Filter - remove examples from training set whose extractive oracle is < avg R1, R2 against reference
-    # In other words, only keep training examples where the abstractive reference can be explained well by an oracle
-    parser.add_argument('-oracle_filter', default=False, action='store_true')
 
     args = parser.parse_args()
 

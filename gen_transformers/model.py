@@ -178,7 +178,7 @@ class TransformerSummarizer(pl.LightningModule):
             }
             output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
-            extractive_summaries = self.score_extracts(batch, source, encoder_h)
+            extractive_summaries = self.score_extracts(batch, source, encoder_h, compute_loss=False)
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],
@@ -300,7 +300,7 @@ class TransformerSummarizer(pl.LightningModule):
             losses.append(loss)
         return torch.stack(losses).mean()
 
-    def score_extracts(self, batch, source, encoder_h):
+    def score_extracts(self, batch, source, encoder_h, compute_loss=True):
         extractive_summaries = []
         cls_mask = batch['cls_mask']
         batch_size = len(cls_mask)
@@ -332,7 +332,7 @@ class TransformerSummarizer(pl.LightningModule):
             assert seq_len not in summary_idx_no_special
             return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
             extractive_summaries.append(return_obj)
-        if batch['plan_labels'] is None:
+        if batch['plan_labels'] is None or not compute_loss:
             return extractive_summaries
         plan_loss = self.plan_loss(cls_mask, encoder_h, batch['plan_labels'])
         return extractive_summaries, plan_loss

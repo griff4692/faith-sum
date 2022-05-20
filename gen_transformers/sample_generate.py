@@ -176,7 +176,7 @@ if __name__ == '__main__':
                 if should_select:
                     unmask_idxs.append(extract_priority[source_idx])
             idxs.append(unmask_idxs)
-            masks.append(sentence_mask(cls_mask, unmask_idxs))
+            masks.append(sentence_mask(cls_mask, unmask_idxs, attention_mask))
 
         sampled_extracts = [''.join('<s{i}>' + str(source_sents[i]) for i in idx) for idx in idxs]
         all_masks = torch.cat(masks)
