@@ -178,12 +178,12 @@ class TransformerSummarizer(pl.LightningModule):
             }
             output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
-            extractive_summaries = self.score_extracts(batch, source, encoder_h, compute_loss=False)
+            extractive_summaries = self.sample_extracts(batch, source, encoder_h)
             for batch_idx in range(batch_size):
                 score_outputs[batch_idx] = {
                     'source': source[batch_idx],
                     'abstracts': None, 'implied_extracts': None,
-                    'extracts': [extractive_summaries[batch_idx]],
+                    'extracts': extractive_summaries[batch_idx],
                     'reference': references[batch_idx],
                 }
 
@@ -300,6 +300,45 @@ class TransformerSummarizer(pl.LightningModule):
             losses.append(loss)
         return torch.stack(losses).mean()
 
+    def sample_extracts(self, batch, source, encoder_h, num_return_sequences=1):
+        extractive_summaries = []
+        cls_mask = batch['cls_mask']
+        batch_size = len(cls_mask)
+        stop_input_id = torch.LongTensor([0]).to(self.device)
+        for batch_idx in range(batch_size):
+            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
+            seq_len = cls_h.size()[1]
+            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
+            shared_kwargs = {
+                'inputs_embeds': inputs_embeds,
+                'eos_token_id': seq_len,
+                'min_length': 5,  # 3 without the special tokens
+                'max_length': 10,
+                'early_stopping': True,
+                'num_return_sequences': num_return_sequences
+            }
+            beam_kwargs = {
+                'num_beams': 4,
+            }
+
+            sample_kwargs = {
+                'num_beam_groups': num_return_sequences,
+                'num_beams': num_return_sequences,
+                'diversity_penalty': 1.0,
+            }
+            if num_return_sequences == 1:
+                shared_kwargs.update(beam_kwargs)
+            else:
+                shared_kwargs.update(sample_kwargs)
+
+            pred_ids = self.sent_bart.generate(**shared_kwargs)
+            return_obj = []
+            for summary_idx in pred_ids.tolist():
+                summary_idx_no_special = self.remove_special_tokens_from_sent_bart(summary_idx, seq_len)
+                return_obj.append(self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special))
+            extractive_summaries.append(return_obj)
+        return extractive_summaries
+
     def score_extracts(self, batch, source, encoder_h, compute_loss=True):
         extractive_summaries = []
         cls_mask = batch['cls_mask']
@@ -324,12 +363,7 @@ class TransformerSummarizer(pl.LightningModule):
 
             pred_ids = self.sent_bart.generate(**kwargs)
             summary_idx = pred_ids.tolist()[0]
-            assert summary_idx[0] == self.sent_config.decoder_start_token_id
-            summary_idx_no_special = summary_idx[1:]
-            assert summary_idx[-1] in {seq_len, self.sent_config.decoder_start_token_id}
-            summary_idx_no_special = summary_idx_no_special[:-1]
-            # Generation could end in padded ids? (if num_return_sequences > 1)
-            assert seq_len not in summary_idx_no_special
+            summary_idx_no_special = self.remove_special_tokens_from_sent_bart(summary_idx, seq_len)
             return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
             extractive_summaries.append(return_obj)
         if batch['plan_labels'] is None or not compute_loss:
@@ -518,6 +552,19 @@ class TransformerSummarizer(pl.LightningModule):
             'extracts': extracts,
             'implied_extracts': implied_extracts,
         }
+
+    def remove_special_tokens_from_sent_bart(self, summary_idx, seq_len):
+        assert summary_idx[0] == self.sent_config.decoder_start_token_id
+        summary_idx_no_special = summary_idx[1:]
+        assert summary_idx_no_special[0] == self.sent_config.bos_token_id
+        summary_idx_no_special = summary_idx_no_special[1:]
+        try:
+            summary_idx_no_special = summary_idx_no_special[:summary_idx_no_special.index(seq_len)]
+        except IndexError:
+            assert summary_idx[-1] == self.sent_config.decoder_start_token_id
+            print('The STOP token was not generated')
+            summary_idx_no_special = summary_idx_no_special[:-1]
+        return summary_idx_no_special
 
     def measure_plan_abstract_consistency(self, batch, outputs, eval=False, **gen_kwargs):
         extract_idxs = [x['idxs'] for x in outputs['extracts']]
