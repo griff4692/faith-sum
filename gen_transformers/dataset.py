@@ -29,6 +29,8 @@ class SummaryDataModule(pl.LightningDataModule):
         split_dataset = self.dataset[split]
         if self.args.debug and max_examples is None:
             max_examples = 128
+        elif max_examples is None and split == 'train' and self.args.train_frac < 1:
+            max_examples = round(self.args.train_frac * len(split_dataset))
         n = len(split_dataset)
         idxs = list(range(n))
         if max_examples is not None and max_examples < n:
@@ -88,17 +90,13 @@ class SummarizationDataset(Dataset):
         example = self.dataset[idx]
         inputs = example[self.input_col]
         target = example[self.target_col]
-
-        untouched_target = target  # Original untouched reference
-
         source_annotated = inputs
         # For simple abstractive training, no oracle extracts / plans need to be included
         if self.args.summary_style == 'abstract':
-            target_annotated = target
             return {
                 'source': source_annotated,
-                'target': target_annotated,
-                'reference': untouched_target  # Same as target here but not always true
+                'target': target,
+                'reference': target  # Same as target here but not always true
             }
 
         # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
@@ -107,36 +105,15 @@ class SummarizationDataset(Dataset):
         # Rather than by "relevance" as defined by ROUGE, for instance
         oracle_idxs = list(sorted(list(map(int, oracle_obj['sent_idxs'].split(',')))))
 
-        r1s = [float(x) for x in oracle_obj['rouge1_history'].split('|')[0].split(',')]
-        r2s = [float(x) for x in oracle_obj['rouge2_history'].split('|')[0].split(',')]
-        avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1s, r2s)])
-        sent_priority = avg_rs
-
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
         source_sents = convert_to_sents(inputs, self.nlp)
         if self.args.add_sent_toks:
             source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
         # Sort oracle order or not
-        target_prefix = ''.join([f'<s{i}>' for i in oracle_idxs]).strip()
-        plan_labels = None
-        if self.args.summary_style == 'plan':
-            target_annotated = target_prefix
-        elif self.args.summary_style == 'plan_abstract':
-            target_annotated = f'{target_prefix}<sep>{target}'
-        elif self.args.summary_style == 'score_abstract':
-            target_annotated = target
-            plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
-            assert len(plan_labels) >= 1
-        elif self.args.summary_style == 'score':
-            target_annotated = None  # No generation, just sentence scoring and selection for extractive summarization
-            plan_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
-            assert len(plan_labels) >= 1
-        elif self.args.summary_style == 'abstract_plan':
-            target_annotated = f'{target}<sep>{target_prefix}'
+        oracle_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
         return {
             'source': source_annotated,
-            'target': target_annotated,
-            'plan_labels': plan_labels,
-            'sent_priority': sent_priority,
-            'reference': untouched_target,  # Use for evaluation
+            'target': target,
+            'oracle_labels': oracle_labels,
+            'reference': target,  # Use for evaluation
         }

@@ -42,36 +42,44 @@ class TransformerSummarizer(pl.LightningModule):
         self.rouge_metric = RougeMetric()
 
         self.sent_bart = None
-        if 'score' in self.hparams.summary_style:
-            self.sent_config = deepcopy(self.config)
-            # Should be tunable
-            self.sent_config.encoder_layers = 2
-            self.sent_config.decoder_layers = 2
-            # (everything else is copied from other BARTEncoder)
-            self.sent_config.vocab_size = 3  # <s> <pad> </s>
-            self.sent_bart = BartForConditionalCopy(self.sent_config)
-            # self.sent_bart.model.encoder.layers[-1].load_state_dict(self.model.model.encoder.layers[-1].state_dict())
-            self.stop_embed = nn.Embedding(num_embeddings=1, embedding_dim=self.sent_config.d_model, padding_idx=None)
+        if 'extract' in self.hparams.summary_style:
+            if self.hparams.extract_method == 'generate':
+                self.sent_config = deepcopy(self.config)
+                # Should be tunable
+                self.sent_config.encoder_layers = 2
+                self.sent_config.decoder_layers = 2
+                # (everything else is copied from other BARTEncoder)
+                self.sent_config.vocab_size = 3  # <s> <pad> </s>
+                self.sent_bart = BartForConditionalCopy(self.sent_config)
+                # self.sent_bart.model.encoder.layers[-1].load_state_dict(self.model.model.encoder.layers[-1].state_dict())
+                self.stop_embed = nn.Embedding(num_embeddings=1, embedding_dim=self.sent_config.d_model, padding_idx=None)
+            else:
+                self.sent_classifier = nn.Linear(self.model.config.d_model, 1)
+                pos_weight = torch.FloatTensor([1.0])
+                self.sent_loss = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    def shared_step(self, batch):
+    def shared_step(self, batch, source=None, build_extracts=True):
         metrics = {}
+        extracts = None
         return_loss = 0
-
         encoder_h = self.get_encoder_h({'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask']})
 
         # Do this after the Encoder Step to ensure full self attention in encoder
         if self.hparams.oracle_cross_mask:
             batch['attention_mask'] = implement_oracle_masking(batch, oracle_mask_k=self.hparams.oracle_mask_k)
 
-        if batch['plan_labels'] is not None:
-            assert 'score' in self.hparams.summary_style
+        if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
-            plan_loss = self.plan_loss(batch['cls_mask'], encoder_h, batch['plan_labels'])
-            metrics['extract'] = plan_loss
-            return_loss += plan_loss
+            if self.hparams.extract_method == 'generate':
+                extract_loss, extracts = self.generate_extracts(batch, source, encoder_h, build=build_extracts)
+            else:
+                assert self.hparams.extract_method == 'select'
+                extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
+            metrics['extract'] = extract_loss
+            return_loss += extract_loss
 
         # score is just extraction (no word-level generation)
-        if self.hparams.summary_style != 'score':
+        if 'abstract' in self.hparams.summary_style:
             updated_inputs = {
                 'encoder_outputs': [encoder_h],
                 'attention_mask': batch['attention_mask'],
@@ -83,33 +91,49 @@ class TransformerSummarizer(pl.LightningModule):
             # Return label-smoothed loss for BART Decoder
             smooth_lm_loss = self.label_smoother(output, batch['labels'])
             return_loss += smooth_lm_loss
-        return {'metrics': metrics, 'return_loss': return_loss, 'encoder_h': encoder_h}
+        return {'metrics': metrics, 'return_loss': return_loss, 'encoder_h': encoder_h, 'extracts': extracts}
 
     def training_step(self, batch, batch_idx):
-        shared_output = self.shared_step(batch)
+        shared_output = self.shared_step(batch, build_extracts=False)  # Don't generate extracts
         metrics, return_loss = shared_output['metrics'], shared_output['return_loss']
         metrics['combined'] = return_loss
         self.log_metrics(metrics, is_train=True, prefix='train_')
         return return_loss
 
+    def score_extracts(self, batch, source, encoder_h, build=True):
+        batch_size = len(batch['cls_mask'])
+        losses = []
+        summaries = [] if build else None
+        for batch_idx in range(batch_size):
+            cls_h = encoder_h[batch_idx, batch['cls_mask'][batch_idx], :]
+            labels = batch['oracle_labels'][batch_idx]
+            sent_preds = self.sent_classifier(cls_h).squeeze(-1)
+            labels_onehot = torch.zeros_like(sent_preds).to(self.device)
+            labels_onehot[labels] = 1
+            loss = self.sent_loss(sent_preds, labels_onehot)
+            losses.append(loss)
+            if summaries is not None:
+                y_hat_np = sent_preds.flatten().detach().cpu().numpy()
+                sum = self.build_summaries(source=source[batch_idx], y_hat=y_hat_np)
+                summaries.append(sum)
+        losses = torch.stack(losses).mean()
+        return losses, summaries
+
     def validation_step(self, batch, batch_idx):
         batch_size = len(batch['input_ids'])
 
         source = self.parse_source_text_from_inputs(batch)
-        shared_output = self.shared_step(batch)
-        metrics, return_loss = shared_output['metrics'], shared_output['return_loss']
+        shared_output = self.shared_step(batch, source=source, build_extracts=True)
+        metrics, return_loss, extracts = shared_output['metrics'], shared_output['return_loss'], shared_output['extracts']
         metrics['combined'] = return_loss
         self.log_metrics(metrics, is_train=False, prefix='val_')
-
-        encoder_h = shared_output['encoder_h']
-        score_outputs = [None for _ in range(batch_size)]
-        if 'score' in self.hparams.summary_style:
-            extractive_summaries, extract_loss = self.score_extracts(batch, source, encoder_h)
+        extract_outputs = [None for _ in range(batch_size)]
+        if extracts is not None:
             for batch_idx in range(batch_size):
-                score_outputs[batch_idx] = {
+                extract_outputs[batch_idx] = {
                     'source': source[batch_idx],
                     'abstracts': None, 'implied_extracts': None,
-                    'extracts': [extractive_summaries[batch_idx]],
+                    'extracts': [extracts[batch_idx]],
                     'reference': batch['references'][batch_idx],
                 }
 
@@ -119,15 +143,15 @@ class TransformerSummarizer(pl.LightningModule):
             'num_return_sequences': 1,  # Don't over-generate for validation
             'references': batch['references'],
         }
-        if self.hparams.summary_style != 'score':
+        if self.hparams.summary_style != 'extract':
             gen_outputs = self.shared_generate(batch, source, **validation_kwargs)
 
         # Merge the two if needed (score_abstract only)
-        gen_outputs_resolved = self.merge_outputs(gen_outputs, score_outputs)
+        outputs_resolved = self.merge_outputs(gen_outputs, extract_outputs)
 
         # It's a list of dictionaries --> convert into dictionary of lists and process as a batch (for ROUGE)
         output_dict = defaultdict(list)
-        for item in gen_outputs_resolved:
+        for item in outputs_resolved:
             for k, v in item.items():
                 if type(v) == list:
                     output_dict[k] += v
@@ -150,7 +174,7 @@ class TransformerSummarizer(pl.LightningModule):
 
         # Measure consistency between abstract (and implied extract) and generated extract
         if len(output_dict['abstracts']) > 0 and len(output_dict['extracts']) > 0:
-            if 'score' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
+            if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
                 eval_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
             # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
             # If the plan is working, this should be very high (the abstract should follow the plan)
@@ -168,9 +192,8 @@ class TransformerSummarizer(pl.LightningModule):
         eval = not use_hf_rouge
         references = batch['references']
         batch_size = len(references)
-        score_outputs = [None for _ in range(batch_size)]
-        if 'score' in self.hparams.summary_style:
-            assert 'score' in self.hparams.summary_style
+        extract_outputs = [None for _ in range(batch_size)]
+        if 'extract' in self.hparams.summary_style:
             # Predict if a sentence is in oracle summary
             encoder_kwargs = {
                 'input_ids': batch['input_ids'],
@@ -180,7 +203,7 @@ class TransformerSummarizer(pl.LightningModule):
             encoder_h = output.last_hidden_state
             extractive_summaries = self.sample_extracts(batch, source, encoder_h)
             for batch_idx in range(batch_size):
-                score_outputs[batch_idx] = {
+                extract_outputs[batch_idx] = {
                     'source': source[batch_idx],
                     'abstracts': None, 'implied_extracts': None,
                     'extracts': extractive_summaries[batch_idx],
@@ -191,18 +214,18 @@ class TransformerSummarizer(pl.LightningModule):
         gen_kwargs.update({
             'references': references
         })
-        if self.hparams.summary_style != 'score':
+        if self.hparams.summary_style != 'extract':
             gen_outputs = self.shared_generate(batch, source, **gen_kwargs)
 
         # Merge the two if needed (score_abstract only)
-        gen_outputs_resolved = self.merge_outputs(gen_outputs, score_outputs)
+        outputs_resolved = self.merge_outputs(gen_outputs, extract_outputs)
 
         batch_outputs = []
         from_oracle_metrics = None
         if self.hparams.summary_style in {'abstract_plan', 'plan_abstract'}:
             from_oracle_metrics = self.generate_from_oracle(batch, use_hf_rouge, **gen_kwargs)
 
-        for batch_idx, (reference, gen_output) in enumerate(zip(references, gen_outputs_resolved)):
+        for batch_idx, (reference, gen_output) in enumerate(zip(references, outputs_resolved)):
             abstract_flat = '' if gen_output['abstracts'] is None else '<cand>'.join(gen_output['abstracts'])
             extract_flat = '' if gen_output['extracts'] is None else '<cand>'.join(
                 [x['summary'] for x in gen_output['extracts']])
@@ -281,22 +304,21 @@ class TransformerSummarizer(pl.LightningModule):
     def get_encoder_h(self, batch):
         return self.model.model.encoder(**batch).last_hidden_state
 
-    def plan_loss(self, cls_mask, encoder_h, plan_labels):
-        # Decoder inputs embeds
-        # Take Oracle, concatenate it with sentence markers
+    def compute_gen_extract_loss(self, cls_mask, encoder_h, oracle_labels):
         batch_size = len(cls_mask)
         losses = []
         stop_input_id = torch.LongTensor([0]).to(self.device)
         for batch_idx in range(batch_size):
             cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
             seq_len = cls_h.size()[1]
-            labels = plan_labels[batch_idx]
+            labels = oracle_labels[batch_idx]
             eos_dummy = torch.LongTensor([seq_len]).to(self.device)
             labels = torch.cat([labels, eos_dummy]).unsqueeze(0)
             # Concatenate
             inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
-            outputs = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
-            loss = self.label_smoother(outputs, labels)
+            output = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
+            loss = self.label_smoother(output, labels)
+
             losses.append(loss)
         return torch.stack(losses).mean()
 
@@ -339,11 +361,15 @@ class TransformerSummarizer(pl.LightningModule):
             extractive_summaries.append(return_obj)
         return extractive_summaries
 
-    def score_extracts(self, batch, source, encoder_h, compute_loss=True):
-        extractive_summaries = []
+    def generate_extracts(self, batch, source, encoder_h, build=True):
         cls_mask = batch['cls_mask']
         batch_size = len(cls_mask)
+        loss = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'])
+        if not build:
+            return loss, None
+
         stop_input_id = torch.LongTensor([0]).to(self.device)
+        summaries = []
         for batch_idx in range(batch_size):
             cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
             seq_len = cls_h.size()[1]
@@ -365,16 +391,12 @@ class TransformerSummarizer(pl.LightningModule):
             summary_idx = pred_ids.tolist()[0]
             summary_idx_no_special = self.remove_special_tokens_from_sent_bart(summary_idx, seq_len)
             return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
-            extractive_summaries.append(return_obj)
-        if batch['plan_labels'] is None or not compute_loss:
-            return extractive_summaries
-        plan_loss = self.plan_loss(cls_mask, encoder_h, batch['plan_labels'])
-        return extractive_summaries, plan_loss
+            summaries.append(return_obj)
+        return loss, summaries
 
     def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
         all_summaries = []
-        y_hat_cls = y_hat[np.where(y_hat > float('-inf'))]
-        priority = expit(y_hat_cls.copy())
+        priority = expit(y_hat.copy())
         trigram_to_sent_idx = sent_idx_to_trigram = None
         if trigram_block:
             trigram_to_sent_idx = defaultdict(list)
@@ -400,7 +422,7 @@ class TransformerSummarizer(pl.LightningModule):
             all_summaries.append(summary_at_k)
         summary_idx = all_summaries[-1]
         return_obj = self.get_summary_from_sent_idxs(source, summary_idx)
-        return_obj['sent_dist'] = y_hat_cls
+        return_obj['sent_dist'] = y_hat
         return return_obj
 
     def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
@@ -494,36 +516,12 @@ class TransformerSummarizer(pl.LightningModule):
     def parse_output(self, source, reference, pred_ids):
         pred_str = self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
         num_pred = len(pred_str)
-        if 'plan' in self.hparams.summary_style:
-            decoded_sent_preds = [
-                re.findall(r'(<s\d+>)', x) for x in
-                self.tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=False)
-            ]
-
-            decoded_sent_idxs = [
-                [int(re.search(r'\d+', tag)) for tag in sent_tags] for sent_tags in decoded_sent_preds
-            ]
-
-            extracts = [self.build_summaries(source, sent_idx) for sent_idx in decoded_sent_idxs]
-            abstracts = None if self.hparams.summary_style == 'plan' else pred_str
-        elif self.hparams.summary_style == 'extract':  # Our abstractive generation is actually an extract
-            extracts = list(map(lambda i: self.ensure_extract(pred_str[i], source), range(num_pred)))
-            abstracts = None
-        elif self.hparams.summary_style == 'score_abstract':
+        if self.hparams.summary_style == 'extract_abstract':
             abstracts = pred_str
             extracts = None  # these will be filled in after (not part of generation)
         elif self.hparams.summary_style == 'abstract':
             extracts = None
             abstracts = pred_str
-        elif self.hparams.summary_style == 'hybrid_control':
-            # TODO signal if extractive or abstractive
-            is_extractive = ['<extract>' in p for p in ['<extract>']]
-            extracts = [self.ensure_extract(pred_str[i], source) for i in range(len(is_extractive)) if is_extractive[i]]
-            abstracts = [pred_str[i] for i in range(len(is_extractive)) if not is_extractive[i]]
-            if len(extracts) == 0:
-                extracts = None
-            if len(abstracts) == 0:
-                abstracts = None
         else:
             raise Exception(f'Unrecognized summary style -> {self.hparams.summary_style}')
 
@@ -554,13 +552,15 @@ class TransformerSummarizer(pl.LightningModule):
         }
 
     def remove_special_tokens_from_sent_bart(self, summary_idx, seq_len):
-        assert summary_idx[0] == self.sent_config.decoder_start_token_id
-        summary_idx_no_special = summary_idx[1:]
-        assert summary_idx_no_special[0] == self.sent_config.bos_token_id
-        summary_idx_no_special = summary_idx_no_special[1:]
+        special_prefix = [self.sent_config.decoder_start_token_id, self.sent_config.bos_token_id]
+        if summary_idx[:2] == special_prefix:
+            summary_idx_no_special = summary_idx[2:]
+        else:
+            print(f'Predicted Sequence Start != {special_prefix}. Should not occur after fine-tuning.')
+            summary_idx_no_special = summary_idx
         try:
             summary_idx_no_special = summary_idx_no_special[:summary_idx_no_special.index(seq_len)]
-        except IndexError:
+        except ValueError:
             assert summary_idx[-1] == self.sent_config.decoder_start_token_id
             print('The STOP token was not generated')
             summary_idx_no_special = summary_idx_no_special[:-1]
@@ -590,7 +590,7 @@ class TransformerSummarizer(pl.LightningModule):
                 'extract_implied_sent_f1': overlap_f1
             }
 
-            if 'score' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
+            if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
                 rand_plan_idxs = list(np.sort(list(np.random.choice(np.arange(n), size=(min(n, 3)), replace=False))))
                 rand_plan = ''.join([f'<s{i}>' for i in rand_plan_idxs])
                 decoder_input_ids = self.tokenizer(
@@ -686,7 +686,7 @@ class TransformerSummarizer(pl.LightningModule):
                 zip(source_no_special, source_sents, source_sent_toks)]
 
     def merge_outputs(self, gen_outputs, score_outputs):
-        if self.hparams.summary_style == 'score':
+        if self.hparams.summary_style == 'extract':
             return score_outputs
         merged = []
         assert len(score_outputs) == len(gen_outputs)

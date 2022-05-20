@@ -91,8 +91,7 @@ def run(args):
         default_root_dir=experiment_dir,
         gradient_clip_val=0.1,
         accumulate_grad_batches=args.grad_accum,
-        # TODO change back to 0.25
-        val_check_interval=1.0 if args.debug else 0.25,
+        val_check_interval=1.0 if args.debug or args.train_frac <= 0.2 else 0.25,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
         num_sanity_val_steps=1 if args.debug else 2,
         log_every_n_steps=25,
@@ -146,6 +145,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('--max_input_length', type=int, default=1024)
+    parser.add_argument('--train_frac', type=float, default=0.1)
+    parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
     parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
@@ -157,16 +158,11 @@ if __name__ == '__main__':
     # Task-specific / Project-specific parameters
     parser.add_argument(
         '--summary_style',
-        default='score_abstract',
+        default='extract_abstract',
         choices=[
-            'plan_abstract',
-            'score_abstract',
-            'score',
-            'abstract_plan',
-            'extract',
-            'plan',
+            'extract_abstract',
             'abstract',
-            'hybrid_control',
+            'extract'
         ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
                 'abstract is original reference'
     )
@@ -182,9 +178,7 @@ if __name__ == '__main__':
         args.hf_model = 'sshleifer/bart-tiny-random'
 
     # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
-    args.add_sent_toks = args.add_sent_toks or args.summary_style in {
-        'plan_abstract', 'plan', 'abstract_plan', 'score_abstract', 'score',
-    }
+    args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style
     if args.add_sent_toks:
         print('Pre-pending each sentence in the source document with special token <s{idx}>.')
 
