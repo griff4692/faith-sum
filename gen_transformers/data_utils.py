@@ -69,15 +69,16 @@ class Seq2SeqCollate:
         batch['cls_mask'] = batch['input_ids'] >= self.special_id_min
         batch['references'] = [x['reference'] for x in batch_list]
 
-        valid_idxs = self.sent_extract_labels(batch_list, batch)
-        if len(valid_idxs) < len(batch_list) and self.split == 'train':
-            num_to_remove = len(batch_list) - len(valid_idxs)
-            if self.verbose:
-                print(
-                    f'Removing {num_to_remove} examples where the oracle label has been truncated bc after 1024 WPs'
-                )
-            new_batch_list = [batch_list[i] for i in valid_idxs]
-            return self(new_batch_list)
+        if batch_list[0]['oracle_labels'] is not None:
+            valid_idxs = self.sent_extract_labels(batch_list, batch)
+            if len(valid_idxs) < len(batch_list) and self.split == 'train':
+                num_to_remove = len(batch_list) - len(valid_idxs)
+                if self.verbose:
+                    print(
+                        f'Removing {num_to_remove} examples where the oracle label has been truncated bc after 1024 WPs'
+                    )
+                new_batch_list = [batch_list[i] for i in valid_idxs]
+                return self(new_batch_list)
 
         return batch
 

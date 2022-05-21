@@ -91,26 +91,21 @@ class SummarizationDataset(Dataset):
         inputs = example[self.input_col]
         target = example[self.target_col]
         source_annotated = inputs
-        # For simple abstractive training, no oracle extracts / plans need to be included
-        if self.args.summary_style == 'abstract':
-            return {
-                'source': source_annotated,
-                'target': target,
-                'reference': target  # Same as target here but not always true
-            }
 
         # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
         oracle_obj = self.ids2oracles[example['id']]
         # Empirically, better performance from generating extracts in order in which they appear in source
         # Rather than by "relevance" as defined by ROUGE, for instance
         oracle_idxs = list(sorted(list(map(int, oracle_obj['sent_idxs'].split(',')))))
-
-        # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
-        source_sents = convert_to_sents(inputs, self.nlp)
-        if self.args.add_sent_toks:
-            source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
         # Sort oracle order or not
         oracle_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
+        if 'extract' not in self.args.summary_style:
+            oracle_labels = None
+
+        # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
+        if self.args.add_sent_toks:
+            source_sents = convert_to_sents(inputs, self.nlp)
+            source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
         return {
             'source': source_annotated,
             'target': target,

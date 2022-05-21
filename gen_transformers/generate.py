@@ -60,19 +60,16 @@ if __name__ == '__main__':
     parser.add_argument('--seed', default=1992, type=int)
     parser.add_argument('--num_return_sequences', default=16, type=int)
     parser.add_argument('--max_num_sents', type=int, default=200)
+    parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('-use_hf_rouge', default=False, action='store_true')  # Much faster to use HF implementation
     parser.add_argument('--bootstraps', default=1, type=int)
     parser.add_argument(
         '--summary_style',
-        default='score',
+        default='extract_abstract',
         choices=[
-            'score',
-            'score_abstract',
-            'plan_abstract',
-            'abstract_plan',
-            'extract',
-            'plan',
+            'extract_abstract',
             'abstract',
+            'extract'
         ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
                 'abstract is original reference'
     )
@@ -84,9 +81,7 @@ if __name__ == '__main__':
     parser.add_argument('--split', default='validation')
 
     args = parser.parse_args()
-    args.add_sent_toks = args.add_sent_toks or args.summary_style in {
-        'plan_abstract', 'plan', 'abstract_plan', 'score_abstract', 'score',
-    }
+    args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style
 
     np.random.seed(args.seed)
 

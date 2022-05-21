@@ -201,7 +201,14 @@ class TransformerSummarizer(pl.LightningModule):
             }
             output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
-            extractive_summaries = self.sample_extracts(batch, source, encoder_h)
+            if self.hparams.extract_method == 'generate':
+                extractive_summaries = self.sample_gen_extracts(
+                    batch, source, encoder_h, num_return_sequences=gen_kwargs['num_return_sequences']
+                )
+            else:
+                extractive_summaries = self.sample_score_extracts(
+                    batch, source, encoder_h, num_return_sequences=gen_kwargs['num_return_sequences']
+                )
             for batch_idx in range(batch_size):
                 extract_outputs[batch_idx] = {
                     'source': source[batch_idx],
@@ -242,7 +249,7 @@ class TransformerSummarizer(pl.LightningModule):
                 'extract_idx': extract_idx_flat, 'implied_extract_idx': implied_extract_idx_flat,
             }
 
-            if len(gen_output['extracts']) > 0 and 'sent_dist' in gen_output['extracts'][0]:
+            if gen_output['extracts'] is not None and len(gen_output['extracts']) > 0 and 'sent_dist' in gen_output['extracts'][0]:
                 dist_flat = '<cand>'.join([','.join(list(map(str, x['sent_dist']))) for x in gen_output['extracts']])
                 save_out['sent_scores'] = dist_flat
 
@@ -289,7 +296,7 @@ class TransformerSummarizer(pl.LightningModule):
 
             # Measure consistency between abstract (and implied extract) and generated extract
             if gen_output['abstracts'] is not None and gen_output['extracts'] is not None:
-                if 'score' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
+                if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
                     save_out.update(self.measure_plan_abstract_consistency(batch, gen_output, **gen_kwargs))
                 # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
                 # If the plan is working, this should be very high (the abstract should follow the plan)
@@ -322,7 +329,34 @@ class TransformerSummarizer(pl.LightningModule):
             losses.append(loss)
         return torch.stack(losses).mean()
 
-    def sample_extracts(self, batch, source, encoder_h, num_return_sequences=1):
+    def sample_score_extracts(self, batch, source, encoder_h, num_return_sequences=1, topk=6):
+        batch_size = len(batch['cls_mask'])
+        losses = []
+        summaries = []
+        for batch_idx in range(batch_size):
+            cls_h = encoder_h[batch_idx, batch['cls_mask'][batch_idx], :]
+            labels = batch['oracle_labels'][batch_idx]
+            sent_preds = self.sent_classifier(cls_h).squeeze(-1)
+            labels_onehot = torch.zeros_like(sent_preds).to(self.device)
+            labels_onehot[labels] = 1
+            loss = self.sent_loss(sent_preds, labels_onehot)
+            losses.append(loss)
+            y_hat = sent_preds.flatten().detach().cpu()
+            y_hat_np = y_hat.numpy()
+
+            sum = [self.build_summaries(source=source[batch_idx], y_hat=y_hat_np)]
+            sample_num = num_return_sequences - 1
+            top_k_y = y_hat.topk(k=min(topk, len(y_hat_np))).indices
+            for sample in range(sample_num):
+                summary_idx = list(np.random.choice(top_k_y, size=(3, ), replace=False))
+                return_obj = self.get_summary_from_sent_idxs(source, summary_idx)
+                return_obj['sent_dist'] = y_hat
+                sum.append(return_obj)
+            # If we are sampling, get num_return_sequences - 1 samples of size 3 from top K predictions
+            summaries.append(sum)
+        return summaries
+
+    def sample_gen_extracts(self, batch, source, encoder_h, num_return_sequences=1):
         extractive_summaries = []
         cls_mask = batch['cls_mask']
         batch_size = len(cls_mask)
