@@ -1659,6 +1659,16 @@ class BartForConditionalCopy(BartPretrainedModel):
         class_input = torch.cat([encoder_h_rep, decoder_h_rep], dim=-1)
         lm_logits = self.cand_classifier(class_input).view(num_beams, dec_steps, enc_steps)
 
+        # Duplication mask
+        # duplication_mask = torch.BoolTensor(lm_logits.size()).to(self.device)
+        # duplication_mask.fill_(False)
+        # for beam in range(num_beams):
+        #     for dec_step in range(1, dec_steps):  # First step is the start token
+        #         prev_pred_id = decoder_input_ids[beam, dec_step]
+        #         # From this step onward it should be given a score of -inf
+        #         duplication_mask[beam, dec_step:, prev_pred_id] = True
+        # lm_logits.masked_fill_(duplication_mask, -100)  # Pick a large negative
+
         masked_lm_loss = None
         if labels is not None:
             assert num_beams == 1

@@ -69,7 +69,7 @@ if __name__ == '__main__':
     parser.add_argument('--extractor', default='extract', choices=['oracle', 'extract'])
     parser.add_argument('--gpu_device', default=1, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--wandb_name', default='select_extract')
+    parser.add_argument('--wandb_name', default='select_extract_abstract')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--hf_model', default='facebook/bart-base')
     parser.add_argument('--max_examples', default=100, type=int)
@@ -111,18 +111,18 @@ if __name__ == '__main__':
 
     rouge_metric = RougeMetric()
     configs = [
-        # {'use_scores': True, 'k': 5, 'extractor': 'extract'},
+        {'use_scores': True, 'k': 5, 'extractor': 'extract'},
         # {'use_scores': True, 'k': 10, 'extractor': 'extract'},
         # {'use_scores': True, 'k': 15, 'extractor': 'extract'},
         # {'use_scores': False, 'k': 5, 'extractor': 'extract'},
         # {'use_scores': False, 'k': 10, 'extractor': 'extract'},
-        {'use_scores': False, 'k': 15, 'extractor': 'extract'},
-        {'use_scores': True, 'k': 5, 'extractor': 'oracle'},
-        {'use_scores': True, 'k': 10, 'extractor': 'oracle'},
-        {'use_scores': True, 'k': 15, 'extractor': 'oracle'},
-        {'use_scores': False, 'k': 5, 'extractor': 'oracle'},
-        {'use_scores': False, 'k': 10, 'extractor': 'oracle'},
-        {'use_scores': False, 'k': 15, 'extractor': 'oracle'},
+        # {'use_scores': False, 'k': 15, 'extractor': 'extract'},
+        # {'use_scores': True, 'k': 5, 'extractor': 'oracle'},
+        # {'use_scores': True, 'k': 10, 'extractor': 'oracle'},
+        # {'use_scores': True, 'k': 15, 'extractor': 'oracle'},
+        # {'use_scores': False, 'k': 5, 'extractor': 'oracle'},
+        # {'use_scores': False, 'k': 10, 'extractor': 'oracle'},
+        # {'use_scores': False, 'k': 15, 'extractor': 'oracle'},
     ]
 
     df = []
@@ -140,6 +140,10 @@ if __name__ == '__main__':
             num_trunc_sent = len(sent_scores)  # Up to 1024 tokens usually sometimes reduces number of sentences
             assert num_trunc_sent <= len(source_sents)
             source_sents = source_sents[:num_trunc_sent]
+
+            # implied_idx = list(map(int, record['implied_extract_idx'].split(',')))
+            # for idx in implied_idx:
+            #     sent_scores[idx] += 0.25
 
             # source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
             # Get source tokens

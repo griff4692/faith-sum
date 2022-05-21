@@ -133,7 +133,7 @@ class TransformerSummarizer(pl.LightningModule):
                 extract_outputs[batch_idx] = {
                     'source': source[batch_idx],
                     'abstracts': None, 'implied_extracts': None,
-                    'extracts': [extracts[batch_idx]],
+                    'extracts': extracts[batch_idx],
                     'reference': batch['references'][batch_idx],
                 }
 
@@ -397,35 +397,10 @@ class TransformerSummarizer(pl.LightningModule):
 
     def generate_extracts(self, batch, source, encoder_h, build=True):
         cls_mask = batch['cls_mask']
-        batch_size = len(cls_mask)
         loss = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'])
         if not build:
             return loss, None
-
-        stop_input_id = torch.LongTensor([0]).to(self.device)
-        summaries = []
-        for batch_idx in range(batch_size):
-            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
-            seq_len = cls_h.size()[1]
-            inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
-            kwargs = {
-                'inputs_embeds': inputs_embeds,
-                # 'length_penalty': 1.0,  # Didn't find a better value than not setting it at all on very small set
-                'eos_token_id': seq_len,
-                'num_return_sequences': 1,
-                'min_length': 3,
-                'max_length': 10,
-                # 'no_repeat_ngram_size': 1,
-                'early_stopping': True,
-                'output_scores': True,
-                'num_beams': 4,
-            }
-
-            pred_ids = self.sent_bart.generate(**kwargs)
-            summary_idx = pred_ids.tolist()[0]
-            summary_idx_no_special = self.remove_special_tokens_from_sent_bart(summary_idx, seq_len)
-            return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
-            summaries.append(return_obj)
+        summaries = self.sample_gen_extracts(batch, source, encoder_h, num_return_sequences=1)
         return loss, summaries
 
     def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
