@@ -141,111 +141,98 @@ if __name__ == '__main__':
         checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(args.gpu_device).eval()
 
     rouge_metric = RougeMetric()
-    configs = [
-        {'use_scores': True, 'k': 5, 'extractor': 'extract'},
-        # {'use_scores': True, 'k': 10, 'extractor': 'extract'},
-        # {'use_scores': True, 'k': 15, 'extractor': 'extract'},
-        # {'use_scores': False, 'k': 5, 'extractor': 'extract'},
-        # {'use_scores': False, 'k': 10, 'extractor': 'extract'},
-        # {'use_scores': False, 'k': 15, 'extractor': 'extract'},
-        # {'use_scores': True, 'k': 5, 'extractor': 'oracle'},
-        # {'use_scores': True, 'k': 10, 'extractor': 'oracle'},
-        # {'use_scores': True, 'k': 15, 'extractor': 'oracle'},
-        # {'use_scores': False, 'k': 5, 'extractor': 'oracle'},
-        # {'use_scores': False, 'k': 10, 'extractor': 'oracle'},
-        # {'use_scores': False, 'k': 15, 'extractor': 'oracle'},
-    ]
-
     df = []
-    for config in configs:
-        args.use_scores = config['use_scores']
-        args.k = config['k']
-        args.extractor = config['extractor']
-        print(f'Running experiment with k={args.k} and use_scores={args.use_scores}')
-        stats = []
-        for record in tqdm(records, total=len(records)):
-            oracle_obj = ids2oracles[dataset_idx2id[record['dataset_idx']]]
-            source = orig_sources[record['dataset_idx']]
-            source_sents = convert_to_sents(source, nlp)
-            sent_scores = np.array(list(map(float, record['sent_scores'].split(','))))
-            num_trunc_sent = len(sent_scores)  # Up to 1024 tokens usually sometimes reduces number of sentences
-            assert num_trunc_sent <= len(source_sents)
-            source_sents = source_sents[:num_trunc_sent]
+    updated_records = []
+    stats = []
+    for record in tqdm(records, total=len(records)):
+        oracle_obj = ids2oracles[dataset_idx2id[record['dataset_idx']]]
+        source = orig_sources[record['dataset_idx']]
+        source_sents = convert_to_sents(source, nlp)
+        sent_scores = np.array(list(map(float, record['sent_scores'].split(','))))
+        num_trunc_sent = len(sent_scores)  # Up to 1024 tokens usually sometimes reduces number of sentences
+        assert num_trunc_sent <= len(source_sents)
+        source_sents = source_sents[:num_trunc_sent]
 
-            # implied_idx = list(map(int, record['implied_extract_idx'].split(',')))
-            # for idx in implied_idx:
-            #     sent_scores[idx] += 0.25
+        implied_idx = list(map(int, record['implied_extract_idx'].split(',')))
+        # for idx in implied_idx:
+        #     sent_scores[idx] += 0.25
 
-            source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
-            # Get source tokens
-            source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
-            pred_abstract = record['abstract']
-            reference = record['reference']
+        source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
+        # Get source tokens
+        source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
+        pred_abstract = record['abstract']
+        reference = record['reference']
 
-            extract_priority = (-sent_scores).argsort()
-            extract_scores = sent_scores[extract_priority]
-            extract_scores_norm = expit(extract_scores)
+        extract_priority = (-sent_scores).argsort()
+        extract_scores = sent_scores[extract_priority]
+        extract_scores_norm = expit(extract_scores)
 
-            if args.extractor == 'extract':
-                priority = extract_priority
-                scores = extract_scores
-            elif args.extractor == 'oracle':
-                oracle_priority, oracle_scores = get_priority(source_sents_tok, reference, nlp)
-                priority = oracle_priority
-                scores = oracle_scores
-            else:
-                raise Exception('Unknown')
+        if args.extractor == 'extract':
+            priority = extract_priority
+            scores = extract_scores
+        elif args.extractor == 'oracle':
+            oracle_priority, oracle_scores = get_priority(source_sents_tok, reference, nlp)
+            priority = oracle_priority
+            scores = oracle_scores
+        else:
+            raise Exception('Unknown')
 
-            n = len(priority)
-            trunc_idx = min(n, args.k)
-            top_k_priority = priority[:trunc_idx]
-            p = softmax(scores[:trunc_idx]) if args.use_scores else None
-            topk_idx = top_k_priority[:min(n, args.extract_sent_len)]
-            # To use the bottom is to incorporate trigram blocking
-            # top3 = list(map(int, record['extract_idx'].split(',')))
+        n = len(priority)
+        trunc_idx = min(n, args.k)
+        top_k_priority = priority[:trunc_idx]
+        p = softmax(scores[:trunc_idx]) if args.use_scores else None
+        # topk_idx = top_k_priority[:min(n, args.extract_sent_len)]
+        # To use the bottom is to incorporate trigram blocking
+        topk_idx = list(map(int, record['extract_idx'].split(',')))
+        size = min(n, args.extract_sent_len)
 
-            size = min(n, args.extract_sent_len)
+        sampled_idxs = []
+        extracts = []
+        for _ in range(args.samples):
+            sampled_idx = list(np.random.choice(top_k_priority, size=size, replace=False, p=p))
+            sampled_idxs.append(sampled_idx)
+            extracts.append(' '.join([str(source_sents[i]) for i in sampled_idx]))
+        rouges = []
+        r1s = []
+        for idx, x in enumerate(extracts):
+            rr = compute_rouge([x], [reference], rouge_metric)
+            rouges.append(rr)
+            r1s.append(rr['rouge1_f1'])
 
-            sampled_idxs = []
-            extracts = []
-            for _ in range(args.samples):
-                sampled_idx = list(np.random.choice(top_k_priority, size=size, replace=False, p=p))
-                sampled_idxs.append(sampled_idx)
-                extracts.append(' '.join([str(source_sents[i]) for i in sampled_idx]))
-            rouges = []
-            r1s = []
-            for idx, x in enumerate(extracts):
-                rr = compute_rouge([x], [reference], rouge_metric)
-                rouges.append(rr)
-                r1s.append(rr['rouge1_f1'])
+        mean_r1 = np.mean(r1s)
+        min_r1 = np.min(r1s)
+        max_r1 = np.max(r1s)
 
-            mean_r1 = np.mean(r1s)
-            min_r1 = np.min(r1s)
-            max_r1 = np.max(r1s)
+        gen_output = gen_from_mask(model, tokenizer, source_annotated, topk_idx, special_id_min)
 
-            gen_output = gen_from_mask(model, tokenizer, source_annotated, topk_idx, special_id_min)
+        stats.append({
+            'mean_f1': mean_r1,
+            'min_r1': min_r1,
+            'max_r1': max_r1,
+            'extract_rouge1_f1': record['extract_rouge1_f1'],
+            'prompt_abstract_rouge1_f1': gen_output['rouge1_f1'],
+            'abstract_rouge1_f1': record['rouge1_f1'],
+        })
+        record['from_extract_rouge1_f1'] = gen_output['rouge1_f1']
+        record['from_extract_rouge1_recall'] = gen_output['rouge1_recall']
+        record['from_extract_rouge1_precision'] = gen_output['rouge1_precision']
+        record['from_extract_rouge2_f1'] = gen_output['rouge2_f1']
+        record['from_extract_rouge2_recall'] = gen_output['rouge2_recall']
+        record['from_extract_rouge2_precision'] = gen_output['rouge2_precision']
+        record['from_extract_rougeL_f1'] = gen_output['rougeL_f1']
+        record['from_extract_rougeL_recall'] = gen_output['rougeL_recall']
+        record['from_extract_rougeL_precision'] = gen_output['rougeL_precision']
+        record['from_extract_abstract'] = gen_output['prediction']
+        updated_records.append(record)
 
-            stats.append({
-                'mean_f1': mean_r1,
-                'min_r1': min_r1,
-                'max_r1': max_r1,
-                'extract_rouge1_f1': record['extract_rouge1_f1'],
-                'prompt_abstract_rouge1_f1': gen_output['rouge1_f1'],
-                'abstract_rouge1_f1': record['rouge1_f1'],
-            })
+    stats = pd.DataFrame(stats)
+    avgs = {k: stats[k].mean() for k in stats.columns}
+    avgs['k'] = args.k
+    avgs['use_scores'] = args.use_scores
+    avgs['samples'] = args.samples
+    print(avgs)
 
-        # out_fn = os.path.join(results_dir, 'extract_samples.csv')
-        # print(f'Saving to {out_fn}')
-        # stats.to_csv(out_fn, index=False)
-
-        stats = pd.DataFrame(stats)
-        avgs = {k: stats[k].mean() for k in stats.columns}
-        avgs['k'] = args.k
-        avgs['use_scores'] = args.use_scores
-        avgs['samples'] = args.samples
-        print(avgs)
-        df.append(avgs)
-    df = pd.DataFrame(df)
-    out_fn = os.path.join(results_dir, 'extract_samples_v2.csv')
-    df.to_csv(out_fn, index=False)
-    print(df.head(len(df)))
+    updated_df = pd.DataFrame(updated_records)
+    updated_out_fn = os.path.join(results_dir, 'from_extract.csv')
+    print(f'Saving prompted abstracts to {updated_out_fn}')
+    updated_df.to_csv(updated_out_fn, index=False)
