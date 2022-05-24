@@ -128,6 +128,7 @@ if __name__ == '__main__':
     parser.add_argument('-oracle_cross_mask', default=False, action='store_true')
     # How many sentences to make visible to the decoder (5 is randomly set based on summary lengths of ~2-5 sentences)
     parser.add_argument('--oracle_mask_k', default=5, type=int)
+    parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)
 
     # Hyper-parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4

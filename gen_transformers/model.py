@@ -48,6 +48,7 @@ class TransformerSummarizer(pl.LightningModule):
                 # Should be tunable
                 self.sent_config.encoder_layers = 2
                 self.sent_config.decoder_layers = 2
+                self.sent_config.classifier_dropout = self.hparams.copy_bart_class_dropout
                 # (everything else is copied from other BARTEncoder)
                 self.sent_config.vocab_size = 3  # <s> <pad> </s>
                 self.sent_bart = BartForConditionalCopy(self.sent_config)
@@ -188,15 +189,15 @@ class TransformerSummarizer(pl.LightningModule):
             eval_metrics.update(self.compute_rouge(extracts, batch['references'], prefix='extract_'))
 
         # Measure consistency between abstract (and implied extract) and generated extract
-        # if len(output_dict['abstracts']) > 0 and len(output_dict['extracts']) > 0:
-        #     if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
-        #         eval_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
-        #     # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
-        #     # If the plan is working, this should be very high (the abstract should follow the plan)
-        #     extracts = [x['summary'] for x in output_dict['extracts']]
-        #     eval_metrics.update(
-        #         self.compute_rouge(extracts, output_dict['abstracts'], prefix='extract_gen_')
-        #     )
+        if len(output_dict['abstracts']) > 0 and len(output_dict['extracts']) > 0:
+            if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
+                eval_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
+            # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
+            # If the plan is working, this should be very high (the abstract should follow the plan)
+            extracts = [x['summary'] for x in output_dict['extracts']]
+            eval_metrics.update(
+                self.compute_rouge(extracts, output_dict['abstracts'], prefix='extract_gen_')
+            )
 
         self.log_metrics(eval_metrics, is_train=False, prefix='')
         return return_loss
