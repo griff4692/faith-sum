@@ -118,7 +118,7 @@ class SummarizationDataset(Dataset):
         # trunc_idx = min(len(sent_priority), 5)
         # mask_idx = sent_priority[:trunc_idx]
 
-        aligned_sent_idx = aligned_target = None
+        # aligned_sent_idx = aligned_target = None
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
         if self.args.add_sent_toks:
             source_sents = convert_to_sents(inputs, self.nlp)
@@ -152,13 +152,13 @@ class SummarizationDataset(Dataset):
             #     aligned.append(idx)
             # aligned_sent_idx = list(np.sort(aligned))
             # aligned_source = ' '.join([str(source_sents[i]) for i in aligned])
-            aligned_sent_idx = oracle_labels
-            aligned_target = target  # '\n'.join([str(x).strip() for x in sampled_ref])
+            # aligned_sent_idx = oracle_labels
+            # aligned_target = target  # '\n'.join([str(x).strip() for x in sampled_ref])
         return {
             'source': source_annotated,
             'target': target,
             'oracle_labels': oracle_labels,
             'reference': target,  # Use for evaluation
-            'aligned_sent_idx': aligned_sent_idx,
-            'aligned_target': aligned_target,
+            # 'aligned_sent_idx': aligned_sent_idx,
+            # 'aligned_target': aligned_target,
         }
