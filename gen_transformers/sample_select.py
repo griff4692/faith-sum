@@ -1,14 +1,11 @@
 import itertools
 import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-import ujson
 
 import pandas as pd
 import argparse
 import spacy
 import numpy as np
-from scipy.stats import pearsonr
-import torch
 from transformers import AutoTokenizer
 from tqdm import tqdm
 from scipy.special import expit, softmax
@@ -236,3 +233,13 @@ if __name__ == '__main__':
     updated_out_fn = os.path.join(results_dir, 'from_extract.csv')
     print(f'Saving prompted abstracts to {updated_out_fn}')
     updated_df.to_csv(updated_out_fn, index=False)
+
+    abstract_tok_len = updated_df['abstract'].apply(lambda x: len(x.split(' '))).mean()
+    extract_tok_len = updated_df['extract'].apply(lambda x: len(x.split(' '))).mean()
+    ref_tok_len = updated_df['reference'].apply(lambda x: len(x.split(' '))).mean()
+    from_extract_tok_len = updated_df['from_extract_abstract'].apply(lambda x: len(x.split(' '))).mean()
+
+    print(f'Average Abstract Tokens: {abstract_tok_len}')
+    print(f'Average Extract Tokens: {extract_tok_len}')
+    print(f'Average From Extract Abstract Tokens: {from_extract_tok_len}')
+    print(f'Average Reference Tokens: {ref_tok_len}')

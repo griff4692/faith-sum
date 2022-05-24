@@ -5,6 +5,9 @@ import nltk
 import torch
 
 
+from gen_transformers.model_utils import sentence_mask
+
+
 def postprocess_text(texts):
     return ['\n'.join(nltk.sent_tokenize(text.strip())) for text in texts]
 
@@ -68,6 +71,25 @@ class Seq2SeqCollate:
         batch['attention_mask'] = inputs.attention_mask
         batch['cls_mask'] = batch['input_ids'] >= self.special_id_min
         batch['references'] = [x['reference'] for x in batch_list]
+
+        with self.tokenizer.as_target_tokenizer():
+            outputs = self.tokenizer(
+                [x['aligned_target'] for x in batch_list],
+                padding='longest',
+                truncation=True,
+                max_length=self.max_output_length,
+                return_tensors='pt'
+            )
+            batch['aligned_labels'] = outputs.input_ids
+            # We have to make sure that the PAD token is ignored
+            batch['aligned_labels'][torch.where(batch['aligned_labels'] == 1)] = -100
+        batch['aligned_attention_mask'] = torch.cat([
+            sentence_mask(
+                cls_mask=batch['cls_mask'][batch_idx].unsqueeze(0),
+                sent_idx_to_mask=batch_list[batch_idx]['aligned_sent_idx'],
+                prev_mask=batch['attention_mask'][batch_idx].unsqueeze(0)
+            ) for batch_idx in range(len(batch_list))
+        ])
 
         if batch_list[0]['oracle_labels'] is not None:
             valid_idxs = self.sent_extract_labels(batch_list, batch)

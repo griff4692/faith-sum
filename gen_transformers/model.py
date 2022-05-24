@@ -64,10 +64,6 @@ class TransformerSummarizer(pl.LightningModule):
         return_loss = 0
         encoder_h = self.get_encoder_h({'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask']})
 
-        # Do this after the Encoder Step to ensure full self attention in encoder
-        if self.hparams.oracle_cross_mask:
-            batch['attention_mask'] = implement_oracle_masking(batch, oracle_mask_k=self.hparams.oracle_mask_k)
-
         if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
             if self.hparams.extract_method == 'generate':
@@ -91,6 +87,25 @@ class TransformerSummarizer(pl.LightningModule):
             # Return label-smoothed loss for BART Decoder
             smooth_lm_loss = self.label_smoother(output, batch['labels'])
             return_loss += smooth_lm_loss
+
+            if self.hparams.add_align or self.hparams.oracle_cross_mask:
+                if self.hparams.oracle_cross_mask:
+                    mask = implement_oracle_masking(batch, oracle_mask_k=self.hparams.oracle_mask_k)
+                else:
+                    mask = batch['aligned_attention_mask']
+                updated_inputs = {
+                    'encoder_outputs': [encoder_h],
+                    'attention_mask': mask,
+                    'labels': batch['aligned_labels'],
+                }
+
+                aligned_output = self.model(**updated_inputs, use_cache=False)
+                # Regular MLE decoder loss
+                metrics['aligned_loss'] = aligned_output.loss  # Log un-smoothed loss for comparison to earlier runs.
+                # Return label-smoothed loss for BART Decoder
+                smooth_lm_loss = self.label_smoother(aligned_output, batch['aligned_labels'])
+                return_loss += smooth_lm_loss
+
         return {'metrics': metrics, 'return_loss': return_loss, 'encoder_h': encoder_h, 'extracts': extracts}
 
     def training_step(self, batch, batch_idx):
@@ -173,15 +188,15 @@ class TransformerSummarizer(pl.LightningModule):
             eval_metrics.update(self.compute_rouge(extracts, batch['references'], prefix='extract_'))
 
         # Measure consistency between abstract (and implied extract) and generated extract
-        if len(output_dict['abstracts']) > 0 and len(output_dict['extracts']) > 0:
-            if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
-                eval_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
-            # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
-            # If the plan is working, this should be very high (the abstract should follow the plan)
-            extracts = [x['summary'] for x in output_dict['extracts']]
-            eval_metrics.update(
-                self.compute_rouge(extracts, output_dict['abstracts'], prefix='extract_gen_')
-            )
+        # if len(output_dict['abstracts']) > 0 and len(output_dict['extracts']) > 0:
+        #     if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
+        #         eval_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
+        #     # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
+        #     # If the plan is working, this should be very high (the abstract should follow the plan)
+        #     extracts = [x['summary'] for x in output_dict['extracts']]
+        #     eval_metrics.update(
+        #         self.compute_rouge(extracts, output_dict['abstracts'], prefix='extract_gen_')
+        #     )
 
         self.log_metrics(eval_metrics, is_train=False, prefix='')
         return return_loss

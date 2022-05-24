@@ -1,15 +1,24 @@
+import itertools
 import os
+from string import punctuation
 
 import numpy as np
+from nltk.corpus import stopwords
 import pytorch_lightning as pl
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
+STOPWORDS = set(stopwords.words('english'))
 
 from datasets import load_dataset
 from gen_transformers.data_utils import Seq2SeqCollate
 from sum_constants import summarization_name_mapping
 from preprocess.extract_oracles import convert_to_sents
+from preprocess.convert_abstractive_to_extractive import gain_selection
+
+
+def remove_stopwords(tokens):
+    return [w for w in tokens if not w.lower() in STOPWORDS and w not in punctuation and len(w.strip()) > 0]
 
 
 class SummaryDataModule(pl.LightningDataModule):
@@ -102,13 +111,54 @@ class SummarizationDataset(Dataset):
         if 'extract' not in self.args.summary_style:
             oracle_labels = None
 
+        # r1s = [float(x) for x in oracle_obj['rouge1_history'].split('|')[0].split(',')]
+        # r2s = [float(x) for x in oracle_obj['rouge2_history'].split('|')[0].split(',')]
+        # avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1s, r2s)])
+        # sent_priority = np.argsort(-avg_rs)
+        # trunc_idx = min(len(sent_priority), 5)
+        # mask_idx = sent_priority[:trunc_idx]
+
+        aligned_sent_idx = aligned_target = None
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
         if self.args.add_sent_toks:
             source_sents = convert_to_sents(inputs, self.nlp)
             source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
+            #
+            # source_sents_tok = [remove_stopwords(
+            #     [str(token.text).lower() for token in sentence]) for sentence in source_sents]
+            #
+            # # Get reference sentences -- sample 1 of them
+            # ref_sents = convert_to_sents(target, self.nlp)
+            # num_ref = len(ref_sents)
+            # rand_sample = list(np.random.random(size=(num_ref, )))
+            # sampled_ref_idx = [i for i in range(num_ref) if rand_sample[i] >= 0.5]
+            # if len(sampled_ref_idx) == 0:
+            #     sampled_ref_idx.append(0)
+            #
+            # sampled_ref = [ref_sents[i] for i in sampled_ref_idx]
+            # sampled_ref_tok = [remove_stopwords(
+            #     [str(token.text).lower() for token in sentence]) for sentence in sampled_ref]
+            # ref_remain_tok = list(itertools.chain(*sampled_ref_tok))
+
+            # aligned = []
+            # for step in range(5):
+            #     obj = gain_selection(source_sents_tok, [ref_remain_tok], summary_size=0, lower=True)
+            #     idx = obj[0][0]
+            #     score = obj[1]['rouge_1']
+            #     remove_toks = source_sents_tok[idx]
+            #     ref_remain_tok = [x for x in ref_remain_tok if x not in remove_toks]
+            #     if (len(ref_remain_tok) <= 1 or score <= 0.05 or idx in aligned) and step != 0:
+            #         break
+            #     aligned.append(idx)
+            # aligned_sent_idx = list(np.sort(aligned))
+            # aligned_source = ' '.join([str(source_sents[i]) for i in aligned])
+            aligned_sent_idx = oracle_labels
+            aligned_target = target  # '\n'.join([str(x).strip() for x in sampled_ref])
         return {
             'source': source_annotated,
             'target': target,
             'oracle_labels': oracle_labels,
             'reference': target,  # Use for evaluation
+            'aligned_sent_idx': aligned_sent_idx,
+            'aligned_target': aligned_target,
         }

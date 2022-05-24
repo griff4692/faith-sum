@@ -44,9 +44,6 @@ def run(args):
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
-    if args.summary_style == 'hybrid_control':
-        special_tokens_dict = {'additional_special_tokens': ['<extract>', '<abstract>']}
-        tokenizer.add_special_tokens(special_tokens_dict)
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
     if not args.debug:
         tokenizer.save_pretrained(tokenizer_dir)
@@ -146,7 +143,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--train_frac', type=float, default=0.1)
-    parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
+    parser.add_argument('-add_align', action='store_true', default=False)
+    parser.add_argument('--extract_method', type=str, default='select', choices=['generate', 'select'])
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
     parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
