@@ -10,11 +10,9 @@ from torch.utils.data import Dataset, DataLoader
 import spacy
 STOPWORDS = set(stopwords.words('english'))
 
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from gen_transformers.data_utils import Seq2SeqCollate
 from sum_constants import summarization_name_mapping
-from preprocess.extract_oracles import convert_to_sents
-from preprocess.convert_abstractive_to_extractive import gain_selection
 
 
 def remove_stopwords(tokens):
@@ -27,7 +25,9 @@ class SummaryDataModule(pl.LightningDataModule):
 
         self.args = args
         if args.dataset == 'cnn_dailymail':
-            self.dataset = load_dataset(args.dataset, '3.0.0')
+            # self.dataset = load_dataset(args.dataset, '3.0.0')
+            data_dir = os.path.join(args.data_dir, args.dataset)
+            self.dataset = load_from_disk(data_dir)
         else:
             self.dataset = load_dataset(args.dataset)
         self.tokenizer = tokenizer
@@ -51,11 +51,8 @@ class SummaryDataModule(pl.LightningDataModule):
                 f'Please first run: python preprocess/extract_oracles.py '
                 f'--dataset {self.args.dataset} --data_dir {self.args.data_dir}'
             )
-        print(f'Loading pre-computed oracle summaries from {oracle_fn}')
-        oracle_df = pd.read_csv(oracle_fn)
-        ids2oracles = {row['id']: row for row in oracle_df.to_dict('records')}
 
-        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, self.nlp, ids2oracles=ids2oracles)
+        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split)
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
@@ -83,31 +80,25 @@ class SummaryDataModule(pl.LightningDataModule):
 
 
 class SummarizationDataset(Dataset):
-    def __init__(self, args, dataset, split, nlp, ids2oracles=None):
+    def __init__(self, args, dataset, split):
         super(SummarizationDataset, self).__init__()
         self.args = args
-        self.nlp = nlp
         self.dataset = dataset
         self.split = split
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
-        self.ids2oracles = ids2oracles
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
         example = self.dataset[idx]
-        inputs = example[self.input_col]
         target = example[self.target_col]
-        source_annotated = inputs
 
         # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
-        oracle_obj = self.ids2oracles[example['id']]
         # Empirically, better performance from generating extracts in order in which they appear in source
         # Rather than by "relevance" as defined by ROUGE, for instance
-        oracle_idxs = list(sorted(list(map(int, oracle_obj['sent_idxs'].split(',')))))
         # Sort oracle order or not
-        oracle_labels = [i for i in oracle_idxs if i < self.args.max_num_sents]
+        oracle_labels = np.sort(example['oracle_idxs'])
         if 'extract' not in self.args.summary_style:
             oracle_labels = None
 
@@ -120,43 +111,47 @@ class SummarizationDataset(Dataset):
 
         # aligned_sent_idx = aligned_target = None
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
-        if self.args.add_sent_toks:
-            source_sents = convert_to_sents(inputs, self.nlp)
-            source_annotated = ''.join([f'<s{i}> {s}' for i, s in enumerate(source_sents)])
-            #
-            # source_sents_tok = [remove_stopwords(
-            #     [str(token.text).lower() for token in sentence]) for sentence in source_sents]
-            #
-            # # Get reference sentences -- sample 1 of them
-            # ref_sents = convert_to_sents(target, self.nlp)
-            # num_ref = len(ref_sents)
-            # rand_sample = list(np.random.random(size=(num_ref, )))
-            # sampled_ref_idx = [i for i in range(num_ref) if rand_sample[i] >= 0.5]
-            # if len(sampled_ref_idx) == 0:
-            #     sampled_ref_idx.append(0)
-            #
-            # sampled_ref = [ref_sents[i] for i in sampled_ref_idx]
-            # sampled_ref_tok = [remove_stopwords(
-            #     [str(token.text).lower() for token in sentence]) for sentence in sampled_ref]
-            # ref_remain_tok = list(itertools.chain(*sampled_ref_tok))
+        source_annotated = example['source_annotated']
+        input_ids = example['input_ids']
+        if not self.args.add_sent_toks:
+            # Use tokenizer min
+            min_sent_id = input_ids[1]
+            input_ids = [x for x in input_ids if x < min_sent_id]
+        #
+        # source_sents_tok = [remove_stopwords(
+        #     [str(token.text).lower() for token in sentence]) for sentence in source_sents]
+        #
+        # # Get reference sentences -- sample 1 of them
+        # ref_sents = convert_to_sents(target, self.nlp)
+        # num_ref = len(ref_sents)
+        # rand_sample = list(np.random.random(size=(num_ref, )))
+        # sampled_ref_idx = [i for i in range(num_ref) if rand_sample[i] >= 0.5]
+        # if len(sampled_ref_idx) == 0:
+        #     sampled_ref_idx.append(0)
+        #
+        # sampled_ref = [ref_sents[i] for i in sampled_ref_idx]
+        # sampled_ref_tok = [remove_stopwords(
+        #     [str(token.text).lower() for token in sentence]) for sentence in sampled_ref]
+        # ref_remain_tok = list(itertools.chain(*sampled_ref_tok))
 
-            # aligned = []
-            # for step in range(5):
-            #     obj = gain_selection(source_sents_tok, [ref_remain_tok], summary_size=0, lower=True)
-            #     idx = obj[0][0]
-            #     score = obj[1]['rouge_1']
-            #     remove_toks = source_sents_tok[idx]
-            #     ref_remain_tok = [x for x in ref_remain_tok if x not in remove_toks]
-            #     if (len(ref_remain_tok) <= 1 or score <= 0.05 or idx in aligned) and step != 0:
-            #         break
-            #     aligned.append(idx)
-            # aligned_sent_idx = list(np.sort(aligned))
-            # aligned_source = ' '.join([str(source_sents[i]) for i in aligned])
-            # aligned_sent_idx = oracle_labels
-            # aligned_target = target  # '\n'.join([str(x).strip() for x in sampled_ref])
+        # aligned = []
+        # for step in range(5):
+        #     obj = gain_selection(source_sents_tok, [ref_remain_tok], summary_size=0, lower=True)
+        #     idx = obj[0][0]
+        #     score = obj[1]['rouge_1']
+        #     remove_toks = source_sents_tok[idx]
+        #     ref_remain_tok = [x for x in ref_remain_tok if x not in remove_toks]
+        #     if (len(ref_remain_tok) <= 1 or score <= 0.05 or idx in aligned) and step != 0:
+        #         break
+        #     aligned.append(idx)
+        # aligned_sent_idx = list(np.sort(aligned))
+        # aligned_source = ' '.join([str(source_sents[i]) for i in aligned])
+        # aligned_sent_idx = oracle_labels
+        # aligned_target = target  # '\n'.join([str(x).strip() for x in sampled_ref])
         return {
+            'input_ids': input_ids,
+            'labels': example['labels'],
             'source': source_annotated,
-            'target': target,
             'oracle_labels': oracle_labels,
             'reference': target,  # Use for evaluation
             # 'aligned_sent_idx': aligned_sent_idx,

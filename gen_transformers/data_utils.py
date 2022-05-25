@@ -3,6 +3,7 @@ from pathlib import Path
 
 import nltk
 import torch
+import numpy as np
 
 
 from gen_transformers.model_utils import sentence_mask
@@ -26,83 +27,40 @@ class Seq2SeqCollate:
         self.special_id_min = 999999 if len(additional_ids) == 0 else min(self.tokenizer.additional_special_tokens_ids)
         self.verbose = verbose
 
-    def sent_extract_labels(self, batch_list, batch):
-        batch_size = len(batch_list)
-        num_cls = batch['cls_mask'].sum(dim=1)
-        labels = [x['oracle_labels'] for x in batch_list]
-        valid_idxs = []
-        labels_trunc = []
-        for batch_idx in range(batch_size):
-            valid_labels = [i for i in labels[batch_idx] if i < num_cls[batch_idx]]
-            if len(valid_labels) > 0:
-                labels_trunc.append(torch.LongTensor(valid_labels))
-                valid_idxs.append(batch_idx)
-            else:
-                # Dummy Label is first sentence (for validation loss)
-                # During training, we filter out these examples
-                labels_trunc.append(torch.LongTensor([0]))
-        batch['oracle_labels'] = labels_trunc
-        return valid_idxs
-
     def __call__(self, batch_list):
         batch = {}
-        # tokenize the inputs and labels
-        inputs = self.tokenizer(
-            [x['source'] for x in batch_list],
-            padding='longest',
-            truncation=True,
-            max_length=self.max_input_length,
-            return_tensors='pt'
-        )
 
-        with self.tokenizer.as_target_tokenizer():
-            outputs = self.tokenizer(
-                [x['target'] for x in batch_list],
-                padding='longest',
-                truncation=True,
-                max_length=self.max_output_length,
-                return_tensors='pt'
-            )
-            batch['labels'] = outputs.input_ids
-            # We have to make sure that the PAD token is ignored
-            batch['labels'][torch.where(batch['labels'] == 1)] = -100
+        # Pad input_ids
+        input_ids = [x['input_ids'] for x in batch_list]
+        labels = [x['labels'] for x in batch_list]
+        input_seq_lens = [len(x) for x in input_ids]
+        max_input_len = max(input_seq_lens)
 
-        batch['input_ids'] = inputs.input_ids
-        batch['attention_mask'] = inputs.attention_mask
-        batch['cls_mask'] = batch['input_ids'] >= self.special_id_min
-        batch['references'] = [x['reference'] for x in batch_list]
+        input_ids_pad = [
+            x + [self.tokenizer.pad_token_id] * (max_input_len - input_seq_lens[i])
+            for i, x in enumerate(input_ids)
+        ]
+        input_ids_pad = torch.from_numpy(np.array(input_ids_pad, dtype=np.int64))
+        attention_mask = (input_ids_pad != self.tokenizer.pad_token_id).float()
 
-        # with self.tokenizer.as_target_tokenizer():
-        #     outputs = self.tokenizer(
-        #         [x['aligned_target'] for x in batch_list],
-        #         padding='longest',
-        #         truncation=True,
-        #         max_length=self.max_output_length,
-        #         return_tensors='pt'
-        #     )
-        #     batch['aligned_labels'] = outputs.input_ids
-        #     # We have to make sure that the PAD token is ignored
-        #     batch['aligned_labels'][torch.where(batch['aligned_labels'] == 1)] = -100
-        # batch['aligned_attention_mask'] = torch.cat([
-        #     sentence_mask(
-        #         cls_mask=batch['cls_mask'][batch_idx].unsqueeze(0),
-        #         sent_idx_to_mask=batch_list[batch_idx]['aligned_sent_idx'],
-        #         prev_mask=batch['attention_mask'][batch_idx].unsqueeze(0)
-        #     ) for batch_idx in range(len(batch_list))
-        # ])
+        label_seq_lens = [len(x) for x in labels]
+        max_label_len = max(label_seq_lens)
+        label_ids_pad = [
+            x + [-100] * (max_label_len - label_seq_lens[i])
+            for i, x in enumerate(labels)
+        ]
+        label_ids_pad = torch.from_numpy(np.array(label_ids_pad, dtype=np.int64))
 
-        if batch_list[0]['oracle_labels'] is not None:
-            valid_idxs = self.sent_extract_labels(batch_list, batch)
-            if len(valid_idxs) < len(batch_list) and self.split == 'train':
-                num_to_remove = len(batch_list) - len(valid_idxs)
-                if self.verbose:
-                    print(
-                        f'Removing {num_to_remove} examples where the oracle label has been truncated bc after 1024 WPs'
-                    )
-                new_batch_list = [batch_list[i] for i in valid_idxs]
-                return self(new_batch_list)
-
-        return batch
+        oracle_labels = [torch.LongTensor(x['oracle_labels']) for x in batch_list]
+        references = [x['reference'] for x in batch_list]
+        return {
+            'input_ids': input_ids_pad,
+            'attention_mask': attention_mask,
+            'labels': label_ids_pad,
+            'cls_mask': input_ids_pad >= self.special_id_min,
+            'oracle_labels': oracle_labels,
+            'references': references,
+        }
 
 
 def get_path_from_exp(weights_dir, experiment):

@@ -1657,7 +1657,7 @@ class BartForConditionalCopy(BartPretrainedModel):
         decoder_h_rep = decoder_h.unsqueeze(2).repeat(1, 1, enc_steps, 1).view(num_beams, enc_steps * dec_steps, -1)
 
         class_input = torch.cat([encoder_h_rep, decoder_h_rep], dim=-1)
-        # redunancy_features = empty tensor of size num_beams, dec_steps, enc_steps
+        # redundancy_features = empty tensor of size num_beams, dec_steps, enc_steps
         # for beam in range(num_beams):
         #     for dec_step in range(1, dec_steps):  # First step is the start token
         #         prev_pred_id = decoder_input_ids[beam, 1:dec_step]  # These are the previously predicted sentences
