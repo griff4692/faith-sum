@@ -1657,6 +1657,16 @@ class BartForConditionalCopy(BartPretrainedModel):
         decoder_h_rep = decoder_h.unsqueeze(2).repeat(1, 1, enc_steps, 1).view(num_beams, enc_steps * dec_steps, -1)
 
         class_input = torch.cat([encoder_h_rep, decoder_h_rep], dim=-1)
+        # redunancy_features = empty tensor of size num_beams, dec_steps, enc_steps
+        # for beam in range(num_beams):
+        #     for dec_step in range(1, dec_steps):  # First step is the start token
+        #         prev_pred_id = decoder_input_ids[beam, 1:dec_step]  # These are the previously predicted sentences
+        #           for enc_step in range(1, enc_steps):
+        #               Incorporate redundancy features for beam, dec_step, sentence i (enc_step_i)
+        #               # i.e., Compare sentence at enc_step with set of previously predicted sentences prev_pred_id
+        # class_input = torch.cat([encoder_h_rep, decoder_h_rep, redundancy_features], dim=-1)
+        # TODO then expand size of self.cand_classifier from config.d_model * 2 to config.d_model * 2 + |redundancy features|
+
         lm_logits = self.cand_classifier(class_input).view(num_beams, dec_steps, enc_steps)
 
         # Duplication mask
