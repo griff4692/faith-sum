@@ -68,7 +68,13 @@ class TransformerSummarizer(pl.LightningModule):
         if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
             if self.hparams.extract_method == 'generate':
-                extract_loss, extracts = self.generate_extracts(batch, source, encoder_h, build=build_extracts)
+                extract_loss, extracts, brio_info = self.generate_extracts(
+                    batch, source, encoder_h, build=build_extracts
+                )
+                if brio_info is not None:
+                    # return_loss += brio_info['margin_loss']
+                    metrics['sent_brio'] = brio_info['margin_loss']
+                    metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
             else:
                 assert self.hparams.extract_method == 'select'
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
@@ -330,6 +336,7 @@ class TransformerSummarizer(pl.LightningModule):
     def compute_gen_extract_loss(self, cls_mask, encoder_h, oracle_labels):
         batch_size = len(cls_mask)
         losses = []
+        sent_encoder_h = []
         stop_input_id = torch.LongTensor([0]).to(self.device)
         for batch_idx in range(batch_size):
             cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
@@ -342,8 +349,10 @@ class TransformerSummarizer(pl.LightningModule):
             output = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
             loss = self.label_smoother(output, labels)
 
+            sent_encoder_h.append(output.encoder_last_hidden_state)
             losses.append(loss)
-        return torch.stack(losses).mean()
+        avg_losses = torch.stack(losses).mean()
+        return avg_losses, sent_encoder_h
 
     def sample_score_extracts(self, batch, source, encoder_h, num_return_sequences=1, topk=6):
         batch_size = len(batch['cls_mask'])
@@ -413,11 +422,30 @@ class TransformerSummarizer(pl.LightningModule):
 
     def generate_extracts(self, batch, source, encoder_h, build=True):
         cls_mask = batch['cls_mask']
-        loss = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'])
+        oracle_cand_labels = batch.pop('oracle_cand_labels', None)
+        loss, sent_encoder_h = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'])
+        brio_info = None
+        if oracle_cand_labels is not None:
+            margin_losses = []
+            pos_neg_gaps = []
+            for batch_idx in range(len(cls_mask)):
+                sent_labels = oracle_cand_labels[batch_idx]
+                margin_loss, pos_neg_gap = self.brio_step(sent_labels, sent_encoder_h[batch_idx])
+                if margin_loss is not None:
+                    margin_losses.append(margin_loss)
+                if pos_neg_gap is not None:
+                    pos_neg_gaps.append(pos_neg_gap)
+            margin_losses = torch.stack(margin_losses).mean()
+            pos_neg_gaps = np.mean(pos_neg_gaps)
+            brio_info = {
+                'margin_loss': margin_losses,
+                'pos_neg_gap': pos_neg_gaps
+            }
+
         if not build:
-            return loss, None
+            return loss, None, brio_info
         summaries = self.sample_gen_extracts(batch, source, encoder_h, num_return_sequences=1)
-        return loss, summaries
+        return loss, summaries, brio_info
 
     def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
         all_summaries = []
@@ -449,6 +477,41 @@ class TransformerSummarizer(pl.LightningModule):
         return_obj = self.get_summary_from_sent_idxs(source, summary_idx)
         return_obj['sent_dist'] = y_hat
         return return_obj
+
+    def brio_step(self, sent_labels, sent_encoder_h):
+        num_cand = len(sent_labels)
+        if num_cand < 2:
+            print(f'{num_cand} BRIO candidates provided')
+            return None, None
+
+        encoder_outputs = sent_encoder_h.repeat(num_cand, 1, 1).contiguous().clone()
+        # encoder_attention_mask = batch['attention_mask'][batch_idx].unsqueeze(0).repeat(num_cand, 1).contiguous()
+        inputs = {
+            'encoder_outputs': [encoder_outputs],
+            # 'attention_mask': encoder_attention_mask,
+            'labels': sent_labels,
+        }
+
+        cand_outputs = self.sent_bart(**inputs, use_cache=False)
+        nll = []
+        for cand_idx in range(num_cand):
+            loss_row_full = {'logits': cand_outputs['logits'][cand_idx]}
+            nll.append(self.label_smoother(loss_row_full, sent_labels[cand_idx]))
+
+        # Compute Rank Score (not for back-prop)
+        margin_losses = []
+        pos_neg_gap = []
+        for a in range(num_cand - 1):
+            for b in range(a + 1, num_cand):
+                pos_ll = - nll[a]
+                neg_ll = - nll[b]
+                margin = self.hparams.contrast_margin * (b - a)
+                margin_losses.append(torch.clamp(neg_ll - pos_ll + margin, min=0))
+                pos_neg_gap.append(float((pos_ll - neg_ll).detach().item()))
+
+        avg_margin = torch.stack(margin_losses).mean()
+        avg_gap = np.mean(pos_neg_gap)
+        return avg_margin, avg_gap
 
     def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
         oracle_strs = [x.split('<sep>')[0].replace('<s>', '') for x in self.tokenizer.batch_decode(batch['labels'])]

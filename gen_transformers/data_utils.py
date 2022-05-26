@@ -6,9 +6,6 @@ import torch
 import numpy as np
 
 
-from gen_transformers.model_utils import sentence_mask
-
-
 def postprocess_text(texts):
     return ['\n'.join(nltk.sent_tokenize(text.strip())) for text in texts]
 
@@ -53,7 +50,7 @@ class Seq2SeqCollate:
 
         oracle_labels = [torch.LongTensor(x['oracle_labels']) for x in batch_list]
         references = [x['reference'] for x in batch_list]
-        return {
+        row = {
             'input_ids': input_ids_pad,
             'attention_mask': attention_mask,
             'labels': label_ids_pad,
@@ -61,6 +58,10 @@ class Seq2SeqCollate:
             'oracle_labels': oracle_labels,
             'references': references,
         }
+
+        if 'oracle_cand_labels' in batch_list[0]:
+            row['oracle_cand_labels'] = [torch.from_numpy(np.array(x['oracle_cand_labels'], dtype=np.int64)) for x in batch_list]
+        return row
 
 
 def get_path_from_exp(weights_dir, experiment):

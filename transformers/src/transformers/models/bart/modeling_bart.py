@@ -1680,7 +1680,7 @@ class BartForConditionalCopy(BartPretrainedModel):
         # lm_logits.masked_fill_(duplication_mask, -100)  # Pick a large negative
 
         masked_lm_loss = None
-        if labels is not None:
+        if labels is not None and num_beams == 1:
             assert num_beams == 1
             loss_fct = CrossEntropyLoss()
             masked_lm_loss = loss_fct(lm_logits.squeeze(0), labels.squeeze(0))

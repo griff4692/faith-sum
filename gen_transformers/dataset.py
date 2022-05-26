@@ -1,11 +1,10 @@
-import itertools
 import os
 from string import punctuation
+import ujson
 
 import numpy as np
 from nltk.corpus import stopwords
 import pytorch_lightning as pl
-import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
 STOPWORDS = set(stopwords.words('english'))
@@ -45,14 +44,11 @@ class SummaryDataModule(pl.LightningDataModule):
         if max_examples is not None and max_examples < n:
             idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
             split_dataset = split_dataset.select(idxs)
-        oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_v2.csv')
-        if not os.path.exists(oracle_fn):
-            raise Exception(
-                f'Please first run: python preprocess/extract_oracles.py '
-                f'--dataset {self.args.dataset} --data_dir {self.args.data_dir}'
-            )
+        oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates.json')
+        with open(oracle_fn, 'r') as fd:
+            candidates = ujson.load(fd)
 
-        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split)
+        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, candidates)
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
@@ -80,11 +76,12 @@ class SummaryDataModule(pl.LightningDataModule):
 
 
 class SummarizationDataset(Dataset):
-    def __init__(self, args, dataset, split):
+    def __init__(self, args, dataset, split, candidates):
         super(SummarizationDataset, self).__init__()
         self.args = args
         self.dataset = dataset
         self.split = split
+        self.candidates = candidates
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
 
     def __len__(self):
@@ -92,6 +89,7 @@ class SummarizationDataset(Dataset):
 
     def __getitem__(self, idx):
         example = self.dataset[idx]
+        dataset_id = example['id']
         target = example[self.target_col]
 
         # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
@@ -148,7 +146,7 @@ class SummarizationDataset(Dataset):
         # aligned_source = ' '.join([str(source_sents[i]) for i in aligned])
         # aligned_sent_idx = oracle_labels
         # aligned_target = target  # '\n'.join([str(x).strip() for x in sampled_ref])
-        return {
+        row = {
             'input_ids': input_ids,
             'labels': example['labels'],
             'source': source_annotated,
@@ -157,3 +155,11 @@ class SummarizationDataset(Dataset):
             # 'aligned_sent_idx': aligned_sent_idx,
             # 'aligned_target': aligned_target,
         }
+
+        if self.args.add_sent_brio:
+            candidates = [np.sort(x['extract_idx']) for x in self.candidates[dataset_id]]
+            if len(candidates) == 1:
+                print(candidates[0])
+                candidates.append(candidates[0])  # Revisit This (why do we have 1 candidate sometimes)
+            row['oracle_cand_labels'] = candidates
+        return row
