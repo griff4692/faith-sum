@@ -48,7 +48,9 @@ class Seq2SeqCollate:
         ]
         label_ids_pad = torch.from_numpy(np.array(label_ids_pad, dtype=np.int64))
 
-        oracle_labels = [torch.LongTensor(x['oracle_labels']) for x in batch_list]
+        oracle_labels = [
+            torch.LongTensor(x['oracle_labels']) if x['oracle_labels'] is not None else None for x in batch_list
+        ]
         references = [x['reference'] for x in batch_list]
         row = {
             'input_ids': input_ids_pad,

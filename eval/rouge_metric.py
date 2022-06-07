@@ -64,7 +64,7 @@ class RougeMetric:
         output_dict = self.r.output_to_dict(output)
         shutil.rmtree(self.r.system_dir)
         shutil.rmtree(self.r.model_dir)
-        return {"rouge": output_dict}
+        return {'rouge': output_dict}
 
     def evaluate_batch(self, summaries, references, aggregate=True):
         if not aggregate:

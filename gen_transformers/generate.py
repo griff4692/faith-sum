@@ -63,6 +63,7 @@ if __name__ == '__main__':
     parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('-use_hf_rouge', default=False, action='store_true')  # Much faster to use HF implementation
     parser.add_argument('--bootstraps', default=1, type=int)
+    parser.add_argument('-add_sent_brio', default=False, action='store_true')
     parser.add_argument(
         '--summary_style',
         default='extract_abstract',
@@ -150,7 +151,7 @@ if __name__ == '__main__':
         method = '_sample' if args.sample_gen else '_beam'
         out_fn = os.path.join(results_dir, f'{args.split}{method}_outputs.csv')
         print(f'Saving {len(outputs)} ROUGE scores and predictions to {out_fn}')
-        outputs.to_csv(out_fn, index=False)
+        # outputs.to_csv(out_fn, index=False)
         num_col = outputs.select_dtypes('number')
         for col in list(num_col.columns):
             print(f'{col}: {num_col[col].dropna().mean()}')
@@ -192,6 +193,6 @@ if __name__ == '__main__':
     exp_results = pd.DataFrame(exp_results)
     out_fn = 'confidence_sample.csv' if args.sample_gen else 'confidence.csv'
     print(args.length_penalty)
-    exp_results.to_csv(out_fn, index=False)
+    # exp_results.to_csv(out_fn, index=False)
     for col in list(exp_results.columns):
         print(f'{col}: min={exp_results[col].min()}, max={exp_results[col].max()}, avg={exp_results[col].mean()}')
