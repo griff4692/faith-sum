@@ -24,13 +24,12 @@ class SummaryDataModule(pl.LightningDataModule):
 
         self.args = args
         if args.dataset == 'cnn_dailymail':
-            # self.dataset = load_dataset(args.dataset, '3.0.0')
             data_dir = os.path.join(args.data_dir, args.dataset)
             self.dataset = load_from_disk(data_dir)
         else:
             self.dataset = load_dataset(args.dataset)
         self.tokenizer = tokenizer
-        self.num_workers = 0 if args.debug else 16
+        self.num_workers = 0 if args.debug else 4
         self.nlp = spacy.load('en_core_web_sm')
 
     def get_split(self, split, max_examples=None, **dataloader_kwargs):

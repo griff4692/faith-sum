@@ -90,7 +90,7 @@ def run(args):
         accumulate_grad_batches=args.grad_accum,
         val_check_interval=1.0 if args.debug or args.train_frac <= 0.2 else 0.25,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
-        num_sanity_val_steps=1 if args.debug else 2,
+        num_sanity_val_steps=0 if args.debug else 2,
         log_every_n_steps=25,
         max_steps=args.max_steps,
         plugins=plugins,

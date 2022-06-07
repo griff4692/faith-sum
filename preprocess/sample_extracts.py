@@ -101,7 +101,7 @@ if __name__ == '__main__':
             outputs = list(p_uimap(
                 lambda example: gen_oracle(args, example=example, rouge=rouge), data_split
             ))
-        out_fn = os.path.join(out_dir, f'{split}_candidates.json')
+        out_fn = os.path.join(out_dir, f'{split}_candidates_v2.json')
         print(f'Saving {len(outputs)} examples to {out_fn}')
         outputs_by_id = {arr['id']: arr['candidates'] for arr in outputs}
         with open(out_fn, 'w') as fd:

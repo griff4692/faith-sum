@@ -68,13 +68,13 @@ class TransformerSummarizer(pl.LightningModule):
         if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
             if self.hparams.extract_method == 'generate':
-                extract_loss, extracts, brio_info = self.generate_extracts(
-                    batch, source, encoder_h, build=build_extracts
-                )
+                extract_loss, extracts, brio_info = self.generate_extracts(batch, source, encoder_h)
                 if brio_info is not None:
-                    # return_loss += brio_info['margin_loss']
+                    return_loss += brio_info['margin_loss']  # 0.1 *
                     metrics['sent_brio'] = brio_info['margin_loss']
                     metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
+                    metrics['brio_rouge1_f1'] = brio_info['brio_rouge1_f1']
+                    metrics['brio_rank'] = brio_info['brio_rank']
             else:
                 assert self.hparams.extract_method == 'select'
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
@@ -116,7 +116,8 @@ class TransformerSummarizer(pl.LightningModule):
         return {'metrics': metrics, 'return_loss': return_loss, 'encoder_h': encoder_h, 'extracts': extracts}
 
     def training_step(self, batch, batch_idx):
-        shared_output = self.shared_step(batch, build_extracts=False)  # Don't generate extracts
+        # source = self.parse_source_text_from_inputs(batch)
+        shared_output = self.shared_step(batch, source=None, build_extracts=False)  # Don't generate extracts
         metrics, return_loss = shared_output['metrics'], shared_output['return_loss']
         metrics['combined'] = return_loss
         self.log_metrics(metrics, is_train=True, prefix='train_')
@@ -224,7 +225,7 @@ class TransformerSummarizer(pl.LightningModule):
             output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
             if self.hparams.extract_method == 'generate':
-                extractive_summaries = self.sample_gen_extracts(
+                extractive_summaries, _ = self.sample_gen_extracts(
                     batch, source, encoder_h, num_return_sequences=gen_kwargs['num_return_sequences']
                 )
             else:
@@ -383,6 +384,7 @@ class TransformerSummarizer(pl.LightningModule):
 
     def sample_gen_extracts(self, batch, source, encoder_h, num_return_sequences=1):
         extractive_summaries = []
+        raw_predictions = []
         cls_mask = batch['cls_mask']
         batch_size = len(cls_mask)
         stop_input_id = torch.LongTensor([0]).to(self.device)
@@ -413,38 +415,66 @@ class TransformerSummarizer(pl.LightningModule):
                 shared_kwargs.update(sample_kwargs)
 
             pred_ids = self.sent_bart.generate(**shared_kwargs)
+            raw_predictions.append(pred_ids)
             return_obj = []
             for summary_idx in pred_ids.tolist():
                 summary_idx_no_special = self.remove_special_tokens_from_sent_bart(summary_idx, seq_len)
                 return_obj.append(self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special))
             extractive_summaries.append(return_obj)
-        return extractive_summaries
+        return extractive_summaries, raw_predictions
 
-    def generate_extracts(self, batch, source, encoder_h, build=True):
+    def generate_extracts(self, batch, source, encoder_h):
         cls_mask = batch['cls_mask']
-        oracle_cand_labels = batch.pop('oracle_cand_labels', None)
+        # oracle_cand_labels = batch.pop('oracle_cand_labels', None)
         loss, sent_encoder_h = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'])
+
+        num_return_sequences = 1
+        if self.sent_bart.training and self.hparams.add_sent_brio:
+            num_return_sequences = 10
+        elif self.sent_bart.training:
+            num_return_sequences = 0
+
+        summaries = raw_predictions = None
+        if num_return_sequences > 0:
+            summaries, raw_predictions = self.sample_gen_extracts(
+                batch, source, encoder_h, num_return_sequences=num_return_sequences
+            )
+
         brio_info = None
-        if oracle_cand_labels is not None:
+        if self.sent_bart.training and self.hparams.add_sent_brio:
             margin_losses = []
             pos_neg_gaps = []
+            brio_scores = []
+            brio_ranks = []
             for batch_idx in range(len(cls_mask)):
-                sent_labels = oracle_cand_labels[batch_idx]
-                margin_loss, pos_neg_gap = self.brio_step(sent_labels, sent_encoder_h[batch_idx])
+                rouge_scores = [
+                    self.compute_rouge([summaries[batch_idx][cand_idx]], [batch['references'][batch_idx]])
+                    for cand_idx in range(num_return_sequences)
+                ]
+
+                priority = np.argsort([-x['mean_f1'] for x in rouge_scores])
+                scores = np.array([x['rouge1_f1'] for x in rouge_scores])[priority]
+                predictions_ordered = raw_predictions[batch_idx][priority]
+
+                margin_loss, pos_neg_gap, pred_r1, pred_idx = self.brio_step(
+                    predictions_ordered, sent_encoder_h[batch_idx], scores
+                )
                 if margin_loss is not None:
                     margin_losses.append(margin_loss)
                 if pos_neg_gap is not None:
                     pos_neg_gaps.append(pos_neg_gap)
+                brio_scores.append(pred_r1)
+                brio_ranks.append(pred_idx)
             margin_losses = torch.stack(margin_losses).mean()
             pos_neg_gaps = np.mean(pos_neg_gaps)
+            brio_scores = np.mean(brio_scores)
+            brio_ranks = np.mean(brio_ranks)
             brio_info = {
                 'margin_loss': margin_losses,
-                'pos_neg_gap': pos_neg_gaps
+                'pos_neg_gap': pos_neg_gaps,
+                'brio_rouge1_f1': brio_scores,
+                'brio_rank': brio_ranks
             }
-
-        if not build:
-            return loss, None, brio_info
-        summaries = self.sample_gen_extracts(batch, source, encoder_h, num_return_sequences=1)
         return loss, summaries, brio_info
 
     def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
@@ -478,8 +508,8 @@ class TransformerSummarizer(pl.LightningModule):
         return_obj['sent_dist'] = y_hat
         return return_obj
 
-    def brio_step(self, sent_labels, sent_encoder_h):
-        num_cand = len(sent_labels)
+    def brio_step(self, cand_labels, sent_encoder_h, scores):
+        num_cand = len(cand_labels)
         if num_cand < 2:
             print(f'{num_cand} BRIO candidates provided')
             return None, None
@@ -489,14 +519,14 @@ class TransformerSummarizer(pl.LightningModule):
         inputs = {
             'encoder_outputs': [encoder_outputs],
             # 'attention_mask': encoder_attention_mask,
-            'labels': sent_labels,
+            'labels': cand_labels,
         }
 
         cand_outputs = self.sent_bart(**inputs, use_cache=False)
         nll = []
         for cand_idx in range(num_cand):
             loss_row_full = {'logits': cand_outputs['logits'][cand_idx]}
-            nll.append(self.label_smoother(loss_row_full, sent_labels[cand_idx]))
+            nll.append(self.label_smoother(loss_row_full, cand_labels[cand_idx]))
 
         # Compute Rank Score (not for back-prop)
         margin_losses = []
@@ -511,7 +541,9 @@ class TransformerSummarizer(pl.LightningModule):
 
         avg_margin = torch.stack(margin_losses).mean()
         avg_gap = np.mean(pos_neg_gap)
-        return avg_margin, avg_gap
+        score_idx = int(torch.argmin(torch.stack(nll)).item())
+        highest_ll_score = scores[score_idx]
+        return avg_margin, avg_gap, highest_ll_score, score_idx
 
     def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
         oracle_strs = [x.split('<sep>')[0].replace('<s>', '') for x in self.tokenizer.batch_decode(batch['labels'])]
