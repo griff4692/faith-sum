@@ -385,14 +385,34 @@ class TransformerSummarizer(pl.LightningModule):
                 k = min(topk, len(y_hat_np))
                 top_k_y = y_hat.topk(k=k)
                 top_k_y_indices = top_k_y.indices
-                temperature = 1.0
+                temperature = 1.
+
                 top_k_y_p = torch.softmax(top_k_y.values * temperature, dim=0).numpy()
-                for sample in range(sample_num):
-                    try:
-                        summary_idx = list(np.random.choice(top_k_y_indices, size=(3, ), replace=False, p=top_k_y_p))
-                    except:
-                        print(top_k_y_indices)
-                        summary_idx = list(np.random.choice(top_k_y_indices, size=(3,), replace=False))
+                joint_rank = True
+                if joint_rank:
+                    from itertools import combinations
+                    all_combos = list(combinations(np.arange(k), 3))
+                    triplet_scores = []
+                    for ic in all_combos:
+                        a, b, c = ic
+                        triplet_scores.append(
+                            top_k_y_p[a] * top_k_y_p[b] * top_k_y_p[c]
+                        )
+                    triplet_idxs = np.argsort(-np.array(triplet_scores))[:sample_num]
+                    selected_ranks = [all_combos[i] for i in triplet_idxs]
+                    selected_idxs = [
+                        [top_k_y_indices[i].item() for i in ir] for ir in selected_ranks
+                    ]
+                else:
+                    selected_idxs = []
+                    for sample in range(sample_num):
+                        try:
+                            summary_idx = list(np.random.choice(top_k_y_indices, size=(3,), replace=False, p=top_k_y_p))
+                        except:
+                            print(top_k_y_indices)
+                            summary_idx = list(np.random.choice(top_k_y_indices, size=(3,), replace=False))
+                        selected_idxs.append(summary_idx)
+                for summary_idx in selected_idxs:
                     return_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx)
                     return_obj['sent_dist'] = y_hat_np
                     sum.append(return_obj)
