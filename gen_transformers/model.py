@@ -289,18 +289,22 @@ class TransformerSummarizer(pl.LightningModule):
 
                 if len(gen_output['abstracts']) > 1:
                     # Get all the ROUGE abstracts (average ROUGE-1, ROUGE-2)
-                    abstract_cand_metrics, best_abstract_metric = self.score_candidates(
+                    abstract_cand_metrics, best_abstract_metric, avg_abstract_r1, diversity = self.score_candidates(
                         [reference], gen_output['abstracts'], 'abstract', eval=eval
                     )
                     save_out.update(best_abstract_metric)
+                    save_out.update({'avg_rouge1_f1': avg_abstract_r1})
+                    save_out.update({'diversity': diversity})
                     save_out['abstract_rouges'] = ','.join(
                         [str(x['best_abstract_mean_f1']) for x in abstract_cand_metrics]
                     )
 
-                    implied_cand_metrics, best_implied_metric = self.score_candidates(
+                    implied_cand_metrics, best_implied_metric, avg_implied_r1, implied_diversity = self.score_candidates(
                         [reference], implied_extracts, 'implied', eval=eval
                     )
                     save_out.update(best_implied_metric)
+                    save_out.update({'avg_implied_rouge1_f1': avg_implied_r1})
+                    save_out.update({'implied_diversity': implied_diversity})
                     save_out['implied_extract_rouges'] = ','.join(
                         [str(x['best_implied_mean_f1']) for x in implied_cand_metrics]
                     )
@@ -309,9 +313,12 @@ class TransformerSummarizer(pl.LightningModule):
                 extracts = [x['summary'] for x in gen_output['extracts']]
                 save_out.update(self.compute_rouge(extracts[:1], [reference], prefix='extract_', eval=eval))
                 if len(extracts) > 1:
-                    extract_cand_metrics, best_extract_metric = self.score_candidates(
+                    extract_cand_metrics, best_extract_metric, avg_r1, extract_diversity = self.score_candidates(
                         [reference], extracts, 'extract', eval=eval
                     )
+
+                    save_out.update({'avg_extract_rouge1_f1': avg_r1})
+                    save_out.update({'extract_diversity': extract_diversity})
                     save_out.update(best_extract_metric)
                     save_out['extract_rouges'] = ','.join(
                         [str(x['best_extract_mean_f1']) for x in extract_cand_metrics]
@@ -418,7 +425,7 @@ class TransformerSummarizer(pl.LightningModule):
             sample_kwargs = {
                 'num_beam_groups': num_return_sequences,
                 'num_beams': num_return_sequences,
-                'diversity_penalty': 1.0,
+                'diversity_penalty': 0.5,
             }
             if num_return_sequences == 1:
                 shared_kwargs.update(beam_kwargs)
@@ -838,9 +845,19 @@ class TransformerSummarizer(pl.LightningModule):
             [abstract], reference, prefix=f'best_{prefix}_', eval=False, rouge_types=['rouge1']
         ) for abstract in candidates]
         cand_scores = [x[f'best_{prefix}_mean_f1'] for x in cand_metrics]
+        avg_r1_f1 = np.mean([x[f'best_{prefix}_rouge1_f1'] for x in cand_metrics])
         best_cand = np.argmax(cand_scores)
         best_metric = self.compute_rouge([candidates[best_cand]], reference, prefix=f'best_{prefix}_', eval=eval)
-        return cand_metrics, best_metric
+        overlaps = []
+        for i in range(len(candidates)):
+            i_toks = set(list(map(lambda x: x.lower(), candidates[i].split(' '))))
+            for j in range(i + 1, len(candidates)):
+                j_toks = set(list(map(lambda x: x.lower(), candidates[j].split(' '))))
+                avg_len = max(1., 0.5 * len(i_toks) + 0.5 * len(j_toks))
+                overlap = len(i_toks.intersection(j_toks)) / avg_len
+                overlaps.append(overlap)
+        avg_overlap = np.mean(overlaps)
+        return cand_metrics, best_metric, avg_r1_f1, avg_overlap
 
     def configure_optimizers(self):
         no_decay = ['bias', 'LayerNorm.weight']

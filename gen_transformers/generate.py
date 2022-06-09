@@ -183,7 +183,8 @@ if __name__ == '__main__':
             'rouge1_f1', 'implied_rouge1_f1', 'extract_rouge1_f1',
             'best_extract_rouge1_f1', 'best_abstract_rouge1_f1', 'best_implied_rouge1_f1',
             'oracle_prompt_rouge1_f1', 'extract_implied_sent_f1', 'extract_gen_rouge1_f1',
-            'rand_plan_implied_sent_f1'
+            'rand_plan_implied_sent_f1', 'avg_rouge1_f1', 'avg_implied_rouge1_f1', 'avg_extract_rouge1_f1',
+            'diversity', 'implied_diversity', 'extract_diversity'
         ]
         exp_row = {
             col: outputs[col].dropna().mean() for col in agg_cols if col in list(outputs.columns)

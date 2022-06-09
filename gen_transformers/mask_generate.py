@@ -66,7 +66,8 @@ if __name__ == '__main__':
     parser.add_argument('--extractor', default='extract', choices=['oracle', 'abstract', 'extract'])
     parser.add_argument('--gpu_device', default=1, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--wandb_name', default='score_abstract_kld')
+    parser.add_argument('--wandb_name', default='gen_abstract_full')
+    parser.add_argument('--extract_results', default='gen_extract_full')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--hf_model', default='facebook/bart-base')
     parser.add_argument('--max_examples', default=1000, type=int)
@@ -76,7 +77,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     oracle_df = pd.read_csv(os.path.join(args.data_dir, 'cnn_dailymail/oracle/validation_v2.csv'))
-    results_dir = os.path.join(args.data_dir, 'results', args.wandb_name)
+    results_dir = os.path.join(args.data_dir, 'results', args.extract_results)
     outputs = pd.read_csv(os.path.join(results_dir, 'validation_beam_outputs.csv'))
     n = len(outputs)
     if n > args.max_examples:
