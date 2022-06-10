@@ -70,11 +70,13 @@ class TransformerSummarizer(pl.LightningModule):
             if self.hparams.extract_method == 'generate':
                 extract_loss, extracts, brio_info = self.generate_extracts(batch, source, encoder_h)
                 if brio_info is not None:
-                    return_loss += brio_info['margin_loss']  # 0.1 *
+                    return_loss += self.hparams.brio_loss_coef * brio_info['margin_loss']
                     metrics['sent_brio'] = brio_info['margin_loss']
                     metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
-                    metrics['brio_rouge1_f1'] = brio_info['brio_rouge1_f1']
+                    if brio_info['brio_rouge1_f1'] is not None:
+                        metrics['brio_rouge1_f1'] = brio_info['brio_rouge1_f1']
                     metrics['brio_rank'] = brio_info['brio_rank']
+                    metrics['brio_win_rate'] = brio_info['brio_win_rate']
             else:
                 assert self.hparams.extract_method == 'select'
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
@@ -88,30 +90,36 @@ class TransformerSummarizer(pl.LightningModule):
                 'attention_mask': batch['attention_mask'],
                 'labels': batch['labels'],
             }
+
+            if self.hparams.oracle_cross_mask:
+                mask = implement_oracle_masking(batch, oracle_mask_k=self.hparams.oracle_mask_k)
+                updated_inputs['attention_mask'] = mask
+
             output = self.model(**updated_inputs, use_cache=False)
             # Regular MLE decoder loss
             metrics['loss'] = output.loss  # Log unsmoothed loss for comparison to earlier runs.
             # Return label-smoothed loss for BART Decoder
-            smooth_lm_loss = self.label_smoother(output, batch['labels'])
-            return_loss += smooth_lm_loss
-
-            if self.hparams.add_align or self.hparams.oracle_cross_mask:
-                if self.hparams.oracle_cross_mask:
-                    mask = implement_oracle_masking(batch, oracle_mask_k=self.hparams.oracle_mask_k)
-                else:
-                    mask = batch['aligned_attention_mask']
-                updated_inputs = {
-                    'encoder_outputs': [encoder_h],
-                    'attention_mask': mask,
-                    'labels': batch['aligned_labels'],
-                }
-
-                aligned_output = self.model(**updated_inputs, use_cache=False)
-                # Regular MLE decoder loss
-                metrics['aligned_loss'] = aligned_output.loss  # Log un-smoothed loss for comparison to earlier runs.
-                # Return label-smoothed loss for BART Decoder
-                smooth_lm_loss = self.label_smoother(aligned_output, batch['aligned_labels'])
+            if not self.hparams.just_rank:
+                smooth_lm_loss = self.label_smoother(output, batch['labels'])
                 return_loss += smooth_lm_loss
+
+            # if self.hparams.add_align or self.hparams.oracle_cross_mask:
+            #     if self.hparams.oracle_cross_mask:
+            #         mask = implement_oracle_masking(batch, oracle_mask_k=self.hparams.oracle_mask_k)
+            #     else:
+            #         mask = batch['aligned_attention_mask']
+            #     updated_inputs = {
+            #         'encoder_outputs': [encoder_h],
+            #         'attention_mask': mask,
+            #         'labels': batch['aligned_labels'],
+            #     }
+            #
+            #     aligned_output = self.model(**updated_inputs, use_cache=False)
+            #     # Regular MLE decoder loss
+            #     metrics['aligned_loss'] = aligned_output.loss  # Log un-smoothed loss for comparison to earlier runs.
+            #     # Return label-smoothed loss for BART Decoder
+            #     smooth_lm_loss = self.label_smoother(aligned_output, batch['aligned_labels'])
+            #     return_loss += smooth_lm_loss
 
         return {'metrics': metrics, 'return_loss': return_loss, 'encoder_h': encoder_h, 'extracts': extracts}
 
@@ -445,7 +453,7 @@ class TransformerSummarizer(pl.LightningModule):
             sample_kwargs = {
                 'num_beam_groups': num_return_sequences,
                 'num_beams': num_return_sequences,
-                'diversity_penalty': 0.5,
+                'diversity_penalty': 1.0,
             }
             if num_return_sequences == 1:
                 shared_kwargs.update(beam_kwargs)
@@ -463,39 +471,26 @@ class TransformerSummarizer(pl.LightningModule):
 
     def generate_extracts(self, batch, source, encoder_h):
         cls_mask = batch['cls_mask']
-        # oracle_cand_labels = batch.pop('oracle_cand_labels', None)
+        oracle_cand_labels = batch.pop('oracle_cand_labels', None)
         loss, sent_encoder_h = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'])
 
-        num_return_sequences = 1
-        if self.sent_bart.training and self.hparams.add_sent_brio:
-            num_return_sequences = 10
-        elif self.sent_bart.training:
-            num_return_sequences = 0
-
-        summaries = raw_predictions = None
-        if num_return_sequences > 0:
-            summaries, raw_predictions = self.sample_gen_extracts(
-                batch, source, encoder_h, num_return_sequences=num_return_sequences
+        summaries = None
+        if not self.sent_bart.training:
+            summaries, _ = self.sample_gen_extracts(
+                batch, source, encoder_h, num_return_sequences=1
             )
 
         brio_info = None
-        if self.sent_bart.training and self.hparams.add_sent_brio:
+        if self.hparams.add_sent_brio:
             margin_losses = []
             pos_neg_gaps = []
             brio_scores = []
             brio_ranks = []
+            win_fracs = []
             for batch_idx in range(len(cls_mask)):
-                rouge_scores = [
-                    self.compute_rouge([summaries[batch_idx][cand_idx]], [batch['references'][batch_idx]])
-                    for cand_idx in range(num_return_sequences)
-                ]
-
-                priority = np.argsort([-x['mean_f1'] for x in rouge_scores])
-                scores = np.array([x['rouge1_f1'] for x in rouge_scores])[priority]
-                predictions_ordered = raw_predictions[batch_idx][priority]
-
-                margin_loss, pos_neg_gap, pred_r1, pred_idx = self.brio_step(
-                    predictions_ordered, sent_encoder_h[batch_idx], scores
+                sent_labels = oracle_cand_labels[batch_idx]
+                margin_loss, pos_neg_gap, pred_r1, pred_idx, win_frac = self.brio_step(
+                    sent_labels, sent_encoder_h[batch_idx], scores=None
                 )
                 if margin_loss is not None:
                     margin_losses.append(margin_loss)
@@ -503,15 +498,22 @@ class TransformerSummarizer(pl.LightningModule):
                     pos_neg_gaps.append(pos_neg_gap)
                 brio_scores.append(pred_r1)
                 brio_ranks.append(pred_idx)
+                if win_frac is not None:
+                    win_fracs.append(win_frac)
             margin_losses = torch.stack(margin_losses).mean()
             pos_neg_gaps = np.mean(pos_neg_gaps)
-            brio_scores = np.mean(brio_scores)
+            if brio_scores[0] is None:
+                brio_scores = None
+            else:
+                brio_scores = np.mean(brio_scores)
             brio_ranks = np.mean(brio_ranks)
+            win_fracs = np.mean(win_fracs)
             brio_info = {
                 'margin_loss': margin_losses,
                 'pos_neg_gap': pos_neg_gaps,
                 'brio_rouge1_f1': brio_scores,
-                'brio_rank': brio_ranks
+                'brio_rank': brio_ranks,
+                'brio_win_rate': win_fracs,
             }
         return loss, summaries, brio_info
 
@@ -546,11 +548,11 @@ class TransformerSummarizer(pl.LightningModule):
         return_obj['sent_dist'] = y_hat
         return return_obj
 
-    def brio_step(self, cand_labels, sent_encoder_h, scores):
+    def brio_step(self, cand_labels, sent_encoder_h, scores=None):
         num_cand = len(cand_labels)
         if num_cand < 2:
             print(f'{num_cand} BRIO candidates provided')
-            return None, None
+            return None, None, None, None, None
 
         encoder_outputs = sent_encoder_h.repeat(num_cand, 1, 1).contiguous().clone()
         # encoder_attention_mask = batch['attention_mask'][batch_idx].unsqueeze(0).repeat(num_cand, 1).contiguous()
@@ -569,19 +571,26 @@ class TransformerSummarizer(pl.LightningModule):
         # Compute Rank Score (not for back-prop)
         margin_losses = []
         pos_neg_gap = []
+        wins, losses = 0, 0
         for a in range(num_cand - 1):
             for b in range(a + 1, num_cand):
                 pos_ll = - nll[a]
                 neg_ll = - nll[b]
                 margin = self.hparams.contrast_margin * (b - a)
                 margin_losses.append(torch.clamp(neg_ll - pos_ll + margin, min=0))
-                pos_neg_gap.append(float((pos_ll - neg_ll).detach().item()))
+                raw_margin = float((pos_ll - neg_ll).detach().item())
+                pos_neg_gap.append(raw_margin)
+                if raw_margin > 0:
+                    wins += 1
+                else:
+                    losses += 1
 
+        win_frac = wins / (wins + losses)
         avg_margin = torch.stack(margin_losses).mean()
         avg_gap = np.mean(pos_neg_gap)
         score_idx = int(torch.argmin(torch.stack(nll)).item())
-        highest_ll_score = scores[score_idx]
-        return avg_margin, avg_gap, highest_ll_score, score_idx
+        highest_ll_score = None if scores is None else scores[score_idx]
+        return avg_margin, avg_gap, highest_ll_score, score_idx, win_frac
 
     def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
         oracle_strs = [x.split('<sep>')[0].replace('<s>', '') for x in self.tokenizer.batch_decode(batch['labels'])]

@@ -49,10 +49,17 @@ def run(args):
         tokenizer.save_pretrained(tokenizer_dir)
     if args.pretrained_path is None:
         model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model)
+        val_check_interval = 1.0 if args.debug or args.train_frac <= 0.2 else 0.25
     else:
+        tok_path = '/'.join(args.pretrained_path.split('/')[:-4]) + '/tokenizer'
+        tokenizer = AutoTokenizer.from_pretrained(tok_path)
         model = TransformerSummarizer.load_from_checkpoint(
             checkpoint_path=args.pretrained_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=True
         )
+        model.hparams.add_sent_brio = args.add_sent_brio
+        model.hparams.contrast_margin = args.contrast_margin
+        model.hparams.brio_loss_coef = args.brio_loss_coef
+        val_check_interval = 0.05  # Depending on what you're doing you should change this
     datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 
     logger = pl_loggers.WandbLogger(
@@ -88,7 +95,7 @@ def run(args):
         default_root_dir=experiment_dir,
         gradient_clip_val=0.1,
         accumulate_grad_batches=args.grad_accum,
-        val_check_interval=1.0 if args.debug or args.train_frac <= 0.2 else 0.25,
+        val_check_interval=val_check_interval,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
         num_sanity_val_steps=0 if args.debug else 2,
         log_every_n_steps=25,
@@ -130,7 +137,9 @@ if __name__ == '__main__':
     parser.add_argument('--oracle_mask_k', default=5, type=int)
     parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)
     parser.add_argument('-add_sent_brio', default=False, action='store_true')
-    parser.add_argument('--contrast_margin', default=1.0, type=float)
+    parser.add_argument('-just_rank', default=False, action='store_true')
+    parser.add_argument('--contrast_margin', default=0.01, type=float)
+    parser.add_argument('--brio_loss_coef', default=1, type=float)
 
     # Hyper-parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4

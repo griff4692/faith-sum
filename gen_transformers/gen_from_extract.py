@@ -70,10 +70,11 @@ def gen_from_mask(model, tokenizer, source_annotated, idx_to_keep, special_id_mi
     )
     input_ids = inputs['input_ids'].to(args.gpu_device)
     attention_mask = inputs['attention_mask'].to(args.gpu_device)
+    encoder_outputs = model.model.model.encoder(**{'input_ids': input_ids, 'attention_mask': attention_mask})
     cls_mask = input_ids >= special_id_min
     updated_mask = sentence_mask(cls_mask, idx_to_keep, attention_mask)
     kwargs = {
-        'input_ids': input_ids,
+        'encoder_outputs': encoder_outputs,
         'attention_mask': updated_mask,
         'num_return_sequences': 1,
         'num_beams': 4,
@@ -92,11 +93,12 @@ def gen_from_mask(model, tokenizer, source_annotated, idx_to_keep, special_id_mi
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Sample from Top-K')
+    parser = argparse.ArgumentParser('Generate From Extract')
 
     parser.add_argument('--extractor', default='extract', choices=['oracle', 'extract'])
     parser.add_argument('--gpu_device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
+    # gen_abstract_add_prefix_ctd_mask
     parser.add_argument('--wandb_name', default='gen_abstract_add_prefix')
     parser.add_argument('--extract_experiment', default='select_extract_full')
     parser.add_argument('-debug', default=False, action='store_true')

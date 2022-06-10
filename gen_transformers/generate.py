@@ -46,6 +46,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-debug', default=False, action='store_true')
+    parser.add_argument('-do_not_save', default=False, action='store_true')
     parser.add_argument('-cpu', default=False, action='store_true')
     parser.add_argument('--gpu_device', default=None, type=int)
     parser.add_argument('--max_examples', default=None, type=int)
@@ -150,8 +151,9 @@ if __name__ == '__main__':
         outputs = pd.DataFrame(outputs)
         method = '_sample' if args.sample_gen else '_beam'
         out_fn = os.path.join(results_dir, f'{args.split}{method}_outputs.csv')
-        print(f'Saving {len(outputs)} ROUGE scores and predictions to {out_fn}')
-        # outputs.to_csv(out_fn, index=False)
+        if not args.do_not_save:
+            print(f'Saving {len(outputs)} ROUGE scores and predictions to {out_fn}')
+            outputs.to_csv(out_fn, index=False)
         num_col = outputs.select_dtypes('number')
         for col in list(num_col.columns):
             print(f'{col}: {num_col[col].dropna().mean()}')
@@ -193,7 +195,9 @@ if __name__ == '__main__':
         exp_results.append(exp_row)
     exp_results = pd.DataFrame(exp_results)
     out_fn = 'confidence_sample.csv' if args.sample_gen else 'confidence.csv'
+    out_fn = args.split + '_' + out_fn
     print(args.length_penalty)
-    # exp_results.to_csv(out_fn, index=False)
+    if not args.do_not_save:
+        exp_results.to_csv(out_fn, index=False)
     for col in list(exp_results.columns):
         print(f'{col}: min={exp_results[col].min()}, max={exp_results[col].max()}, avg={exp_results[col].mean()}')

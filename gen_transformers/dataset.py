@@ -5,6 +5,7 @@ import ujson
 import numpy as np
 from nltk.corpus import stopwords
 import pytorch_lightning as pl
+import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
 STOPWORDS = set(stopwords.words('english'))
@@ -42,10 +43,21 @@ class SummaryDataModule(pl.LightningDataModule):
         idxs = list(range(n))
         if max_examples is not None and max_examples < n:
             idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
+            print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
             split_dataset = split_dataset.select(idxs)
-        oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates.json')
-        with open(oracle_fn, 'r') as fd:
-            candidates = ujson.load(fd)
+
+        oracle_brio = True
+        if oracle_brio:
+            oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
+            with open(oracle_fn, 'r') as fd:
+                candidates = ujson.load(fd)
+        else:
+            cand_fn = os.path.join(
+                self.args.data_dir, self.args.dataset, 'results', 'gen_extract_full', f'{split}_sample_outputs.csv'
+            )
+            cands = pd.read_csv(cand_fn)
+            # TODO FORMAT THIS so that it looks like candidates
+            candidates = cands
 
         split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, candidates)
         collate_fn = Seq2SeqCollate(
@@ -96,8 +108,8 @@ class SummarizationDataset(Dataset):
         # Rather than by "relevance" as defined by ROUGE, for instance
         # Sort oracle order or not
         oracle_labels = np.sort(example['oracle_idxs'])
-        if 'extract' not in self.args.summary_style:
-            oracle_labels = None
+        # if 'extract' not in self.args.summary_style:
+        #     oracle_labels = None
 
         # r1s = [float(x) for x in oracle_obj['rouge1_history'].split('|')[0].split(',')]
         # r2s = [float(x) for x in oracle_obj['rouge2_history'].split('|')[0].split(',')]
@@ -158,7 +170,6 @@ class SummarizationDataset(Dataset):
         if self.args.add_sent_brio:
             candidates = [np.sort(x['extract_idx']) for x in self.candidates[dataset_id]]
             if len(candidates) == 1:
-                print(candidates[0])
                 candidates.append(candidates[0])  # Revisit This (why do we have 1 candidate sometimes)
             row['oracle_cand_labels'] = candidates
         return row

@@ -6,13 +6,15 @@ def implement_oracle_masking(batch, oracle_mask_k):
     # K determined by --oracle_mask_k
     # Relevance, here, determined by average of ROUGE-1 and ROUGE-2 F1 (order is given by priority)
     updated_attention_masks = []
-    batch_size = len(batch['priority'])
+    # batch_size = len(batch['priority'])
+    batch_size = len(batch['oracle_labels'])
     for batch_idx in range(batch_size):
-        p = batch['priority'][batch_idx]
-        trunc_idx = min(len(p), oracle_mask_k)
+        # p = batch['priority'][batch_idx]
+        # trunc_idx = min(len(p), oracle_mask_k)
         cls_locations = batch['cls_mask'][batch_idx].unsqueeze(0)
         prev_mask = batch['attention_mask'][batch_idx].unsqueeze(0)
-        idx_to_keep = p[:trunc_idx]
+        # idx_to_keep = p[:trunc_idx]
+        idx_to_keep = batch['oracle_labels'][batch_idx]
         # Masks everything but the sentences specified by idx_to_keep
         # cls_locations is True if there's a <s{idx}> tag in the spot, 0 otherwise.
         # Used for sentence boundary detection in the method.
