@@ -65,6 +65,7 @@ if __name__ == '__main__':
     parser.add_argument('-use_hf_rouge', default=False, action='store_true')  # Much faster to use HF implementation
     parser.add_argument('--bootstraps', default=1, type=int)
     parser.add_argument('-add_sent_brio', default=False, action='store_true')
+    parser.add_argument('-extract_indicators', default=False, action='store_true')
     parser.add_argument(
         '--summary_style',
         default='extract_abstract',
@@ -83,7 +84,7 @@ if __name__ == '__main__':
     parser.add_argument('--split', default='validation')
 
     args = parser.parse_args()
-    args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style
+    args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style or args.extract_indicators
 
     np.random.seed(args.seed)
 

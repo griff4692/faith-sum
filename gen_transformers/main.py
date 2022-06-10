@@ -59,7 +59,8 @@ def run(args):
         model.hparams.add_sent_brio = args.add_sent_brio
         model.hparams.contrast_margin = args.contrast_margin
         model.hparams.brio_loss_coef = args.brio_loss_coef
-        val_check_interval = 0.05  # Depending on what you're doing you should change this
+        model.hparams.just_rank = args.just_rank
+        val_check_interval = 0.25  # Depending on what you're doing you should change this
     datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 
     logger = pl_loggers.WandbLogger(
@@ -97,7 +98,7 @@ def run(args):
         accumulate_grad_batches=args.grad_accum,
         val_check_interval=val_check_interval,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
-        num_sanity_val_steps=0 if args.debug else 2,
+        num_sanity_val_steps=1 if args.debug else 2,
         log_every_n_steps=25,
         max_steps=args.max_steps,
         plugins=plugins,
@@ -132,16 +133,15 @@ if __name__ == '__main__':
     parser.add_argument('-find_lr', default=False, action='store_true')
     # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
-    parser.add_argument('-oracle_cross_mask', default=False, action='store_true')
+    parser.add_argument('-extract_indicators', default=False, action='store_true')
     # How many sentences to make visible to the decoder (5 is randomly set based on summary lengths of ~2-5 sentences)
-    parser.add_argument('--oracle_mask_k', default=5, type=int)
     parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)
     parser.add_argument('-add_sent_brio', default=False, action='store_true')
     parser.add_argument('-just_rank', default=False, action='store_true')
     parser.add_argument('--contrast_margin', default=0.01, type=float)
     parser.add_argument('--brio_loss_coef', default=1, type=float)
 
-    # Hyper-parameters
+    # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4
     parser.add_argument('--weight_decay', type=float, default=5e-5)
     # Gradient accumulation will adjust for the ratio between target_batch_size and per_device_train_bs
@@ -188,7 +188,7 @@ if __name__ == '__main__':
         args.hf_model = 'sshleifer/bart-tiny-random'
 
     # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
-    args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style
+    args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style or args.extract_indicators
     if args.add_sent_toks:
         print('Pre-pending each sentence in the source document with special token <s{idx}>.')
 

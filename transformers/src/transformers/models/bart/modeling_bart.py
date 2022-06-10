@@ -706,6 +706,7 @@ class BartEncoder(BartPretrainedModel):
         self.padding_idx = config.pad_token_id
         self.max_source_positions = config.max_position_embeddings
         self.embed_scale = math.sqrt(embed_dim) if config.scale_embedding else 1.0
+        self.extract_indicator_embeddings = nn.Embedding(3, config.d_model, padding_idx=0)
 
         if embed_tokens is not None:
             self.embed_tokens = embed_tokens
@@ -733,6 +734,7 @@ class BartEncoder(BartPretrainedModel):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
+        extract_indicators: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         output_attentions: Optional[bool] = None,
@@ -798,6 +800,9 @@ class BartEncoder(BartPretrainedModel):
         embed_pos = self.embed_positions(input_shape)
 
         hidden_states = inputs_embeds + embed_pos
+        if extract_indicators is not None:
+            extract_embeds = self.extract_indicator_embeddings(extract_indicators)
+            hidden_states += extract_embeds
         hidden_states = self.layernorm_embedding(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
@@ -853,6 +858,10 @@ class BartEncoder(BartPretrainedModel):
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)
+
+        # if extract_indicators is not None:
+        #     extract_embeds = self.extract_indicator_embeddings(extract_indicators)
+        #     hidden_states += extract_embeds
 
         if not return_dict:
             return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)
@@ -1176,6 +1185,7 @@ class BartModel(BartPretrainedModel):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
+        extract_indicators: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
@@ -1216,6 +1226,7 @@ class BartModel(BartPretrainedModel):
         if encoder_outputs is None:
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
+                extract_indicators=extract_indicators,
                 attention_mask=attention_mask,
                 head_mask=head_mask,
                 inputs_embeds=inputs_embeds,
@@ -1311,6 +1322,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
+        extract_indicators: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.Tensor] = None,
@@ -1347,6 +1359,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
 
         outputs = self.model(
             input_ids,
+            extract_indicators=extract_indicators,
             attention_mask=attention_mask,
             decoder_input_ids=decoder_input_ids,
             encoder_outputs=encoder_outputs,

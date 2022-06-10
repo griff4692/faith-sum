@@ -30,7 +30,7 @@ class SummaryDataModule(pl.LightningDataModule):
         else:
             self.dataset = load_dataset(args.dataset)
         self.tokenizer = tokenizer
-        self.num_workers = 0 if args.debug else 4
+        self.num_workers = 0  # 0 if args.debug else 4
         self.nlp = spacy.load('en_core_web_sm')
 
     def get_split(self, split, max_examples=None, **dataloader_kwargs):
@@ -46,20 +46,22 @@ class SummaryDataModule(pl.LightningDataModule):
             print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
             split_dataset = split_dataset.select(idxs)
 
-        oracle_brio = True
-        if oracle_brio:
-            oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
-            with open(oracle_fn, 'r') as fd:
-                candidates = ujson.load(fd)
-        else:
-            cand_fn = os.path.join(
-                self.args.data_dir, self.args.dataset, 'results', 'gen_extract_full', f'{split}_sample_outputs.csv'
-            )
-            cands = pd.read_csv(cand_fn)
-            # TODO FORMAT THIS so that it looks like candidates
-            candidates = cands
+        brio_candidates = None
+        if self.args.add_sent_brio:
+            oracle_brio = True  # Versus model predictions (doesn't mean we are training on BRIO)
+            if oracle_brio:
+                oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
+                with open(oracle_fn, 'r') as fd:
+                    brio_candidates = ujson.load(fd)
+            else:
+                cand_fn = os.path.join(
+                    self.args.data_dir, self.args.dataset, 'results', 'gen_extract_full', f'{split}_sample_outputs.csv'
+                )
+                cands = pd.read_csv(cand_fn)
+                # TODO FORMAT THIS so that it looks like candidates
+                brio_candidates = cands
 
-        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, candidates)
+        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, brio_candidates=brio_candidates)
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
@@ -87,12 +89,12 @@ class SummaryDataModule(pl.LightningDataModule):
 
 
 class SummarizationDataset(Dataset):
-    def __init__(self, args, dataset, split, candidates):
+    def __init__(self, args, dataset, split, brio_candidates=None):
         super(SummarizationDataset, self).__init__()
         self.args = args
         self.dataset = dataset
         self.split = split
-        self.candidates = candidates
+        self.brio_candidates = brio_candidates
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
 
     def __len__(self):
@@ -168,7 +170,7 @@ class SummarizationDataset(Dataset):
         }
 
         if self.args.add_sent_brio:
-            candidates = [np.sort(x['extract_idx']) for x in self.candidates[dataset_id]]
+            candidates = [np.sort(x['extract_idx']) for x in self.brio_candidates[dataset_id]]
             if len(candidates) == 1:
                 candidates.append(candidates[0])  # Revisit This (why do we have 1 candidate sometimes)
             row['oracle_cand_labels'] = candidates

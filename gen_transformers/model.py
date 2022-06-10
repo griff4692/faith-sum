@@ -18,7 +18,7 @@ from transformers.trainer_pt_utils import LabelSmoother
 from transformers.models.bart.modeling_bart import BartForConditionalCopy
 
 from preprocess.extract_oracles import convert_to_sents
-from gen_transformers.model_utils import implement_oracle_masking
+from gen_transformers.model_utils import implement_oracle_indicators
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from eval.rouge_metric import RougeMetric
 
@@ -63,7 +63,12 @@ class TransformerSummarizer(pl.LightningModule):
         metrics = {}
         extracts = None
         return_loss = 0
-        encoder_h = self.get_encoder_h({'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask']})
+
+        encoder_inputs = {'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask']}
+        if self.hparams.extract_indicators:
+            encoder_inputs['extract_indicators'] = implement_oracle_indicators(batch)
+        encoder_outputs = self.get_encoder_h(encoder_inputs)
+        encoder_h = encoder_outputs.last_hidden_state
 
         if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
@@ -81,19 +86,16 @@ class TransformerSummarizer(pl.LightningModule):
                 assert self.hparams.extract_method == 'select'
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
             metrics['extract'] = extract_loss
-            return_loss += extract_loss
+            if not self.hparams.just_rank:
+                return_loss += extract_loss
 
         # score is just extraction (no word-level generation)
         if 'abstract' in self.hparams.summary_style:
             updated_inputs = {
-                'encoder_outputs': [encoder_h],
+                'encoder_outputs': encoder_outputs,
                 'attention_mask': batch['attention_mask'],
                 'labels': batch['labels'],
             }
-
-            if self.hparams.oracle_cross_mask:
-                mask = implement_oracle_masking(batch, oracle_mask_k=self.hparams.oracle_mask_k)
-                updated_inputs['attention_mask'] = mask
 
             output = self.model(**updated_inputs, use_cache=False)
             # Regular MLE decoder loss
@@ -102,26 +104,9 @@ class TransformerSummarizer(pl.LightningModule):
             if not self.hparams.just_rank:
                 smooth_lm_loss = self.label_smoother(output, batch['labels'])
                 return_loss += smooth_lm_loss
-
-            # if self.hparams.add_align or self.hparams.oracle_cross_mask:
-            #     if self.hparams.oracle_cross_mask:
-            #         mask = implement_oracle_masking(batch, oracle_mask_k=self.hparams.oracle_mask_k)
-            #     else:
-            #         mask = batch['aligned_attention_mask']
-            #     updated_inputs = {
-            #         'encoder_outputs': [encoder_h],
-            #         'attention_mask': mask,
-            #         'labels': batch['aligned_labels'],
-            #     }
-            #
-            #     aligned_output = self.model(**updated_inputs, use_cache=False)
-            #     # Regular MLE decoder loss
-            #     metrics['aligned_loss'] = aligned_output.loss  # Log un-smoothed loss for comparison to earlier runs.
-            #     # Return label-smoothed loss for BART Decoder
-            #     smooth_lm_loss = self.label_smoother(aligned_output, batch['aligned_labels'])
-            #     return_loss += smooth_lm_loss
-
-        return {'metrics': metrics, 'return_loss': return_loss, 'encoder_h': encoder_h, 'extracts': extracts}
+        return {
+            'metrics': metrics, 'return_loss': return_loss, 'encoder_outputs': encoder_outputs, 'extracts': extracts
+        }
 
     def training_step(self, batch, batch_idx):
         # source = self.parse_source_text_from_inputs(batch)
@@ -175,7 +160,9 @@ class TransformerSummarizer(pl.LightningModule):
             'references': batch['references'],
         }
         if self.hparams.summary_style != 'extract':
-            gen_outputs = self.shared_generate(batch, source, **validation_kwargs)
+            gen_outputs = self.shared_generate(
+                batch, source, **validation_kwargs, encoder_outputs=shared_output['encoder_outputs']
+            )
 
         # Merge the two if needed (score_abstract only)
         outputs_resolved = self.merge_outputs(gen_outputs, extract_outputs)
@@ -347,7 +334,7 @@ class TransformerSummarizer(pl.LightningModule):
         return batch_outputs
 
     def get_encoder_h(self, batch):
-        return self.model.model.encoder(**batch).last_hidden_state
+        return self.model.model.encoder(**batch)
 
     def compute_gen_extract_loss(self, cls_mask, encoder_h, oracle_labels):
         batch_size = len(cls_mask)
@@ -623,9 +610,9 @@ class TransformerSummarizer(pl.LightningModule):
             return {col: df[col].dropna().mean for col in df.columns}
         return results
 
-    def shared_generate(self, batch, source, references, **gen_kwargs):
+    def shared_generate(self, batch, source, references, encoder_outputs=None, **gen_kwargs):
         default_kwargs = {  # Some of these values may get overridden by gen_kwargs
-            'input_ids': batch['input_ids'],
+            # 'input_ids': batch['input_ids'],
             'attention_mask': batch['attention_mask'],
             'num_return_sequences': 1,
             'max_length': self.hparams.max_output_length,
@@ -633,14 +620,21 @@ class TransformerSummarizer(pl.LightningModule):
             'early_stopping': True,
             'output_scores': True
         }
+        if encoder_outputs is not None:
+            default_kwargs['encoder_outputs'] = encoder_outputs
+        else:
+            default_kwargs['input_ids'] = batch['input_ids']
+
+        if self.hparams.extract_indicators:
+            # Change this from oracle if you want something else
+            default_kwargs['extract_indicators'] = implement_oracle_indicators(batch)
 
         default_kwargs.update(gen_kwargs)
         pred_ids = self.model.generate(**default_kwargs)
         gold_ids = batch['labels']
         gold_ids[torch.where(batch['labels'] == -100)] = 1
-        input_ids = batch['input_ids']
 
-        batch_size = len(input_ids)
+        batch_size = len(batch['input_ids'])
         num_pred = len(pred_ids)
         num_cands = gen_kwargs['num_return_sequences']
         assert num_cands * batch_size == num_pred
@@ -891,18 +885,29 @@ class TransformerSummarizer(pl.LightningModule):
     def configure_optimizers(self):
         no_decay = ['bias', 'LayerNorm.weight']
         nps = list(self.named_parameters())
+
+        ext_embed = [(n, p) for n, p in nps if 'extract_indicator_embeddings' in n]
+        nps = [(n, p) for n, p in nps if 'extract_indicator_embeddings' not in n]
+
         grouped_parameters = [
             {
                 'params': [p for n, p in nps if not any(nd in n for nd in no_decay) and p.requires_grad],
                 'weight_decay': self.hparams.weight_decay,
+                'lr': self.lr,
             },
             {
                 'params': [p for n, p in nps if any(nd in n for nd in no_decay) and p.requires_grad],
                 'weight_decay': 0.0,
+                'lr': self.lr,
+            },
+            {
+                'params': [p for n, p in ext_embed if any(nd in n for nd in no_decay) and p.requires_grad],
+                'weight_decay': 0.0,
+                'lr': 1e-3
             },
         ]
 
-        optimizer = torch.optim.AdamW(grouped_parameters, lr=self.lr)
+        optimizer = torch.optim.AdamW(grouped_parameters)
         if self.hparams.no_schedule or self.hparams.debug or self.hparams.find_lr:
             return optimizer
 
