@@ -53,7 +53,11 @@ class TransformerSummarizer(pl.LightningModule):
                 self.sent_config.vocab_size = 3  # <s> <pad> </s>
                 self.sent_bart = BartForConditionalCopy(self.sent_config)
                 # self.sent_bart.model.encoder.layers[-1].load_state_dict(self.model.model.encoder.layers[-1].state_dict())
-                self.stop_embed = nn.Embedding(num_embeddings=1, embedding_dim=self.sent_config.d_model, padding_idx=None)
+                self.stop_embed = nn.Embedding(
+                    num_embeddings=1, embedding_dim=self.sent_config.d_model, padding_idx=None
+                )
+                self.decoder_classifier = nn.Linear(self.sent_config.d_model, 1)
+                self.brio_loss_func = nn.CrossEntropyLoss()
             else:
                 self.sent_classifier = nn.Linear(self.model.config.d_model, 1)
                 pos_weight = torch.FloatTensor([1.0])
@@ -72,16 +76,17 @@ class TransformerSummarizer(pl.LightningModule):
                 if brio_info is not None:
                     return_loss += self.hparams.brio_loss_coef * brio_info['margin_loss']
                     metrics['sent_brio'] = brio_info['margin_loss']
-                    metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
-                    if brio_info['brio_rouge1_f1'] is not None:
-                        metrics['brio_rouge1_f1'] = brio_info['brio_rouge1_f1']
-                    metrics['brio_rank'] = brio_info['brio_rank']
+                    # metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
+                    # if brio_info['brio_rouge1_f1'] is not None:
+                    #     metrics['brio_rouge1_f1'] = brio_info['brio_rouge1_f1']
+                    # metrics['brio_rank'] = brio_info['brio_rank']
                     metrics['brio_win_rate'] = brio_info['brio_win_rate']
             else:
                 assert self.hparams.extract_method == 'select'
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
             metrics['extract'] = extract_loss
-            return_loss += extract_loss
+            if not self.hparams.just_rank:
+                return_loss += extract_loss
 
         # score is just extraction (no word-level generation)
         if 'abstract' in self.hparams.summary_style:
@@ -483,36 +488,36 @@ class TransformerSummarizer(pl.LightningModule):
         brio_info = None
         if self.hparams.add_sent_brio:
             margin_losses = []
-            pos_neg_gaps = []
-            brio_scores = []
-            brio_ranks = []
+            # pos_neg_gaps = []
+            # brio_scores = []
+            # brio_ranks = []
             win_fracs = []
             for batch_idx in range(len(cls_mask)):
                 sent_labels = oracle_cand_labels[batch_idx]
-                margin_loss, pos_neg_gap, pred_r1, pred_idx, win_frac = self.brio_step(
+                margin_loss, win_frac = self.brio_step(
                     sent_labels, sent_encoder_h[batch_idx], scores=None
                 )
                 if margin_loss is not None:
                     margin_losses.append(margin_loss)
-                if pos_neg_gap is not None:
-                    pos_neg_gaps.append(pos_neg_gap)
-                brio_scores.append(pred_r1)
-                brio_ranks.append(pred_idx)
+                # if pos_neg_gap is not None:
+                #     pos_neg_gaps.append(pos_neg_gap)
+                # brio_scores.append(pred_r1)
+                # brio_ranks.append(pred_idx)
                 if win_frac is not None:
                     win_fracs.append(win_frac)
             margin_losses = torch.stack(margin_losses).mean()
-            pos_neg_gaps = np.mean(pos_neg_gaps)
-            if brio_scores[0] is None:
-                brio_scores = None
-            else:
-                brio_scores = np.mean(brio_scores)
-            brio_ranks = np.mean(brio_ranks)
+            # pos_neg_gaps = np.mean(pos_neg_gaps)
+            # if brio_scores[0] is None:
+            #     brio_scores = None
+            # else:
+            #     brio_scores = np.mean(brio_scores)
+            # brio_ranks = np.mean(brio_ranks)
             win_fracs = np.mean(win_fracs)
             brio_info = {
                 'margin_loss': margin_losses,
-                'pos_neg_gap': pos_neg_gaps,
-                'brio_rouge1_f1': brio_scores,
-                'brio_rank': brio_ranks,
+                # 'pos_neg_gap': pos_neg_gaps,
+                # 'brio_rouge1_f1': brio_scores,
+                # 'brio_rank': brio_ranks,
                 'brio_win_rate': win_fracs,
             }
         return loss, summaries, brio_info
@@ -552,7 +557,7 @@ class TransformerSummarizer(pl.LightningModule):
         num_cand = len(cand_labels)
         if num_cand < 2:
             print(f'{num_cand} BRIO candidates provided')
-            return None, None, None, None, None
+            return None, None
 
         encoder_outputs = sent_encoder_h.repeat(num_cand, 1, 1).contiguous().clone()
         # encoder_attention_mask = batch['attention_mask'][batch_idx].unsqueeze(0).repeat(num_cand, 1).contiguous()
@@ -563,34 +568,51 @@ class TransformerSummarizer(pl.LightningModule):
         }
 
         cand_outputs = self.sent_bart(**inputs, use_cache=False)
-        nll = []
-        for cand_idx in range(num_cand):
-            loss_row_full = {'logits': cand_outputs['logits'][cand_idx]}
-            nll.append(self.label_smoother(loss_row_full, cand_labels[cand_idx]))
+        decoder_states = cand_outputs.decoder_hidden_states.mean(dim=1)
+        scores = self.decoder_classifier(decoder_states).squeeze(1)
+        label = torch.zeros(size=(1,)).long().to(self.device)
 
-        # Compute Rank Score (not for back-prop)
-        margin_losses = []
-        pos_neg_gap = []
+        brio_loss = self.brio_loss_func(scores.unsqueeze(0), label)
         wins, losses = 0, 0
         for a in range(num_cand - 1):
             for b in range(a + 1, num_cand):
-                pos_ll = - nll[a]
-                neg_ll = - nll[b]
-                margin = self.hparams.contrast_margin * (b - a)
-                margin_losses.append(torch.clamp(neg_ll - pos_ll + margin, min=0))
-                raw_margin = float((pos_ll - neg_ll).detach().item())
-                pos_neg_gap.append(raw_margin)
-                if raw_margin > 0:
+                if scores[a] > scores[b]:
                     wins += 1
                 else:
                     losses += 1
-
         win_frac = wins / (wins + losses)
-        avg_margin = torch.stack(margin_losses).mean()
-        avg_gap = np.mean(pos_neg_gap)
-        score_idx = int(torch.argmin(torch.stack(nll)).item())
-        highest_ll_score = None if scores is None else scores[score_idx]
-        return avg_margin, avg_gap, highest_ll_score, score_idx, win_frac
+        return brio_loss, win_frac
+
+        # decoder_classifier
+        # brio_loss_func
+        # nll = []
+        # for cand_idx in range(num_cand):
+        #     loss_row_full = {'logits': cand_outputs['logits'][cand_idx]}
+        #     nll.append(self.label_smoother(loss_row_full, cand_labels[cand_idx]))
+        #
+        # # Compute Rank Score (not for back-prop)
+        # margin_losses = []
+        # pos_neg_gap = []
+        # wins, losses = 0, 0
+        # for a in range(num_cand - 1):
+        #     for b in range(a + 1, num_cand):
+        #         pos_ll = - nll[a]
+        #         neg_ll = - nll[b]
+        #         margin = self.hparams.contrast_margin * (b - a)
+        #         margin_losses.append(torch.clamp(neg_ll - pos_ll + margin, min=0))
+        #         raw_margin = float((pos_ll - neg_ll).detach().item())
+        #         pos_neg_gap.append(raw_margin)
+        #         if raw_margin > 0:
+        #             wins += 1
+        #         else:
+        #             losses += 1
+        #
+        # win_frac = wins / (wins + losses)
+        # avg_margin = torch.stack(margin_losses).mean()
+        # avg_gap = np.mean(pos_neg_gap)
+        # score_idx = int(torch.argmin(torch.stack(nll)).item())
+        # highest_ll_score = None if scores is None else scores[score_idx]
+        # return avg_margin, avg_gap, highest_ll_score, score_idx, win_frac
 
     def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
         oracle_strs = [x.split('<sep>')[0].replace('<s>', '') for x in self.tokenizer.batch_decode(batch['labels'])]

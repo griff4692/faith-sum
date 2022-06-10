@@ -54,12 +54,13 @@ def run(args):
         tok_path = '/'.join(args.pretrained_path.split('/')[:-4]) + '/tokenizer'
         tokenizer = AutoTokenizer.from_pretrained(tok_path)
         model = TransformerSummarizer.load_from_checkpoint(
-            checkpoint_path=args.pretrained_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=True
+            checkpoint_path=args.pretrained_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False
         )
         model.hparams.add_sent_brio = args.add_sent_brio
         model.hparams.contrast_margin = args.contrast_margin
         model.hparams.brio_loss_coef = args.brio_loss_coef
-        val_check_interval = 0.05  # Depending on what you're doing you should change this
+        model.hparams.just_rank = args.just_rank
+        # val_check_interval = 0.05  # Depending on what you're doing you should change this
     datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 
     logger = pl_loggers.WandbLogger(
