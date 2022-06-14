@@ -19,7 +19,8 @@ if __name__ == '__main__':
     extracts = pd.read_csv(os.path.join(extract_results_dir, 'validation_sample_outputs.csv'))
     abstracts = pd.read_csv(os.path.join(abstract_results_dir, 'validation_sample_outputs.csv'))
     beam_extracts = pd.read_csv(os.path.join(extract_results_dir, 'validation_beam_outputs.csv'))
-    # beam_abstracts = pd.read_csv(os.path.join(abstract_results_dir, 'validation_beam_outputs.csv'))
+    beam_abstracts = pd.read_csv(os.path.join(abstract_results_dir, 'validation_beam_outputs.csv'))
+    from_extract_abstracts = pd.read_csv(os.path.join(extract_results_dir, 'from_sample_extract.csv'))
     n = len(abstract_results_dir)
 
     extract_dataset_idxs = set(extracts['dataset_idx'].unique())
@@ -34,23 +35,30 @@ if __name__ == '__main__':
         abstract_record = abstracts[abstracts['dataset_idx'] == dataset_idx].to_dict('records')[0]
         extract_record = extracts[extracts['dataset_idx'] == dataset_idx].to_dict('records')[0]
         beam_extract_record = beam_extracts[beam_extracts['dataset_idx'] == dataset_idx].to_dict('records')[0]
-        # beam_abstract_record = beam_abstracts[beam_abstracts['dataset_idx'] == dataset_idx].to_dict('records')[0]
+        beam_abstract_record = beam_abstracts[beam_abstracts['dataset_idx'] == dataset_idx].to_dict('records')[0]
+        from_extract_record = from_extract_abstracts[from_extract_abstracts['dataset_idx'] == dataset_idx]
+        from_extract_record = from_extract_record.to_dict('records')[0]
 
         best_abstract_r1 = abstract_record['best_abstract_rouge1_f1']
         best_implied_r1 = abstract_record['best_implied_rouge1_f1']
         best_extract_r1 = extract_record['best_extract_rouge1_f1']
         beam_extract_r1 = beam_extract_record['extract_rouge1_f1']
-        # beam_abstract_r1 = beam_abstract_record['rouge1_f1']
-        ensemble_r1 = max(best_extract_r1, best_abstract_r1, best_implied_r1, beam_extract_r1)
+        best_from_extract_r1 = from_extract_record['best_from_extract_rouge1_f1']
+        beam_abstract_r1 = beam_abstract_record['rouge1_f1']
+        ensemble_r1 = max(
+            best_extract_r1, best_abstract_r1, best_implied_r1, best_from_extract_r1, beam_extract_r1, beam_abstract_r1
+        )
 
-        if best_extract_r1 == ensemble_r1:
+        if best_from_extract_r1 == ensemble_r1:
+            best_method = 'from_extract_abstract'
+        elif best_extract_r1 == ensemble_r1:
             best_method = 'sample_extract'
         elif best_implied_r1 == ensemble_r1:
             best_method = 'sample_implied'
         elif beam_extract_r1 == ensemble_r1:
             best_method = 'beam_extract'
-        # elif beam_abstract_r1 == ensemble_r1:
-        #     best_method = 'beam_abstract'
+        elif beam_abstract_r1 == ensemble_r1:
+            best_method = 'beam_abstract'
         else:
             best_method = 'sample_abstract'
 
@@ -59,7 +67,8 @@ if __name__ == '__main__':
             'best_extract_r1': best_extract_r1,
             'best_implied_r1': best_implied_r1,
             'beam_extract_r1': beam_extract_r1,
-            # 'beam_abstract_r1': beam_abstract_r1,
+            'beam_abstract_r1': beam_abstract_r1,
+            'best_from_extract_r1': best_from_extract_r1,
             'ensemble_rouge1_f1': ensemble_r1,
             'best_method': best_method
         })

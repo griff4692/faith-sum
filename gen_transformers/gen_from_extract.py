@@ -5,16 +5,16 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 import pandas as pd
 import argparse
 import spacy
+import torch
 import numpy as np
-from transformers import AutoTokenizer
 from tqdm import tqdm
-from scipy.special import expit, softmax
+from transformers import AutoTokenizer
 
 from data_utils import get_path_from_exp
 from eval.rouge_metric import RougeMetric
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from gen_transformers.model import TransformerSummarizer
-from gen_transformers.model_utils import sentence_mask
+from gen_transformers.model_utils import sentence_indicators
 from preprocess.extract_oracles import convert_to_sents
 from datasets import load_from_disk
 
@@ -60,9 +60,9 @@ def get_priority(source_toks, summary, nlp):
     return np.argsort(- avg_rs), avg_rs
 
 
-def gen_from_mask(model, tokenizer, source_annotated, idx_to_keep, special_id_min):
+def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_min):
     inputs = tokenizer(
-        [source_annotated],
+        [source_annotated] * len(idx_to_keep),
         padding='longest',
         truncation=True,
         max_length=1024,
@@ -70,12 +70,18 @@ def gen_from_mask(model, tokenizer, source_annotated, idx_to_keep, special_id_mi
     )
     input_ids = inputs['input_ids'].to(args.gpu_device)
     attention_mask = inputs['attention_mask'].to(args.gpu_device)
-    encoder_outputs = model.model.model.encoder(**{'input_ids': input_ids, 'attention_mask': attention_mask})
     cls_mask = input_ids >= special_id_min
-    updated_mask = sentence_mask(cls_mask, idx_to_keep, attention_mask)
+    extract_indicators = []
+    for cand_idx, extract_idx in enumerate(idx_to_keep):
+        ei = sentence_indicators(cls_mask[cand_idx].unsqueeze(0), extract_idx, attention_mask[cand_idx].unsqueeze(0))
+        extract_indicators.append(ei)
+    extract_indicators = torch.cat(extract_indicators, dim=0)
+    encoder_outputs = model.model.model.encoder(**{
+        'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
+    })
     kwargs = {
         'encoder_outputs': encoder_outputs,
-        'attention_mask': updated_mask,
+        'attention_mask': attention_mask,
         'num_return_sequences': 1,
         'num_beams': 4,
         'length_penalty': 4.0,
@@ -86,35 +92,51 @@ def gen_from_mask(model, tokenizer, source_annotated, idx_to_keep, special_id_mi
     }
 
     pred_ids = model.model.generate(**kwargs)
-    pred_str = tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)[0]
-    rr = compute_rouge([pred_str], [reference], rouge_metric)
-    rr['prediction'] = pred_str
-    return rr
+    pred_str = tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
+    rouges = []
+    for x in pred_str:
+        rr = compute_rouge([x], [reference], rouge_metric)
+        rr['prediction'] = x
+        rouges.append(rr)
+    rouge1_f1s = [y['rouge1_f1'] for y in rouges]
+    rouge2_f1s = [y['rouge2_f1'] for y in rouges]
+    rougeL_f1s = [y['rougeL_f1'] for y in rouges]
+    return {
+        'best_from_extract_rouge1_f1': max(rouge1_f1s),
+        'avg_from_extract_rouge1_f1': np.mean(rouge1_f1s),
+        'min_from_extract_rouge1_f1': min(rouge1_f1s),
+        'best_from_extract_rouge2_f1': max(rouge2_f1s),
+        'avg_from_extract_rouge2_f1': np.mean(rouge2_f1s),
+        'min_from_extract_rouge2_f1': min(rouge2_f1s),
+        'best_from_extract_rougeL_f1': max(rougeL_f1s),
+        'avg_from_extract_rougeL_f1': np.mean(rougeL_f1s),
+        'min_from_extract_rougeL_f1': min(rougeL_f1s),
+        'from_extract_abstract': '<cand>'.join(pred_str),
+    }
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Generate From Extract')
 
     parser.add_argument('--extractor', default='extract', choices=['oracle', 'extract'])
-    parser.add_argument('--gpu_device', default=0, type=int)
+    parser.add_argument('--gpu_device', default=1, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    # gen_abstract_add_prefix_ctd_mask
-    parser.add_argument('--wandb_name', default='gen_abstract_add_prefix')
-    parser.add_argument('--extract_experiment', default='select_extract_full')
+    parser.add_argument('--wandb_name', default='extract_indicators')
+    parser.add_argument('--extract_experiment', default='gen_extract_full')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--hf_model', default='facebook/bart-base')
     parser.add_argument('--max_examples', default=1000, type=int)
-    parser.add_argument('--extract_sent_len', default=3, type=int)
     parser.add_argument('--dataset', default='cnn_dailymail')
+    parser.add_argument('--extract_mode', default='sample', choices=['sample', 'beam'])
 
     args = parser.parse_args()
 
     oracle_df = pd.read_csv(os.path.join(args.data_dir, 'cnn_dailymail/oracle/validation_v2.csv'))
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
-    outputs = pd.read_csv(os.path.join(results_dir, 'validation_beam_outputs.csv'))
+    outputs = pd.read_csv(os.path.join(results_dir, f'validation_{args.extract_mode}_outputs.csv'))
     n = len(outputs)
     if n > args.max_examples:
-        outputs = outputs.sample(n=args.max_examples, replace=False, random_state=1992)
+        outputs = outputs.sample(n=args.max_examples, replace=False, random_state=111)
         n = len(outputs)
     nlp = spacy.load('en_core_web_sm')
 
@@ -141,78 +163,37 @@ if __name__ == '__main__':
     df = []
     updated_records = []
     stats = []
+    wins, losses = 0, 0
     for record in tqdm(records, total=len(records)):
         # sent_scores = np.array(list(map(float, record['sent_scores'].split(','))))
         source_annotated = all_source_annotated[record['dataset_idx']]
         # Get source tokens
-        # pred_abstract = record['abstract']
         reference = record['reference']
-        # extract_priority = (-sent_scores).argsort()
-        # extract_scores = sent_scores[extract_priority]
-        # extract_scores_norm = expit(extract_scores)
 
-        # if args.extractor == 'extract':
-        #     priority = extract_priority
-        #     scores = extract_scores
-        # elif args.extractor == 'oracle':
-        #     oracle_priority, oracle_scores = get_priority(source_sents_tok, reference, nlp)
-        #     priority = oracle_priority
-        #     scores = oracle_scores
-        # else:
-        #     raise Exception('Unknown')
-
-        # n = len(priority)
-        # trunc_idx = min(n, args.k)
-        # top_k_priority = priority[:trunc_idx]
-        # p = softmax(scores[:trunc_idx]) if args.use_scores else None
-        # topk_idx = top_k_priority[:min(n, args.extract_sent_len)]
-        # To use the bottom is to incorporate trigram blocking
-        topk_idx = list(map(int, record['extract_idx'].split(',')))
-        size = min(n, args.extract_sent_len)
-
-        # sampled_idxs = []
-        # extracts = []
-        # for _ in range(args.samples):
-        #     sampled_idx = list(np.random.choice(top_k_priority, size=size, replace=False, p=p))
-        #     sampled_idxs.append(sampled_idx)
-        #     extracts.append(' '.join([str(source_sents[i]) for i in sampled_idx]))
-        # rouges = []
-        # r1s = []
-        # for idx, x in enumerate(extracts):
-        #     rr = compute_rouge([x], [reference], rouge_metric)
-        #     rouges.append(rr)
-        #     r1s.append(rr['rouge1_f1'])
-        #
-        # mean_r1 = np.mean(r1s)
-        # min_r1 = np.min(r1s)
-        # max_r1 = np.max(r1s)
-
-        gen_output = gen_from_mask(model, tokenizer, source_annotated, topk_idx, special_id_min)
+        extract_idx = [list(map(int, x.split(','))) for x in record['extract_idx'].split('<cand>')]
+        gen_output = gen_from_guide(model, tokenizer, source_annotated, extract_idx, special_id_min)
         stats.append({
-            # 'mean_f1': mean_r1,
-            # 'min_r1': min_r1,
-            # 'max_r1': max_r1,
-            'extract_rouge1_f1': record['extract_rouge1_f1'],
-            'prompt_abstract_rouge1_f1': gen_output['rouge1_f1'],
-            # 'abstract_rouge1_f1': record['rouge1_f1'],
+            'best_extract_rouge1_f1': record['best_extract_rouge1_f1'],
+            'best_from_extract_rouge1_f1': gen_output['best_from_extract_rouge1_f1'],
+            'avg_extract_rouge1_f1': record['avg_extract_rouge1_f1'],
+            'avg_from_extract_rouge1_f1': gen_output['avg_from_extract_rouge1_f1'],
         })
-        record['from_extract_rouge1_f1'] = gen_output['rouge1_f1']
-        record['from_extract_rouge1_recall'] = gen_output['rouge1_recall']
-        record['from_extract_rouge1_precision'] = gen_output['rouge1_precision']
-        record['from_extract_rouge2_f1'] = gen_output['rouge2_f1']
-        record['from_extract_rouge2_recall'] = gen_output['rouge2_recall']
-        record['from_extract_rouge2_precision'] = gen_output['rouge2_precision']
-        record['from_extract_rougeL_f1'] = gen_output['rougeL_f1']
-        record['from_extract_rougeL_recall'] = gen_output['rougeL_recall']
-        record['from_extract_rougeL_precision'] = gen_output['rougeL_precision']
-        record['from_extract_abstract'] = gen_output['prediction']
-        updated_records.append(record)
 
+        if gen_output['best_from_extract_rouge1_f1'] >= record['best_extract_rouge1_f1']:
+            wins += 1
+        else:
+            losses += 1
+        record.update(gen_output)
+        updated_records.append(record)
+        print(f'Abstract Wins: {wins}. Losses: {losses}.')
     stats = pd.DataFrame(stats)
     avgs = {k: stats[k].mean() for k in stats.columns}
+    print(avgs)
+    winshare = avgs['best_from_extract_rouge1_f1'] - avgs['best_extract_rouge1_f1']
+    print(f'Win share: {winshare}')
 
     updated_df = pd.DataFrame(updated_records)
-    updated_out_fn = os.path.join(results_dir, 'from_extract.csv')
+    updated_out_fn = os.path.join(results_dir, f'from_{args.extract_mode}_extract.csv')
     print(f'Saving prompted abstracts to {updated_out_fn}')
     updated_df.to_csv(updated_out_fn, index=False)
 

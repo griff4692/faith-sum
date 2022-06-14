@@ -122,6 +122,7 @@ if __name__ == '__main__':
 
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style
+    model.hparams.extract_indicators = args.extract_indicators
     datamodule = SummaryDataModule(args, tokenizer)
     model.on_predict_start()
 

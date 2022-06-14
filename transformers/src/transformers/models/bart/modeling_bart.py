@@ -696,7 +696,7 @@ class BartEncoder(BartPretrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: BartConfig, embed_tokens: Optional[nn.Embedding] = None):
+    def __init__(self, config: BartConfig, embed_tokens: Optional[nn.Embedding] = None, extract_indicators=True):
         super().__init__(config)
 
         self.dropout = config.dropout
@@ -706,7 +706,9 @@ class BartEncoder(BartPretrainedModel):
         self.padding_idx = config.pad_token_id
         self.max_source_positions = config.max_position_embeddings
         self.embed_scale = math.sqrt(embed_dim) if config.scale_embedding else 1.0
-        self.extract_indicator_embeddings = nn.Embedding(3, config.d_model, padding_idx=0)
+        if extract_indicators:
+            print('Initializing extractor indicator embeddings.')
+            self.extract_indicator_embeddings = nn.Embedding(3, config.d_model, padding_idx=0)
 
         if embed_tokens is not None:
             self.embed_tokens = embed_tokens
@@ -800,6 +802,7 @@ class BartEncoder(BartPretrainedModel):
         embed_pos = self.embed_positions(input_shape)
 
         hidden_states = inputs_embeds + embed_pos
+        # assert extract_indicators is None
         if extract_indicators is not None:
             extract_embeds = self.extract_indicator_embeddings(extract_indicators)
             hidden_states += extract_embeds
@@ -858,10 +861,6 @@ class BartEncoder(BartPretrainedModel):
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)
-
-        # if extract_indicators is not None:
-        #     extract_embeds = self.extract_indicator_embeddings(extract_indicators)
-        #     hidden_states += extract_embeds
 
         if not return_dict:
             return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)
@@ -1447,7 +1446,7 @@ class BartCopyModel(BartPretrainedModel):
         padding_idx, vocab_size = config.pad_token_id, config.vocab_size
         self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
 
-        self.encoder = BartEncoder(config, self.shared)
+        self.encoder = BartEncoder(config, self.shared, extract_indicators=False)
         self.decoder = BartDecoder(config, self.shared)
 
         # Initialize weights and apply final processing

@@ -56,10 +56,9 @@ def run(args):
         model = TransformerSummarizer.load_from_checkpoint(
             checkpoint_path=args.pretrained_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=True
         )
-        model.hparams.add_sent_brio = args.add_sent_brio
+        model.hparams.add_sent_brio = False  # args.add_sent_brio
         model.hparams.contrast_margin = args.contrast_margin
         model.hparams.brio_loss_coef = args.brio_loss_coef
-        model.hparams.just_rank = args.just_rank
         val_check_interval = 0.25  # Depending on what you're doing you should change this
     datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 
@@ -137,7 +136,6 @@ if __name__ == '__main__':
     # How many sentences to make visible to the decoder (5 is randomly set based on summary lengths of ~2-5 sentences)
     parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)
     parser.add_argument('-add_sent_brio', default=False, action='store_true')
-    parser.add_argument('-just_rank', default=False, action='store_true')
     parser.add_argument('--contrast_margin', default=0.01, type=float)
     parser.add_argument('--brio_loss_coef', default=1, type=float)
 

@@ -86,8 +86,7 @@ class TransformerSummarizer(pl.LightningModule):
                 assert self.hparams.extract_method == 'select'
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
             metrics['extract'] = extract_loss
-            if not self.hparams.just_rank:
-                return_loss += extract_loss
+            return_loss += extract_loss
 
         # score is just extraction (no word-level generation)
         if 'abstract' in self.hparams.summary_style:
@@ -101,9 +100,8 @@ class TransformerSummarizer(pl.LightningModule):
             # Regular MLE decoder loss
             metrics['loss'] = output.loss  # Log unsmoothed loss for comparison to earlier runs.
             # Return label-smoothed loss for BART Decoder
-            if not self.hparams.just_rank:
-                smooth_lm_loss = self.label_smoother(output, batch['labels'])
-                return_loss += smooth_lm_loss
+            smooth_lm_loss = self.label_smoother(output, batch['labels'])
+            return_loss += smooth_lm_loss
         return {
             'metrics': metrics, 'return_loss': return_loss, 'encoder_outputs': encoder_outputs, 'extracts': extracts
         }
