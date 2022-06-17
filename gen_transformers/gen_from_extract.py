@@ -118,20 +118,18 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Generate From Extract')
 
-    parser.add_argument('--extractor', default='extract', choices=['oracle', 'extract'])
-    parser.add_argument('--gpu_device', default=1, type=int)
+    parser.add_argument('--gpu_device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--wandb_name', default='extract_indicators')
     parser.add_argument('--extract_experiment', default='gen_extract_full')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--hf_model', default='facebook/bart-base')
-    parser.add_argument('--max_examples', default=1000, type=int)
+    parser.add_argument('--max_examples', default=999999, type=int)
     parser.add_argument('--dataset', default='cnn_dailymail')
-    parser.add_argument('--extract_mode', default='sample', choices=['sample', 'beam'])
+    parser.add_argument('--extract_mode', default='beam', choices=['sample', 'beam'])
 
     args = parser.parse_args()
 
-    oracle_df = pd.read_csv(os.path.join(args.data_dir, 'cnn_dailymail/oracle/validation_v2.csv'))
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
     outputs = pd.read_csv(os.path.join(results_dir, f'validation_{args.extract_mode}_outputs.csv'))
     n = len(outputs)
@@ -164,6 +162,7 @@ if __name__ == '__main__':
     updated_records = []
     stats = []
     wins, losses = 0, 0
+    compare_col = 'best_extract_rouge1_f1' if args.extract_mode == 'sample' else 'extract_rouge1_f1'
     for record in tqdm(records, total=len(records)):
         # sent_scores = np.array(list(map(float, record['sent_scores'].split(','))))
         source_annotated = all_source_annotated[record['dataset_idx']]
@@ -172,14 +171,21 @@ if __name__ == '__main__':
 
         extract_idx = [list(map(int, x.split(','))) for x in record['extract_idx'].split('<cand>')]
         gen_output = gen_from_guide(model, tokenizer, source_annotated, extract_idx, special_id_min)
-        stats.append({
-            'best_extract_rouge1_f1': record['best_extract_rouge1_f1'],
-            'best_from_extract_rouge1_f1': gen_output['best_from_extract_rouge1_f1'],
-            'avg_extract_rouge1_f1': record['avg_extract_rouge1_f1'],
-            'avg_from_extract_rouge1_f1': gen_output['avg_from_extract_rouge1_f1'],
-        })
 
-        if gen_output['best_from_extract_rouge1_f1'] >= record['best_extract_rouge1_f1']:
+        stat_row = {
+            compare_col: record[compare_col],
+            'best_from_extract_rouge1_f1': gen_output['best_from_extract_rouge1_f1'],
+        }
+
+        if args.extract_mode == 'sample':
+            more = {
+                'avg_extract_rouge1_f1': record['avg_extract_rouge1_f1'],
+                'avg_from_extract_rouge1_f1': gen_output['avg_from_extract_rouge1_f1'],
+            }
+            stat_row.update(more)
+        stats.append(stat_row)
+
+        if gen_output['best_from_extract_rouge1_f1'] >= record[compare_col]:
             wins += 1
         else:
             losses += 1
@@ -189,7 +195,7 @@ if __name__ == '__main__':
     stats = pd.DataFrame(stats)
     avgs = {k: stats[k].mean() for k in stats.columns}
     print(avgs)
-    winshare = avgs['best_from_extract_rouge1_f1'] - avgs['best_extract_rouge1_f1']
+    winshare = avgs['best_from_extract_rouge1_f1'] - avgs[compare_col]
     print(f'Win share: {winshare}')
 
     updated_df = pd.DataFrame(updated_records)
