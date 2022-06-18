@@ -132,6 +132,7 @@ if __name__ == '__main__':
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
     outputs = pd.read_csv(os.path.join(results_dir, f'validation_{args.extract_mode}_outputs.csv'))
+    outputs.dropna(subset=['extract'], inplace=True)
     n = len(outputs)
     if n > args.max_examples:
         outputs = outputs.sample(n=args.max_examples, replace=False, random_state=111)

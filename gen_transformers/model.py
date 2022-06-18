@@ -1,3 +1,4 @@
+from itertools import combinations
 from collections import defaultdict
 import os
 from copy import deepcopy
@@ -265,7 +266,11 @@ class TransformerSummarizer(pl.LightningModule):
                 'extract_idx': extract_idx_flat, 'implied_extract_idx': implied_extract_idx_flat,
             }
 
-            if gen_output['extracts'] is not None and len(gen_output['extracts']) > 0 and 'sent_dist' in gen_output['extracts'][0]:
+            if (
+                    gen_output['extracts'] is not None
+                    and len(gen_output['extracts']) > 0
+                    and 'sent_dist' in gen_output['extracts'][0]
+            ):
                 dist_flat = '<cand>'.join([','.join(list(map(str, x['sent_dist']))) for x in gen_output['extracts']])
                 save_out['sent_scores'] = dist_flat
 
@@ -304,7 +309,11 @@ class TransformerSummarizer(pl.LightningModule):
 
             if gen_output['extracts'] is not None:
                 extracts = [x['summary'] for x in gen_output['extracts']]
-                save_out.update(self.compute_rouge(extracts[:1], [reference], prefix='extract_', eval=eval))
+                try:
+                    save_out.update(self.compute_rouge(extracts[:1], [reference], prefix='extract_', eval=eval))
+                except:
+                    print(f'Could not compute ROUGE score for {extracts[:1]}')
+                    print('Reference is ', reference)
                 if len(extracts) > 1:
                     extract_cand_metrics, best_extract_metric, avg_r1, extract_diversity = self.score_candidates(
                         [reference], extracts, 'extract', eval=eval
@@ -355,7 +364,7 @@ class TransformerSummarizer(pl.LightningModule):
         avg_losses = torch.stack(losses).mean()
         return avg_losses, sent_encoder_h
 
-    def sample_score_extracts(self, batch, source, encoder_h, num_return_sequences=1, topk=10):
+    def sample_score_extracts(self, batch, source, encoder_h, num_return_sequences=1, topk=10, joint_rank=True):
         batch_size = len(batch['cls_mask'])
         losses = []
         summaries = []
@@ -374,16 +383,14 @@ class TransformerSummarizer(pl.LightningModule):
                 sum = [self.build_summaries(source=source[batch_idx], y_hat=y_hat_np)]
             else:
                 sum = []
-                sample_num = num_return_sequences  #  - 1
+                sample_num = num_return_sequences
                 k = min(topk, len(y_hat_np))
                 top_k_y = y_hat.topk(k=k)
                 top_k_y_indices = top_k_y.indices
                 temperature = 1.
 
                 top_k_y_p = torch.softmax(top_k_y.values * temperature, dim=0).numpy()
-                joint_rank = True
                 if joint_rank:
-                    from itertools import combinations
                     all_combos = list(combinations(np.arange(k), 3))
                     triplet_scores = []
                     for ic in all_combos:
@@ -878,7 +885,8 @@ class TransformerSummarizer(pl.LightningModule):
                 overlap = len(i_toks.intersection(j_toks)) / avg_len
                 overlaps.append(overlap)
         avg_overlap = np.mean(overlaps)
-        return cand_metrics, best_metric, avg_r1_f1, avg_overlap
+        diversity = 1 - avg_overlap
+        return cand_metrics, best_metric, avg_r1_f1, diversity
 
     def configure_optimizers(self):
         no_decay = ['bias', 'LayerNorm.weight']
