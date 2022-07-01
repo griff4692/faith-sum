@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, Mode
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.plugins import DDPPlugin
 import torch
-from transformers import AutoTokenizer, BartTokenizer
+from transformers import AutoTokenizer, BartTokenizer, RobertaForSequenceClassification
 
 from gen_transformers.model import TransformerSummarizer
 from gen_transformers.data_utils import get_path_from_exp
@@ -34,32 +34,21 @@ def run(args):
     args.num_gpus = None if gpus is None else len(gpus)
     print('Num GPUs --> {}'.format(args.num_gpus))
     precision = 16 if args.num_gpus is not None else 32
-
-    # Load pre-trained summarizer (summary_style -> abstract_plan)
-    ckpt_path = get_path_from_exp(args.weight_dir, args.wandb_name)
-    tokenizer_dir = os.path.join(args.weight_dir, args.wandb_name, 'tokenizer')
-    print(f'Loading tokenizer from {tokenizer_dir}...')
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
-    except:  # BRIO model doesn't load from AutoTokenizer
-        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
-
-    print(f'Loading model from {ckpt_path}...')
-    finetuned_model = TransformerSummarizer.load_from_checkpoint(
-        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False)
-
     experiment_dir = os.path.join(args.weight_dir, args.experiment, 'rank')
     os.makedirs(os.path.join(experiment_dir, 'wandb'), exist_ok=True)  # Only way to make sure it's writable
 
-    tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
-    if not args.debug:
-        tokenizer.save_pretrained(tokenizer_dir)
-    if args.pretrained_path is None:
-        model = SummaryRanker(args, tokenizer=tokenizer, finetuned_model=finetuned_model.model)
-    else:
-        model = SummaryRanker.load_from_checkpoint(
-            checkpoint_path=args.pretrained_path, tokenizer=tokenizer, strict=True
-        )
+    tokenizer = AutoTokenizer.from_pretrained('roberta-base')
+
+    # tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
+    # if not args.debug:
+    #     tokenizer.save_pretrained(tokenizer_dir)
+    # if args.pretrained_path is None:
+    #     model = SummaryRanker(args, tokenizer=tokenizer, finetuned_model=finetuned_model.model)
+    # else:
+    #     model = SummaryRanker.load_from_checkpoint(
+    #         checkpoint_path=args.pretrained_path, tokenizer=tokenizer, strict=True
+    #     )
+    model = SummaryRanker(args, tokenizer)
     datamodule = RankDataModule(args, tokenizer=tokenizer)
 
     logger = pl_loggers.WandbLogger(
@@ -70,7 +59,7 @@ def run(args):
         entity='griffinadams',
     )
 
-    primary_eval_metric = 'val_avg_rouge'
+    primary_eval_metric = 'val/score'
     primary_metric_mode = 'max'  # Higher is better ('min' for val_loss)
     checkpoint_callback = ModelCheckpoint(
         monitor=primary_eval_metric,
@@ -95,13 +84,12 @@ def run(args):
         default_root_dir=experiment_dir,
         gradient_clip_val=0.1,
         accumulate_grad_batches=args.grad_accum,
-        val_check_interval=1.0 if args.debug else 0.5,
+        val_check_interval=1.0 if args.debug else 0.2,
         check_val_every_n_epoch=args.max_epochs if args.debug else 1,
         num_sanity_val_steps=0 if args.debug else 2,
         log_every_n_steps=10,
         max_steps=args.max_steps,
         plugins=plugins,
-        # detect_anomaly=args.debug
     )
 
     if args.find_lr:
@@ -127,7 +115,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_val_examples', default=1024, type=int)
     parser.add_argument('--gpu_device', default=None, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--gen_experiment', default='plan_abstract_bs24')
+    parser.add_argument('--gen_experiment', default='select_extract_full')
     parser.add_argument('-no_schedule', default=False, action='store_true')
     parser.add_argument('-offline', default=False, action='store_true')
     parser.add_argument('-find_lr', default=False, action='store_true')
@@ -135,36 +123,17 @@ if __name__ == '__main__':
     parser.add_argument('--num_dataloaders', default=8, type=int)
 
     # Hyper-parameters
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--target_batch_size', type=int, default=8)
+    parser.add_argument('--lr', type=float, default=1e-5)
+    parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--grad_accum', type=int, default=4)
     parser.add_argument('--warmup_steps', type=int, default=200)
     parser.add_argument('--max_steps', default=10000, type=int)
     parser.add_argument('--max_epochs', default=10, type=int)
-    parser.add_argument('--weight_decay', type=float, default=5e-5)
-    parser.add_argument('--max_output_length', type=int, default=256)  # For training only
-    parser.add_argument('--max_input_length', type=int, default=1024)
-    parser.add_argument('--wandb_name', default='plan_abstract_bs24')
-    parser.add_argument('--rank_variable', default='avg', choices=[
-        'avg',
-        'extract',
-        'abstract',
-        'implied'
-    ])
-    parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
-    # HuggingFace identifier of model for which to load weights for fine-tuning
-    parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
-        'facebook/bart-base',
-        'facebook/bart-large',
-        'Yale-LILY/brio-cnndm-uncased',
-    ])
-
-    # Margin for contrast loss
-    parser.add_argument('--contrast_margin', default=1.0, type=float)
+    parser.add_argument('--weight_decay', type=float, default=0)
+    parser.add_argument('--max_input_length', type=int, default=512)
 
     args = parser.parse_args()
 
-    # Won't held yet for multi-gpu
-    args.grad_accum = args.target_batch_size
     args.weight_dir = os.path.join(args.data_dir, 'weights')
     os.makedirs(args.weight_dir, exist_ok=True)
 

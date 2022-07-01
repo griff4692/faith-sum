@@ -9,7 +9,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Merge Extracts and Abstracts')
 
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--wandb_extract', default='gen_extract_full')
+    parser.add_argument('--wandb_extract', default='select_extract_full')
     parser.add_argument('--wandb_abstract', default='gen_abstract_full')
 
     args = parser.parse_args()
@@ -32,12 +32,16 @@ if __name__ == '__main__':
     print(f'{len(extract_dataset_idxs)} Extracts.  {len(abstract_dataset_idxs)} Abstracts. {len(dataset_idxs)} shared.')
     stats = []
     for dataset_idx in tqdm(dataset_idxs):
+        try:
+            from_extract_record = from_extract_abstracts[from_extract_abstracts['dataset_idx'] == dataset_idx]
+            from_extract_record = from_extract_record.to_dict('records')[0]
+        except:
+            print(f'Cant find {dataset_idx}')
+            continue
         abstract_record = abstracts[abstracts['dataset_idx'] == dataset_idx].to_dict('records')[0]
         extract_record = extracts[extracts['dataset_idx'] == dataset_idx].to_dict('records')[0]
         beam_extract_record = beam_extracts[beam_extracts['dataset_idx'] == dataset_idx].to_dict('records')[0]
         beam_abstract_record = beam_abstracts[beam_abstracts['dataset_idx'] == dataset_idx].to_dict('records')[0]
-        from_extract_record = from_extract_abstracts[from_extract_abstracts['dataset_idx'] == dataset_idx]
-        from_extract_record = from_extract_record.to_dict('records')[0]
 
         best_abstract_r1 = abstract_record['best_abstract_rouge1_f1']
         best_implied_r1 = abstract_record['best_implied_rouge1_f1']

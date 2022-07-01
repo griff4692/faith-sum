@@ -2,9 +2,10 @@ import itertools
 import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
-import pandas as pd
 import argparse
+from datasets import load_from_disk
 import spacy
+import pandas as pd
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -16,7 +17,7 @@ from preprocess.convert_abstractive_to_extractive import gain_selection
 from gen_transformers.model import TransformerSummarizer
 from gen_transformers.model_utils import sentence_indicators
 from preprocess.extract_oracles import convert_to_sents
-from datasets import load_from_disk
+from eval.diversity import diversity_score
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 np.random.seed(1992)
@@ -60,7 +61,7 @@ def get_priority(source_toks, summary, nlp):
     return np.argsort(- avg_rs), avg_rs
 
 
-def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_min):
+def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_min, num_return_sequences=1):
     inputs = tokenizer(
         [source_annotated] * len(idx_to_keep),
         padding='longest',
@@ -79,39 +80,47 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
     encoder_outputs = model.model.model.encoder(**{
         'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
     })
-    kwargs = {
+    shared_kwargs = {
         'encoder_outputs': encoder_outputs,
         'attention_mask': attention_mask,
-        'num_return_sequences': 1,
-        'num_beams': 4,
+        'num_return_sequences': num_return_sequences,
         'length_penalty': 4.0,
         'max_length': 142,
         'min_length': 56,
         'no_repeat_ngram_size': 3,
         'early_stopping': True,
     }
+    if num_return_sequences == 1:
+        gen_kwargs = {
+            'num_beams': 4,
+        }
+    else:
+        gen_kwargs = {
+            'diversity_penalty': 1.0,
+            'num_beams': num_return_sequences,
+            'num_beam_groups': num_return_sequences,
+        }
 
-    pred_ids = model.model.generate(**kwargs)
+    shared_kwargs.update(gen_kwargs)
+    pred_ids = model.model.generate(**shared_kwargs)
     pred_str = tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
-    rouges = []
-    for x in pred_str:
-        rr = compute_rouge([x], [reference], rouge_metric)
-        rr['prediction'] = x
-        rouges.append(rr)
-    rouge1_f1s = [y['rouge1_f1'] for y in rouges]
-    rouge2_f1s = [y['rouge2_f1'] for y in rouges]
-    rougeL_f1s = [y['rougeL_f1'] for y in rouges]
+
+    cand_metrics, best_metric, avg_r1_f1, diversity = model.score_candidates(
+        [reference], pred_str, prefix='from_extract', eval=True,
+    )
+    rouge1_f1s = [y['best_from_extract_rouge1_f1'] for y in cand_metrics]
+    pred_rank = int(np.argmax(rouge1_f1s))
+    diversity = diversity_score(pred_str)
     return {
-        'best_from_extract_rouge1_f1': max(rouge1_f1s),
-        'avg_from_extract_rouge1_f1': np.mean(rouge1_f1s),
+        'best_from_extract_rouge1_f1': best_metric['best_from_extract_rouge1_f1'],
+        'best_from_extract_rouge2_f1': best_metric['best_from_extract_rouge2_f1'],
+        'best_from_extract_rougeL_f1': best_metric['best_from_extract_rougeL_f1'],
         'min_from_extract_rouge1_f1': min(rouge1_f1s),
-        'best_from_extract_rouge2_f1': max(rouge2_f1s),
-        'avg_from_extract_rouge2_f1': np.mean(rouge2_f1s),
-        'min_from_extract_rouge2_f1': min(rouge2_f1s),
-        'best_from_extract_rougeL_f1': max(rougeL_f1s),
-        'avg_from_extract_rougeL_f1': np.mean(rougeL_f1s),
-        'min_from_extract_rougeL_f1': min(rougeL_f1s),
+        'avg_from_extract_rouge1_f1': float(np.mean(rouge1_f1s)),
         'from_extract_abstract': '<cand>'.join(pred_str),
+        'from_extract_rouges': '<cand>'.join(map(str, rouge1_f1s)),
+        'pred_rank': pred_rank,
+        'diversity': diversity,
     }
 
 
@@ -121,12 +130,14 @@ if __name__ == '__main__':
     parser.add_argument('--gpu_device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--wandb_name', default='extract_indicators')
-    parser.add_argument('--extract_experiment', default='gen_extract_full')
+    parser.add_argument('--extract_experiment', default='select_extract_full')
     parser.add_argument('-debug', default=False, action='store_true')
+    parser.add_argument('-do_not_save', default=False, action='store_true')
     parser.add_argument('--hf_model', default='facebook/bart-base')
     parser.add_argument('--max_examples', default=999999, type=int)
     parser.add_argument('--dataset', default='cnn_dailymail')
-    parser.add_argument('--extract_mode', default='beam', choices=['sample', 'beam'])
+    parser.add_argument('--extract_mode', default='sample', choices=['sample', 'beam'])
+    parser.add_argument('--num_return_sequences', default=1, type=int)
 
     args = parser.parse_args()
 
@@ -171,17 +182,23 @@ if __name__ == '__main__':
         reference = record['reference']
 
         extract_idx = [list(map(int, x.split(','))) for x in record['extract_idx'].split('<cand>')]
-        gen_output = gen_from_guide(model, tokenizer, source_annotated, extract_idx, special_id_min)
+        gen_output = gen_from_guide(
+            model, tokenizer, source_annotated, extract_idx, special_id_min,
+            num_return_sequences=args.num_return_sequences
+        )
 
+        best_ensemble_rouge1_f1 = max(record[compare_col], gen_output['best_from_extract_rouge1_f1'])
         stat_row = {
             compare_col: record[compare_col],
             'best_from_extract_rouge1_f1': gen_output['best_from_extract_rouge1_f1'],
+            'best_ensemble_rouge1_f1': best_ensemble_rouge1_f1,
         }
 
         if args.extract_mode == 'sample':
             more = {
                 'avg_extract_rouge1_f1': record['avg_extract_rouge1_f1'],
                 'avg_from_extract_rouge1_f1': gen_output['avg_from_extract_rouge1_f1'],
+                'diversity': gen_output['diversity']
             }
             stat_row.update(more)
         stats.append(stat_row)
@@ -190,6 +207,7 @@ if __name__ == '__main__':
             wins += 1
         else:
             losses += 1
+        gen_output['best_ensemble_rouge1_f1'] = best_ensemble_rouge1_f1
         record.update(gen_output)
         updated_records.append(record)
         print(f'Abstract Wins: {wins}. Losses: {losses}.')
@@ -200,16 +218,18 @@ if __name__ == '__main__':
     print(f'Win share: {winshare}')
 
     updated_df = pd.DataFrame(updated_records)
-    updated_out_fn = os.path.join(results_dir, f'from_{args.extract_mode}_extract.csv')
-    print(f'Saving prompted abstracts to {updated_out_fn}')
-    updated_df.to_csv(updated_out_fn, index=False)
+    if not args.do_not_save:
+        updated_out_fn = os.path.join(results_dir, f'from_{args.extract_mode}_extract.csv')
+        print(f'Saving prompted abstracts to {updated_out_fn}')
+        updated_df.to_csv(updated_out_fn, index=False)
 
-    # abstract_tok_len = updated_df['abstract'].apply(lambda x: len(x.split(' '))).mean()
-    extract_tok_len = updated_df['extract'].apply(lambda x: len(x.split(' '))).mean()
-    ref_tok_len = updated_df['reference'].apply(lambda x: len(x.split(' '))).mean()
-    from_extract_tok_len = updated_df['from_extract_abstract'].apply(lambda x: len(x.split(' '))).mean()
+    extract_tok_len = updated_df['extract'].apply(lambda x: len(
+        x.split('<cand>')[0].split(' '))).mean()
+    ref_tok_len = updated_df['reference'].apply(
+        lambda x: len(x.split(' '))).mean()
+    from_extract_tok_len = updated_df['from_extract_abstract'].apply(
+        lambda x: len(x.split('<cand>')[0].split(' '))).mean()
 
-    # print(f'Average Abstract Tokens: {abstract_tok_len}')
     print(f'Average Extract Tokens: {extract_tok_len}')
     print(f'Average From Extract Abstract Tokens: {from_extract_tok_len}')
     print(f'Average Reference Tokens: {ref_tok_len}')

@@ -22,6 +22,7 @@ from preprocess.extract_oracles import convert_to_sents
 from gen_transformers.model_utils import implement_oracle_indicators
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from eval.rouge_metric import RougeMetric
+from eval.diversity import diversity_score
 
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
@@ -876,16 +877,7 @@ class TransformerSummarizer(pl.LightningModule):
         avg_r1_f1 = np.mean([x[f'best_{prefix}_rouge1_f1'] for x in cand_metrics])
         best_cand = np.argmax(cand_scores)
         best_metric = self.compute_rouge([candidates[best_cand]], reference, prefix=f'best_{prefix}_', eval=eval)
-        overlaps = []
-        for i in range(len(candidates)):
-            i_toks = set(list(map(lambda x: x.lower(), candidates[i].split(' '))))
-            for j in range(i + 1, len(candidates)):
-                j_toks = set(list(map(lambda x: x.lower(), candidates[j].split(' '))))
-                avg_len = max(1., 0.5 * len(i_toks) + 0.5 * len(j_toks))
-                overlap = len(i_toks.intersection(j_toks)) / avg_len
-                overlaps.append(overlap)
-        avg_overlap = np.mean(overlaps)
-        diversity = 1 - avg_overlap
+        diversity = diversity_score(candidates)
         return cand_metrics, best_metric, avg_r1_f1, diversity
 
     def configure_optimizers(self):
@@ -920,7 +912,8 @@ class TransformerSummarizer(pl.LightningModule):
         # 6% is somewhat standard for fine-tuning Transformers (can be a tunable hyper-parameter as well)
         # nonzero warmup helps mitigate risk of catastrophic forgetting from pre-training (big risk bc/ of new domain)
         scheduler = get_linear_schedule_with_warmup(
-            optimizer, num_warmup_steps=self.hparams.warmup_steps, num_training_steps=self.hparams.max_steps)
+            optimizer, num_warmup_steps=self.hparams.warmup_steps, num_training_steps=self.hparams.max_steps
+        )
 
         lr_scheduler = {
             'scheduler': scheduler,

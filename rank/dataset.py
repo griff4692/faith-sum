@@ -10,52 +10,51 @@ from torch.utils.data import Dataset, DataLoader
 import spacy
 
 from sum_constants import summarization_name_mapping
+from eval.rouge_metric import RougeMetric
+
+
+def compute_rouge(rouge_metric, generated, gold):
+    outputs = rouge_metric.evaluate_batch([generated], [gold], aggregate=True)['rouge']
+    f1s = []
+    for rouge_type in ['1', '2', 'L']:
+        fscore = outputs[f'rouge_{rouge_type.lower()}_f_score']
+        f1s.append(fscore)
+    return f1s
 
 
 class RankCollate:
-    def __init__(self, tokenizer, max_input_length=8192, max_output_length=512, add_cols=None, split=None):
+    def __init__(self, tokenizer, max_input_length=512, add_cols=None, split=None):
         self.tokenizer = tokenizer
         self.max_input_length = max_input_length
         assert self.max_input_length <= tokenizer.model_max_length
-        self.max_output_length = max_output_length
         self.pad_id = tokenizer.pad_token_id
-        self.cls_token_id = tokenizer.cls_token_id
-        self.eos_token_id = tokenizer.eos_token_id
         self.add_cols = [] if add_cols is None else add_cols
         self.split = split
 
     def __call__(self, batch_list):
         # tokenize the inputs and labels
-        inputs = self.tokenizer(
-            [x['source'] for x in batch_list],
+        batch_size = len(batch_list)
+        abstracts_flat = list(itertools.chain(*[x['abstracts'] for x in batch_list]))
+        num_cands = len(batch_list[0]['abstracts'])
+        sources_flat = list(itertools.chain(*[[x['source']] * num_cands for x in batch_list]))
+        batch_inputs = self.tokenizer(
+            abstracts_flat,
+            sources_flat,
             padding='longest',
             truncation=True,
             max_length=self.max_input_length,
             return_tensors='pt'
         )
+        scores = [x['scores'] for x in batch_list]
 
-        flat_targets = list(itertools.chain(*[x['targets'] for x in batch_list]))
+        norm_scores = np.zeros([batch_size, num_cands])
+        for batch_idx, score_arr in enumerate(scores):
+            score_arr = np.array(score_arr)
+            normed = (score_arr - min(score_arr)) / (max(score_arr) - min(score_arr))
+            norm_scores[batch_idx] = normed
 
-        with self.tokenizer.as_target_tokenizer():
-            outputs = self.tokenizer(
-                flat_targets,
-                padding='longest',
-                truncation=True,
-                max_length=self.max_output_length,
-                return_tensors='pt'
-            )
-
-        batch = {}
-        batch['input_ids'] = inputs.input_ids
-        batch['attention_mask'] = inputs.attention_mask
-        batch['labels'] = outputs.input_ids
-        # We have to make sure that the PAD token is ignored
-        batch['labels'][torch.where(batch['labels'] == 1)] = -100
-
-        for col in self.add_cols:
-            batch[col] = [x[col] for x in batch_list]
-
-        return batch
+        norm_scores = torch.from_numpy(norm_scores)
+        return {'inputs': batch_inputs, 'scores': scores, 'score_dist': norm_scores}
 
 
 class RankDataModule(pl.LightningDataModule):
@@ -67,21 +66,21 @@ class RankDataModule(pl.LightningDataModule):
         self.num_workers = 0 if args.debug else 16
         self.nlp = spacy.load('en_core_web_sm')
 
-        beam_fn = os.path.join(self.args.data_dir, 'results', self.args.gen_experiment, 'validation_beam_outputs.csv')
+        # beam_fn = os.path.join(self.args.data_dir, 'results', self.args.gen_experiment, 'validation_beam_outputs.csv')
         sample_fn = os.path.join(
-            self.args.data_dir, 'results', self.args.gen_experiment, 'validation_sample_outputs.csv'
+            self.args.data_dir, 'results', self.args.gen_experiment, 'from_sample_extract.csv'
         )
 
-        beam_df = pd.read_csv(beam_fn)
+        # beam_df = pd.read_csv(beam_fn)
         sample_df = pd.read_csv(sample_fn)
 
         avail_idxs = sample_df['dataset_idx'].unique().tolist()
-        beam_df = beam_df[beam_df['dataset_idx'].isin(set(avail_idxs))]
+        # beam_df = beam_df[beam_df['dataset_idx'].isin(set(avail_idxs))]
 
         sample_records = {record['dataset_idx']: record for record in sample_df.to_dict('records')}
-        beam_records = {record['dataset_idx']: record for record in beam_df.to_dict('records')}
+        # beam_records = {record['dataset_idx']: record for record in beam_df.to_dict('records')}
         np.random.seed(1992)
-        train_frac = 0.75
+        train_frac = 0.8
         n = len(sample_records)
         train_cutoff = round(train_frac * n)
         np.random.shuffle(avail_idxs)
@@ -99,7 +98,7 @@ class RankDataModule(pl.LightningDataModule):
         for dataset_idx in avail_idxs:
             combined_data[dataset_idx] = {
                 'dataset_idx': dataset_idx,
-                'beam': beam_records[dataset_idx],
+                # 'beam': beam_records[dataset_idx],
                 'sample': sample_records[dataset_idx]
             }
         self.dataset = list(combined_data.values())
@@ -113,17 +112,14 @@ class RankDataModule(pl.LightningDataModule):
         if max_examples is not None and max_examples < n:
             rand_idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
             split_dataset = [split_dataset[i] for i in rand_idxs]
-        add_cols = ['extract_scores', 'abstract_scores', 'avg_scores']
-        split_dataset_pl = RankDataset(self.args, split_dataset, split, self.nlp, add_cols=add_cols)
+        split_dataset_pl = RankDataset(self.args, split_dataset, split, self.nlp)
         collate_fn = RankCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
-            max_output_length=self.args.max_output_length,
-            add_cols=add_cols,
             split=split
         )
         kwargs = {
-            'batch_size': 1,
+            'batch_size': self.args.batch_size,
             'shuffle': split == 'train',
             'num_workers': self.num_workers,
             'collate_fn': collate_fn
@@ -150,6 +146,7 @@ class RankDataset(Dataset):
         self.add_cols = [] if add_cols is None else add_cols
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
         self.ids2oracles = ids2oracles
+        self.rouge_metric = RougeMetric()
 
     def __len__(self):
         return len(self.dataset)
@@ -161,44 +158,28 @@ class RankDataset(Dataset):
         sample = example['sample']
 
         source = sample['source']
-        pred_abstracts = sample['abstract'].split('<cand>')
-        # pred_abstract_rouges = list(map(float, example['abstract_rouges'].split(',')))
-        # pred_extracts = example['extract'].split('<cand>')
-        pred_extract_idxs = list(map(lambda x: x.replace(',', ''), sample['extract_idx'].split('<cand>')))
-        pred_extract_rouges = list(map(float, sample['extract_rouges'].split(',')))
-        pred_abstract_rouges = list(map(float, sample['abstract_rouges'].split(',')))
-        pred_implied_rouges = list(map(float, sample['implied_extract_rouges'].split(',')))
-        num_cand = len(pred_abstracts)
-        full_preds = [pred_extract_idxs[i] + '<sep>' + pred_abstracts[i] for i in range(num_cand)]
+        reference = sample['reference']
+        pred_abstracts = sample['from_extract_abstract'].split('<cand>')
 
-        avg_scores = [(a + b) / 2.0 for a, b in zip(pred_abstract_rouges, pred_extract_rouges)]
+        # for i in range(1, len(pred_abstracts)):
+        #     pred_abstracts[i] = 'NOPE'
 
-        if self.args.rank_variable == 'avg':
-            oracle_order = np.argsort(-np.array(avg_scores))
-        elif self.args.rank_variable == 'extract':
-            oracle_order = np.argsort(-np.array(pred_extract_rouges))
-        elif self.args.rank_variable == 'abstract':
-            oracle_order = np.argsort(-np.array(pred_abstract_rouges))
-        elif self.args.rank_variable == 'implied':
-            oracle_order = np.argsort(-np.array(pred_implied_rouges))
-        else:
-            raise Exception('Unrecognized ROUGE')
-        full_preds_ordered = [full_preds[rank] for rank in oracle_order]
-        pred_extract_rouges_ordered = [pred_extract_rouges[rank] for rank in oracle_order]
-        pred_abstract_rouges_ordered = [pred_abstract_rouges[rank] for rank in oracle_order]
-        avg_scores_ordered = [avg_scores[rank] for rank in oracle_order]
+        rouges = []
+        for abstract in pred_abstracts:
+            rouges.append(compute_rouge(self.rouge_metric, abstract, reference)[0])
 
-        # Eliminate Candidates with Identical Scores
-        uniq_idxs = [i for i in range(num_cand) if i == 0 or avg_scores_ordered[i] != avg_scores_ordered[i - 1]]
-        full_preds_ordered = [full_preds_ordered[i] for i in uniq_idxs]
-        pred_extract_rouges_ordered = [pred_extract_rouges_ordered[i] for i in uniq_idxs]
-        pred_abstract_rouges_ordered = [pred_abstract_rouges_ordered[i] for i in uniq_idxs]
-        avg_scores_ordered = [avg_scores_ordered[i] for i in uniq_idxs]
-
+        oracle_order = np.argsort(-np.array(rouges))
+        pred_abstracts = [pred_abstracts[i] for i in oracle_order]
+        # pred_abstracts[0] = 'WINNER: '
+        rouges = [rouges[i] for i in oracle_order]
+        if len(pred_abstracts) != 16:
+            print(len(pred_abstracts))
+            additional_copies = [pred_abstracts[-1]] * (16 - len(pred_abstracts))
+            additional_scores = [rouges[-1]] * (16 - len(pred_abstracts))
+            pred_abstracts = pred_abstracts + additional_copies
+            rouges = rouges + additional_scores
         return {
             'source': source,
-            'targets': full_preds_ordered,
-            'extract_scores': pred_extract_rouges_ordered,
-            'abstract_scores': pred_abstract_rouges_ordered,
-            'avg_scores': avg_scores_ordered,
+            'abstracts': pred_abstracts,
+            'scores': rouges,
         }
