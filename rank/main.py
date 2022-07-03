@@ -8,10 +8,7 @@ from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, Mode
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.plugins import DDPPlugin
 import torch
-from transformers import AutoTokenizer, BartTokenizer, RobertaForSequenceClassification
-
-from gen_transformers.model import TransformerSummarizer
-from gen_transformers.data_utils import get_path_from_exp
+from transformers import AutoTokenizer
 from global_utils import get_free_gpus, set_same_seed
 from rank.dataset import RankDataModule
 from rank.model import SummaryRanker

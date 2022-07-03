@@ -66,19 +66,19 @@ class RankDataModule(pl.LightningDataModule):
         self.num_workers = 0 if args.debug else 16
         self.nlp = spacy.load('en_core_web_sm')
 
-        # beam_fn = os.path.join(self.args.data_dir, 'results', self.args.gen_experiment, 'validation_beam_outputs.csv')
+        beam_fn = os.path.join(self.args.data_dir, 'results', 'gen_abstract_full', 'validation_beam_outputs.csv')
         sample_fn = os.path.join(
             self.args.data_dir, 'results', self.args.gen_experiment, 'from_sample_extract.csv'
         )
 
-        # beam_df = pd.read_csv(beam_fn)
+        beam_df = pd.read_csv(beam_fn)
         sample_df = pd.read_csv(sample_fn)
 
         avail_idxs = sample_df['dataset_idx'].unique().tolist()
-        # beam_df = beam_df[beam_df['dataset_idx'].isin(set(avail_idxs))]
+        beam_df = beam_df[beam_df['dataset_idx'].isin(set(avail_idxs))]
 
         sample_records = {record['dataset_idx']: record for record in sample_df.to_dict('records')}
-        # beam_records = {record['dataset_idx']: record for record in beam_df.to_dict('records')}
+        beam_records = {record['dataset_idx']: record for record in beam_df.to_dict('records')}
         np.random.seed(1992)
         train_frac = 0.8
         n = len(sample_records)
@@ -98,7 +98,7 @@ class RankDataModule(pl.LightningDataModule):
         for dataset_idx in avail_idxs:
             combined_data[dataset_idx] = {
                 'dataset_idx': dataset_idx,
-                # 'beam': beam_records[dataset_idx],
+                'beam': beam_records[dataset_idx],
                 'sample': sample_records[dataset_idx]
             }
         self.dataset = list(combined_data.values())
@@ -154,15 +154,13 @@ class RankDataset(Dataset):
     def __getitem__(self, idx):
         example = self.dataset[idx]
 
-        # beam = example['beam']
+        beam = example['beam']
         sample = example['sample']
 
         source = sample['source']
         reference = sample['reference']
         pred_abstracts = sample['from_extract_abstract'].split('<cand>')
-
-        # for i in range(1, len(pred_abstracts)):
-        #     pred_abstracts[i] = 'NOPE'
+        pred_abstracts.insert(0, beam['abstract'])
 
         rouges = []
         for abstract in pred_abstracts:
@@ -172,10 +170,10 @@ class RankDataset(Dataset):
         pred_abstracts = [pred_abstracts[i] for i in oracle_order]
         # pred_abstracts[0] = 'WINNER: '
         rouges = [rouges[i] for i in oracle_order]
-        if len(pred_abstracts) != 16:
+        if len(pred_abstracts) != 17:
             print(len(pred_abstracts))
-            additional_copies = [pred_abstracts[-1]] * (16 - len(pred_abstracts))
-            additional_scores = [rouges[-1]] * (16 - len(pred_abstracts))
+            additional_copies = [pred_abstracts[-1]] * (17 - len(pred_abstracts))
+            additional_scores = [rouges[-1]] * (17 - len(pred_abstracts))
             pred_abstracts = pred_abstracts + additional_copies
             rouges = rouges + additional_scores
         return {

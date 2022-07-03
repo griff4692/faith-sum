@@ -54,9 +54,18 @@ def run(args):
         tok_path = '/'.join(args.pretrained_path.split('/')[:-4]) + '/tokenizer'
         tokenizer = AutoTokenizer.from_pretrained(tok_path)
         model = TransformerSummarizer.load_from_checkpoint(
-            checkpoint_path=args.pretrained_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=True
+            checkpoint_path=args.pretrained_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False
         )
+
+        if args.add_sent_toks and '<s1>' not in tokenizer.additional_special_tokens:
+            add_tokens = [f'<s{i}>' for i in range(args.max_num_sents)]
+            add_tokens.append('<sep>')  # Not used right now
+            special_tokens_dict = {'additional_special_tokens': add_tokens}
+            tokenizer.add_special_tokens(special_tokens_dict)
+            model.model.resize_token_embeddings(len(tokenizer))
+
         model.hparams.add_sent_brio = False  # args.add_sent_brio
+        model.hparams.extract_indicators = args.extract_indicators
         model.hparams.contrast_margin = args.contrast_margin
         model.hparams.brio_loss_coef = args.brio_loss_coef
         val_check_interval = 0.25  # Depending on what you're doing you should change this

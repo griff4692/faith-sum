@@ -33,6 +33,33 @@ class SummaryDataModule(pl.LightningDataModule):
         self.num_workers = 0  # 0 if args.debug else 4
         self.nlp = spacy.load('en_core_web_sm')
 
+    def get_inverse_train_split(self, split, train_frac, **dataloader_kwargs):
+        split_dataset = self.dataset[split]
+        max_examples = round(train_frac * len(split_dataset))
+        n = len(split_dataset)
+        trained_idxs = set(list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False))))
+        idxs = list(sorted(set(range(n)) - trained_idxs))
+        print(f'Using {len(idxs)} training examples set aside for re-ranking')
+        print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
+        split_dataset = split_dataset.select(idxs)
+
+        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split)
+        collate_fn = Seq2SeqCollate(
+            self.tokenizer,
+            max_input_length=self.args.max_input_length,
+            max_output_length=self.args.max_output_length,
+            split=split
+        )
+        batch_size = self.args.per_device_train_bs if split == 'train' else self.args.per_device_eval_bs
+        kwargs = {
+            'batch_size': batch_size,
+            'shuffle': split == 'train',
+            'num_workers': self.num_workers,
+            'collate_fn': collate_fn
+        }
+        kwargs.update(**dataloader_kwargs)
+        return DataLoader(split_dataset_pl, **kwargs), idxs
+
     def get_split(self, split, max_examples=None, **dataloader_kwargs):
         split_dataset = self.dataset[split]
         if self.args.debug and max_examples is None:

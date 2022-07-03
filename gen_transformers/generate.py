@@ -82,6 +82,7 @@ if __name__ == '__main__':
         'Yale-LILY/brio-cnndm-uncased',
     ])
     parser.add_argument('--split', default='validation')
+    parser.add_argument('--train_frac', default=0.8, type=float)
 
     args = parser.parse_args()
     args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style or args.extract_indicators
@@ -130,7 +131,13 @@ if __name__ == '__main__':
     for exp_id in range(args.bootstraps):
         # Override behavior during training
         dataloader_kwargs = {'shuffle': False, 'batch_size': args.batch_size}
-        dataloader, dataset_idxs = datamodule.get_split(args.split, max_examples=args.max_examples, **dataloader_kwargs)
+
+        if args.split == 'train':
+            dataloader, dataset_idxs = datamodule.get_inverse_train_split('train', args.train_frac, **dataloader_kwargs)
+        else:
+            dataloader, dataset_idxs = datamodule.get_split(
+                args.split, max_examples=args.max_examples, **dataloader_kwargs
+            )
         outputs = []
         gen_kwargs = SAMPLE_KWARGS[args.dataset] if args.sample_gen else GEN_KWARGS[args.dataset]
         gen_kwargs['length_penalty'] = args.length_penalty
