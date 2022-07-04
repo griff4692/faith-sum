@@ -138,11 +138,12 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--extract_mode', default='sample', choices=['sample', 'beam'])
     parser.add_argument('--num_return_sequences', default=1, type=int)
+    parser.add_argument('--split', default='validation')
 
     args = parser.parse_args()
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
-    outputs = pd.read_csv(os.path.join(results_dir, f'validation_{args.extract_mode}_outputs.csv'))
+    outputs = pd.read_csv(os.path.join(results_dir, f'{args.split}_{args.extract_mode}_outputs.csv'))
     outputs.dropna(subset=['extract'], inplace=True)
     n = len(outputs)
     if n > args.max_examples:
@@ -151,7 +152,7 @@ if __name__ == '__main__':
     nlp = spacy.load('en_core_web_sm')
 
     data_dir = os.path.join(args.data_dir, args.dataset)
-    dataset = load_from_disk(data_dir)['validation']
+    dataset = load_from_disk(data_dir)[args.split]
     dataset_idx2id = dataset['id']
     all_source_annotated = dataset['source_annotated']
 
@@ -219,7 +220,7 @@ if __name__ == '__main__':
 
     updated_df = pd.DataFrame(updated_records)
     if not args.do_not_save:
-        updated_out_fn = os.path.join(results_dir, f'from_{args.extract_mode}_extract.csv')
+        updated_out_fn = os.path.join(results_dir, f'{args.split}_from_{args.extract_mode}_extract.csv')
         print(f'Saving prompted abstracts to {updated_out_fn}')
         updated_df.to_csv(updated_out_fn, index=False)
 

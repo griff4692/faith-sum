@@ -28,7 +28,7 @@ class SummaryRanker(pl.LightningModule):
         score_dist = batch['score_dist']
         batch_inputs = batch['inputs']
         batch_size = len(scores)
-        num_candidates = 17
+        num_candidates = len(batch_inputs['input_ids']) // batch_size
         outputs = self.model(**batch_inputs)
         logits = outputs.logits
 

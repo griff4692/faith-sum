@@ -71,6 +71,10 @@ class RankDataModule(pl.LightningDataModule):
             self.args.data_dir, 'results', self.args.gen_experiment, 'from_sample_extract.csv'
         )
 
+        # sample_fn = os.path.join(
+        #     self.args.data_dir, 'results', 'gen_abstract_full', 'validation_sample_outputs.csv'
+        # )
+
         beam_df = pd.read_csv(beam_fn)
         sample_df = pd.read_csv(sample_fn)
 
@@ -147,6 +151,7 @@ class RankDataset(Dataset):
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
         self.ids2oracles = ids2oracles
         self.rouge_metric = RougeMetric()
+        self.num_candidates = 17
 
     def __len__(self):
         return len(self.dataset)
@@ -159,7 +164,8 @@ class RankDataset(Dataset):
 
         source = sample['source']
         reference = sample['reference']
-        pred_abstracts = sample['from_extract_abstract'].split('<cand>')
+        pred_abstracts = sample['from_extract_abstract'] if 'from_extract_abstract' in sample else sample['abstract']
+        pred_abstracts = pred_abstracts.split('<cand>')
         pred_abstracts.insert(0, beam['abstract'])
 
         rouges = []
@@ -170,10 +176,11 @@ class RankDataset(Dataset):
         pred_abstracts = [pred_abstracts[i] for i in oracle_order]
         # pred_abstracts[0] = 'WINNER: '
         rouges = [rouges[i] for i in oracle_order]
-        if len(pred_abstracts) != 17:
+        if len(pred_abstracts) != self.num_candidates:
             print(len(pred_abstracts))
-            additional_copies = [pred_abstracts[-1]] * (17 - len(pred_abstracts))
-            additional_scores = [rouges[-1]] * (17 - len(pred_abstracts))
+            delta = self.num_candidates - len(pred_abstracts)
+            additional_copies = [pred_abstracts[-1]] * delta
+            additional_scores = [rouges[-1]] * delta
             pred_abstracts = pred_abstracts + additional_copies
             rouges = rouges + additional_scores
         return {
