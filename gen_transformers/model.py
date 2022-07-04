@@ -16,7 +16,7 @@ import torch.nn as nn
 from transformers import AutoModelForSeq2SeqLM
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
-from transformers.models.bart.modeling_bart import BartForConditionalCopy
+from transformers.models.bart.modeling_bart import BartForConditionalCopy, BartForConditionalMert
 
 from preprocess.extract_oracles import convert_to_sents
 from gen_transformers.model_utils import implement_oracle_indicators
@@ -35,6 +35,7 @@ class TransformerSummarizer(pl.LightningModule):
         self.tokenizer = tokenizer
         assert self.hparams.max_input_length <= self.tokenizer.model_max_length
         self.model = AutoModelForSeq2SeqLM.from_pretrained(hf_model)
+        self.model = BartForConditionalMert.from_pretrained(hf_model)
         self.config = self.model.config
         self.model.resize_token_embeddings(len(tokenizer))
         self.lr = self.hparams.lr  # Necessary for tune_lr to work with PytorchLightning
@@ -96,6 +97,7 @@ class TransformerSummarizer(pl.LightningModule):
                 'encoder_outputs': encoder_outputs,
                 'attention_mask': batch['attention_mask'],
                 'labels': batch['labels'],
+                'cls_mask': batch['cls_mask'],
             }
 
             output = self.model(**updated_inputs, use_cache=False)
