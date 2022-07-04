@@ -1606,6 +1606,12 @@ class BartForConditionalMert(BartPretrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+        self.loss_fct = nn.CrossEntropyLoss(
+            ignore_index=-100,
+            reduction='none',
+            label_smoothing=0.0,
+        )
+
     def get_encoder(self):
         return self.model.get_encoder()
 
@@ -1695,20 +1701,44 @@ class BartForConditionalMert(BartPretrainedModel):
             return_dict=return_dict,
         )
 
-        batch_extractor_logits = outputs['extractor_logits']
+        negative_elbo = []
+        marginal_likelihood = []
+        lm_logits = []
+
+        batch_extractor_logits = [x - x.logsumexp(dim=-1) for x in outputs['extractor_logits']]
         batch_decoder_hidden_states = outputs['decoder_hidden_states']
 
         batch_abstractor_logits = []
         batch_size = len(batch_extractor_logits)
         for batch_idx in range(batch_size):
             decoder_hidden_states = batch_decoder_hidden_states[batch_idx]
+            extractor_logits = batch_extractor_logits[batch_idx]
             abstractor_logits = self.lm_head(decoder_hidden_states)
+            abstractor_logits -= abstractor_logits.logsumexp(-1).unsqueeze(-1)
+            output_len = abstractor_logits.size()[1]
+            num_sents = len(abstractor_logits)
+            loglikelihood = extractor_logits.unsqueeze(dim=1) - self.loss_fct(
+                abstractor_logits.view(num_sents * output_len, -1),
+                labels[batch_idx].unsqueeze(0).repeat(num_sents, 1).view(-1)
+            ).view(num_sents, output_len)
+            posterior = torch.exp(loglikelihood - loglikelihood.logsumexp(dim=0)).detach()
+            negative_elbo.append(
+                - torch.sum(loglikelihood * posterior, dim=0).sum(dim=0)
+            )  # M-step
+
             batch_abstractor_logits.append(abstractor_logits)
 
-        lm_logits = 0.0
-        # lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
+            marginal_likelihood.append(loglikelihood.logsumexp(dim=0))
+            extractor_logits_rep = extractor_logits.unsqueeze(-1).repeat(1, output_len).unsqueeze(-1)
+            lm_logits.append((abstractor_logits + extractor_logits_rep).logsumexp(dim=0))
 
-        masked_lm_loss = None
+        marginal_likelihood = torch.stack(marginal_likelihood)
+        marginal_likelihood = marginal_likelihood.sum() / torch.sum(marginal_likelihood < 0.)
+        negative_elbo = torch.stack(negative_elbo).mean()
+
+        lm_logits = torch.stack(lm_logits)
+        # TODO return these and treat the negative_elbo as the loss
+
         if labels is not None:
             loss_fct = CrossEntropyLoss()
             masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
