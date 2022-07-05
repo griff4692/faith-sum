@@ -1,5 +1,5 @@
-transformers
 nlp
 datasets
 spacy
 pyrouge
+pytorch-lightning

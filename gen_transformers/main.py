@@ -170,6 +170,7 @@ if __name__ == '__main__':
         'facebook/bart-base',
         'facebook/bart-large',
         'Yale-LILY/brio-cnndm-uncased',
+        'google/pegasus-large'
     ])
 
     # Task-specific / Project-specific parameters

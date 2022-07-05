@@ -79,6 +79,11 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--splits', default='train,validation,test')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
+    parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
+        'facebook/bart-base',
+        'facebook/bart-large',
+        'google/pegasus-large',
+    ])
     parser.add_argument('--max_num_sents', default=200, type=int)
 
     args = parser.parse_args()
@@ -95,7 +100,7 @@ if __name__ == '__main__':
     print('Loading Spacy...')
     nlp = spacy.load('en_core_web_sm')
 
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path='facebook/bart-base')
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
     add_tokens = [f'<s{i}>' for i in range(args.max_num_sents)]
     special_tokens_dict = {'additional_special_tokens': add_tokens}
     tokenizer.add_special_tokens(special_tokens_dict)
