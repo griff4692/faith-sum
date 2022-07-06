@@ -66,49 +66,69 @@ class RankDataModule(pl.LightningDataModule):
         self.num_workers = 0 if args.debug else 16
         self.nlp = spacy.load('en_core_web_sm')
 
-        beam_fn = os.path.join(self.args.data_dir, 'results', 'gen_abstract_full', 'validation_beam_outputs.csv')
+        # beam_fn = os.path.join(self.args.data_dir, 'results', 'gen_abstract_full', 'validation_beam_outputs.csv')
         sample_fn = os.path.join(
             self.args.data_dir, 'results', self.args.gen_experiment, 'from_sample_extract.csv'
         )
+
+        train_fn = '/nlp/projects/faithsum/results/select_extract_full/train_from_sample_extract.csv'
 
         # sample_fn = os.path.join(
         #     self.args.data_dir, 'results', 'gen_abstract_full', 'validation_sample_outputs.csv'
         # )
 
-        beam_df = pd.read_csv(beam_fn)
+        # beam_df = pd.read_csv(beam_fn)
         sample_df = pd.read_csv(sample_fn)
+        train_sample_df = pd.read_csv(train_fn)
 
         avail_idxs = sample_df['dataset_idx'].unique().tolist()
-        beam_df = beam_df[beam_df['dataset_idx'].isin(set(avail_idxs))]
+        # beam_df = beam_df[beam_df['dataset_idx'].isin(set(avail_idxs))]
 
         sample_records = {record['dataset_idx']: record for record in sample_df.to_dict('records')}
-        beam_records = {record['dataset_idx']: record for record in beam_df.to_dict('records')}
-        np.random.seed(1992)
-        train_frac = 0.8
-        n = len(sample_records)
-        train_cutoff = round(train_frac * n)
-        np.random.shuffle(avail_idxs)
+        # beam_records = {record['dataset_idx']: record for record in beam_df.to_dict('records')}
+        # np.random.seed(1992)
+        # train_frac = 0.8
+        # n = len(sample_records)
+        # train_cutoff = round(train_frac * n)
+        # np.random.shuffle(avail_idxs)
 
-        self.splits = {
-            'train': avail_idxs[:train_cutoff],
-            'validation': avail_idxs[train_cutoff:]
-        }
+        # self.splits = {
+        #     'train': avail_idxs[:train_cutoff],
+        #     'validation': avail_idxs[train_cutoff:]
+        # }
 
-        num_train = len(self.splits['train'])
-        num_val = len(self.splits['validation'])
-        print(f'{num_train} train examples. {num_val} validation.')
+        train_dataset = []
+        for record in train_sample_df.to_dict('records'):
+            train_dataset.append({
+                'dataset_idx': record['dataset_idx'],
+                'sample': record,
+            })
+        val_dataset = []
+        for record in sample_df.to_dict('records'):
+            val_dataset.append({
+                'dataset_idx': record['dataset_idx'],
+                'sample': record,
+            })
 
-        combined_data = defaultdict(dict)
-        for dataset_idx in avail_idxs:
-            combined_data[dataset_idx] = {
-                'dataset_idx': dataset_idx,
-                'beam': beam_records[dataset_idx],
-                'sample': sample_records[dataset_idx]
-            }
-        self.dataset = list(combined_data.values())
+        self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
+
+        # num_train = len(self.splits['train'])
+        # num_val = len(self.splits['validation'])
+        # print(f'{num_train} train examples. {num_val} validation.')
+
+        # combined_data = defaultdict(dict)
+        # for dataset_idx in avail_idxs:
+        #     combined_data[dataset_idx] = {
+        #         'dataset_idx': dataset_idx,
+        #         # 'beam': beam_records[dataset_idx],
+        #         'sample': sample_records[dataset_idx]
+        #     }
+        # self.dataset = list(combined_data.values())
 
     def get_split(self, split, max_examples=None):
-        split_dataset = list(filter(lambda example: example['dataset_idx'] in self.splits[split], self.dataset))
+        # split_dataset = list(filter(lambda example: example['dataset_idx'] in self.splits[split], self.dataset))
+        split_dataset = self.train_dataset if split == 'train' else self.val_dataset
         if self.args.debug and max_examples is None:
             max_examples = 128
         n = len(split_dataset)
@@ -151,7 +171,7 @@ class RankDataset(Dataset):
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
         self.ids2oracles = ids2oracles
         self.rouge_metric = RougeMetric()
-        self.num_candidates = 17
+        self.num_candidates = 16
 
     def __len__(self):
         return len(self.dataset)
@@ -159,14 +179,14 @@ class RankDataset(Dataset):
     def __getitem__(self, idx):
         example = self.dataset[idx]
 
-        beam = example['beam']
+        # beam = example['beam']
         sample = example['sample']
 
         source = sample['source']
         reference = sample['reference']
         pred_abstracts = sample['from_extract_abstract'] if 'from_extract_abstract' in sample else sample['abstract']
         pred_abstracts = pred_abstracts.split('<cand>')
-        pred_abstracts.insert(0, beam['abstract'])
+        # pred_abstracts.insert(0, beam['abstract'])
 
         rouges = []
         for abstract in pred_abstracts:
