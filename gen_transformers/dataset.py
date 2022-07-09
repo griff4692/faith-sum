@@ -106,7 +106,7 @@ class SummaryDataModule(pl.LightningDataModule):
         return DataLoader(split_dataset_pl, **kwargs), idxs
 
     def train_dataloader(self, max_examples=None):
-        return self.get_split('train', max_examples=None)[0]
+        return self.get_split('train', max_examples=max_examples)[0]
 
     def val_dataloader(self, max_examples=None):
         return self.get_split('validation', max_examples=max_examples or self.args.max_val_examples)[0]

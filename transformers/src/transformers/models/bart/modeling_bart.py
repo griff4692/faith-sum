@@ -29,7 +29,6 @@ from ...modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPastAndCrossAttentions,
     CausalLMOutputWithCrossAttentions,
-    Seq2SeqLMOutput,
     Seq2SeqModelOutput,
     Seq2SeqQuestionAnsweringModelOutput,
     Seq2SeqSequenceClassifierOutput,
@@ -45,6 +44,7 @@ from ...utils import (
 )
 from .configuration_bart import BartConfig
 
+from transformers.utils import ModelOutput
 
 logger = logging.get_logger(__name__)
 
@@ -70,6 +70,67 @@ BART_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "facebook/bart-large",
     # see all BART models at https://huggingface.co/models?filter=bart
 ]
+
+
+class Seq2SeqLMOutput(ModelOutput):
+    """
+    Base class for sequence-to-sequence language models outputs.
+
+    Args:
+        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
+            Language modeling loss.
+        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
+            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
+        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of shape
+            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+
+            Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
+            blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
+        decoder_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the decoder at the output of each layer plus the initial embedding outputs.
+        decoder_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights of the decoder, after the attention softmax, used to compute the weighted average in the
+            self-attention heads.
+        cross_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights of the decoder's cross-attention layer, after the attention softmax, used to compute the
+            weighted average in the cross-attention heads.
+        encoder_last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
+            Sequence of hidden-states at the output of the last layer of the encoder of the model.
+        encoder_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the encoder at the output of each layer plus the initial embedding outputs.
+        encoder_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights of the encoder, after the attention softmax, used to compute the weighted average in the
+            self-attention heads.
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    decoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    decoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
+    cross_attentions: Optional[Tuple[torch.FloatTensor]] = None
+    encoder_last_hidden_state: Optional[torch.FloatTensor] = None
+    encoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    encoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
+    bce: Optional[torch.FloatTensor] = None,
+    marginal_loglikelihood: Optional[torch.FloatTensor] = None
 
 
 def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
@@ -1583,14 +1644,23 @@ class BartMert(BartPretrainedModel):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
             )
-
             batch_decoder_states.append(decoder_outputs.last_hidden_state)
+    
+        extractor_logits = [
+            x - x.logsumexp(dim=-1) for x in extractor_logits
+            ]
 
         return {
             'encoder_hidden_states': last_hidden_state,
             'decoder_hidden_states': batch_decoder_states,
-            'extractor_logits': extractor_logits
-        }
+            'extractor_logits': extractor_logits,
+            'past_key_values': None,
+            'decoder_attentions': None,
+            'cross_attentions':None,
+            'encoder_last_hidden_state': last_hidden_state,
+            'encoder_attentions': encoder_outputs.attentions, 
+            }
+
 
 
 class BartForConditionalMert(BartPretrainedModel):
@@ -1611,7 +1681,10 @@ class BartForConditionalMert(BartPretrainedModel):
             reduction='none',
             label_smoothing=0.0,
         )
-
+    
+    def set_cls_mask(self, cls_mask):
+        self.cls_mask = cls_mask
+    
     def get_encoder(self):
         return self.model.get_encoder()
 
@@ -1680,7 +1753,10 @@ class BartForConditionalMert(BartPretrainedModel):
                 decoder_input_ids = shift_tokens_right(
                     labels, self.config.pad_token_id, self.config.decoder_start_token_id
                 )
-
+        
+        if cls_mask is None:
+            cls_mask = self.cls_mask
+        
         outputs = self.model(
             input_ids,
             cls_mask,
@@ -1702,10 +1778,10 @@ class BartForConditionalMert(BartPretrainedModel):
         )
 
         negative_elbo = []
-        marginal_likelihood = []
+        marginal_loglikelihood = []
         lm_logits = []
 
-        batch_extractor_logits = [x - x.logsumexp(dim=-1) for x in outputs['extractor_logits']]
+        batch_extractor_logits =  outputs['extractor_logits'] 
         batch_decoder_hidden_states = outputs['decoder_hidden_states']
 
         batch_abstractor_logits = []
@@ -1717,10 +1793,16 @@ class BartForConditionalMert(BartPretrainedModel):
             abstractor_logits -= abstractor_logits.logsumexp(-1).unsqueeze(-1)
             output_len = abstractor_logits.size()[1]
             num_sents = len(abstractor_logits)
-            loglikelihood = extractor_logits.unsqueeze(dim=1) - self.loss_fct(
-                abstractor_logits.view(num_sents * output_len, -1),
-                labels[batch_idx].unsqueeze(0).repeat(num_sents, 1).view(-1)
-            ).view(num_sents, output_len)
+            if labels is not None:
+                loglikelihood = extractor_logits.unsqueeze(dim=1) - self.loss_fct(
+                    abstractor_logits.view(num_sents * output_len, -1),
+                    labels[batch_idx].unsqueeze(0).repeat(num_sents, 1).view(-1)
+                ).view(num_sents, output_len)
+            else:
+                loglikelihood = torch.tensor(
+                    [-torch.inf],
+                    device=extractor_logits.device
+                    ).unsqueeze(0)
             posterior = torch.exp(loglikelihood - loglikelihood.logsumexp(dim=0)).detach()
             negative_elbo.append(
                 - torch.sum(loglikelihood * posterior, dim=0).sum(dim=0)
@@ -1728,12 +1810,12 @@ class BartForConditionalMert(BartPretrainedModel):
 
             batch_abstractor_logits.append(abstractor_logits)
 
-            marginal_likelihood.append(loglikelihood.logsumexp(dim=0))
+            marginal_loglikelihood.append(loglikelihood.logsumexp(dim=0))
             extractor_logits_rep = extractor_logits.unsqueeze(-1).repeat(1, output_len).unsqueeze(-1)
             lm_logits.append((abstractor_logits + extractor_logits_rep).logsumexp(dim=0))
 
-        marginal_likelihood = torch.stack(marginal_likelihood)
-        marginal_likelihood = marginal_likelihood.sum() / torch.sum(marginal_likelihood < 0.)
+        marginal_loglikelihood = torch.stack(marginal_loglikelihood)
+        marginal_loglikelihood = marginal_loglikelihood.sum() / torch.sum(marginal_loglikelihood < 0.)
         negative_elbo = torch.stack(negative_elbo).mean()
 
         lm_logits = torch.stack(lm_logits)
@@ -1742,22 +1824,25 @@ class BartForConditionalMert(BartPretrainedModel):
         if labels is not None:
             loss_fct = CrossEntropyLoss()
             masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
-
+        else:
+            masked_lm_loss = marginal_loglikelihood
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
             return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
 
         return Seq2SeqLMOutput(
-            loss=masked_lm_loss,
+            loss=negative_elbo,
             logits=lm_logits,
-            past_key_values=outputs.past_key_values,
-            decoder_hidden_states=outputs.decoder_hidden_states,
-            decoder_attentions=outputs.decoder_attentions,
-            cross_attentions=outputs.cross_attentions,
-            encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-            encoder_hidden_states=outputs.encoder_hidden_states,
-            encoder_attentions=outputs.encoder_attentions,
-        )
+            bce=masked_lm_loss,
+            marginal_loglikelihood=marginal_loglikelihood,
+            past_key_values=outputs['past_key_values'],
+            decoder_hidden_states=outputs['decoder_hidden_states'],
+            decoder_attentions=outputs['decoder_attentions'],
+            cross_attentions=outputs['cross_attentions'],
+            encoder_last_hidden_state=outputs['encoder_last_hidden_state'],
+            encoder_hidden_states=outputs['encoder_hidden_states'],
+            encoder_attentions=outputs['encoder_attentions'],
+            )
 
     def prepare_inputs_for_generation(
         self,
