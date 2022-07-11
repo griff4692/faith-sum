@@ -59,8 +59,8 @@ class TransformerSummarizer(pl.LightningModule):
             else:
                 self.sent_classifier = nn.Linear(self.model.config.d_model, 1)
                 pos_weight = torch.FloatTensor([1.0])
-                self.sent_loss = torch.nn.CrossEntropyLoss()
-                # self.sent_loss = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+                # self.sent_loss = torch.nn.CrossEntropyLoss()
+                self.sent_loss = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     def shared_step(self, batch, source=None, build_extracts=True):
         metrics = {}
         extracts = None

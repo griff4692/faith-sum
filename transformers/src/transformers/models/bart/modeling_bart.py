@@ -1649,9 +1649,9 @@ class BartMert(BartPretrainedModel):
             )
             batch_decoder_states.append(decoder_outputs.last_hidden_state)
         #maybe do outside?
-        extractor_logits = [
-            x - x.logsumexp(dim=-1) for x in extractor_logits
-            ]
+        # extractor_logits = [
+        #     x - x.logsumexp(dim=-1) for x in extractor_logits
+        #     ]
 
         return {
             'encoder_hidden_states': last_hidden_state,
@@ -1784,10 +1784,10 @@ class BartForConditionalMert(BartPretrainedModel):
         marginal_loglikelihood = []
         lm_logits = []
 
-        batch_extractor_logits =  outputs['extractor_logits']
-        # batch_extractor_logits = [
-        #     x - x.logsumexp(dim=-1) for x in outputs['extractor_logits']
-        #     ]
+        # batch_extractor_logits =  outputs['extractor_logits']
+        batch_extractor_logits = [
+            x - x.logsumexp(dim=-1) for x in outputs['extractor_logits']
+            ]
         batch_decoder_hidden_states = outputs['decoder_hidden_states']
 
         batch_abstractor_logits = []

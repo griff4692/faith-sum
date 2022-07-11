@@ -75,8 +75,8 @@ def run(args):
         name=args.experiment,
         save_dir=experiment_dir,
         offline=args.debug or args.offline,
-        project='faith_sum',
-        entity='griffinadams',
+        project='extractive_abstractive_em',
+        entity='mertketenci',
     )
 
     monitor_metric = 'val_combined'
