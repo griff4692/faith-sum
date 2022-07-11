@@ -300,4 +300,5 @@ outputs = model(**batch)
 self = model
 self = self.model
 model.set_cls_mask(cls_mask)
-# print(tokenizer.batch_decode(model.generate(input_ids,num_beams=1)))
+num_beams = 2
+print(tokenizer.batch_decode(model.generate(input_ids, num_beams=num_beams)))

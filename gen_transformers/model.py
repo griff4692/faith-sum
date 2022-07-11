@@ -34,7 +34,6 @@ class TransformerSummarizer(pl.LightningModule):
         self.save_hyperparameters(args)
         self.tokenizer = tokenizer
         assert self.hparams.max_input_length <= self.tokenizer.model_max_length
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(hf_model)
         self.model = BartForConditionalMert.from_pretrained(hf_model)
         self.config = self.model.config
         self.model.resize_token_embeddings(len(tokenizer))
@@ -60,8 +59,8 @@ class TransformerSummarizer(pl.LightningModule):
             else:
                 self.sent_classifier = nn.Linear(self.model.config.d_model, 1)
                 pos_weight = torch.FloatTensor([1.0])
-                self.sent_loss = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-
+                self.sent_loss = torch.nn.CrossEntropyLoss()
+                # self.sent_loss = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     def shared_step(self, batch, source=None, build_extracts=True):
         metrics = {}
         extracts = None
@@ -116,7 +115,7 @@ class TransformerSummarizer(pl.LightningModule):
         metrics, return_loss = shared_output['metrics'], shared_output['return_loss']
         metrics['combined'] = return_loss
         self.log_metrics(metrics, is_train=True, prefix='train_')
-        return return_loss
+        return metrics['loss'] #return_loss
 
     def score_extracts(self, batch, source, encoder_h, build=True):
         batch_size = len(batch['cls_mask'])
@@ -161,6 +160,7 @@ class TransformerSummarizer(pl.LightningModule):
             'num_return_sequences': 1,  # Don't over-generate for validation
             'references': batch['references'],
         }
+        self.model.set_cls_mask(batch['cls_mask'])
         if self.hparams.summary_style != 'extract':
             gen_outputs = self.shared_generate(
                 batch, source, **validation_kwargs, encoder_outputs=shared_output['encoder_outputs']
