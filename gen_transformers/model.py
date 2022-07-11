@@ -160,7 +160,6 @@ class TransformerSummarizer(pl.LightningModule):
             'num_return_sequences': 1,  # Don't over-generate for validation
             'references': batch['references'],
         }
-        self.model.set_cls_mask(batch['cls_mask'])
         if self.hparams.summary_style != 'extract':
             gen_outputs = self.shared_generate(
                 batch, source, **validation_kwargs, encoder_outputs=shared_output['encoder_outputs']
@@ -609,6 +608,7 @@ class TransformerSummarizer(pl.LightningModule):
             }
 
             default_kwargs.update(gen_kwargs)
+            self.model.set_cls_mask(batch['cls_mask'])
             pred_ids = self.model.generate(**default_kwargs)
             pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
             row = self.compute_rouge([pred], [references[batch_idx]], prefix='oracle_prompt_', eval=eval)
@@ -638,6 +638,7 @@ class TransformerSummarizer(pl.LightningModule):
             default_kwargs['extract_indicators'] = implement_oracle_indicators(batch)
 
         default_kwargs.update(gen_kwargs)
+        self.model.set_cls_mask(batch['cls_mask'])
         pred_ids = self.model.generate(**default_kwargs)
         gold_ids = batch['labels']
         gold_ids[torch.where(batch['labels'] == -100)] = 1
@@ -779,6 +780,7 @@ class TransformerSummarizer(pl.LightningModule):
 
                 default_kwargs.update(gen_kwargs)
                 default_kwargs.pop('references', None)
+                self.model.set_cls_mask(batch['cls_mask'])
                 pred_ids = self.model.generate(**default_kwargs)
                 pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
 
