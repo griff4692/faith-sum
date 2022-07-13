@@ -150,6 +150,8 @@ parser.add_argument('-add_sent_toks', default=False, action='store_true')
 
 args = parser.parse_args()
 
+torch.autograd.set_detect_anomaly(True)
+
 # Won't held yet for multi-gpu
 args.grad_accum = args.target_batch_size // args.per_device_train_bs
 
@@ -296,9 +298,19 @@ attention_mask = batch['attention_mask']
 cls_mask = batch['cls_mask']
 labels = batch['labels']
 model = model.model
-outputs = model(**batch)
-self = model
-self = self.model
-model.set_cls_mask(cls_mask)
-num_beams = 2
-print(tokenizer.batch_decode(model.generate(input_ids, num_beams=num_beams)))
+# outputs = model(**batch)
+# self = model
+# self = self.model
+# model.set_cls_mask(cls_mask)
+# num_beams = 2
+# print(tokenizer.batch_decode(model.generate(input_ids, num_beams=num_beams)))
+
+optimizer = torch.optim.Adam(
+    list(model.parameters()),
+    lr=1e-3
+)
+
+optimizer.zero_grad()
+loss = model(**batch).loss
+loss.backward()
+optimizer.step()

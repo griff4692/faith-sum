@@ -1796,7 +1796,7 @@ class BartForConditionalMert(BartPretrainedModel):
             decoder_hidden_states = batch_decoder_hidden_states[batch_idx]
             extractor_logits = batch_extractor_logits[batch_idx]
             abstractor_logits = self.lm_head(decoder_hidden_states)
-            abstractor_logits -= abstractor_logits.logsumexp(-1).unsqueeze(-1)
+            abstractor_logits = abstractor_logits - abstractor_logits.logsumexp(-1).unsqueeze(-1)
             output_len = abstractor_logits.size()[1]
             num_sents = len(abstractor_logits)
             if labels is not None:
