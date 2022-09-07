@@ -8,6 +8,7 @@ from tqdm import tqdm
 import torch
 from transformers import AutoTokenizer, BartTokenizer
 
+os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 from data_utils import get_path_from_exp
 from gen_transformers.dataset import SummaryDataModule
 from gen_transformers.model import TransformerSummarizer
@@ -133,7 +134,9 @@ if __name__ == '__main__':
         dataloader_kwargs = {'shuffle': False, 'batch_size': args.batch_size}
 
         if args.split == 'train':
-            dataloader, dataset_idxs = datamodule.get_inverse_train_split('train', args.train_frac, **dataloader_kwargs)
+            dataloader, dataset_idxs = datamodule.get_inverse_train_split(
+                'train', args.train_frac, args.max_examples, **dataloader_kwargs
+            )
         else:
             dataloader, dataset_idxs = datamodule.get_split(
                 args.split, max_examples=args.max_examples, **dataloader_kwargs

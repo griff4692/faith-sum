@@ -3,7 +3,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.plugins import DDPPlugin
 import torch
@@ -146,7 +146,7 @@ if __name__ == '__main__':
     parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)
     parser.add_argument('-add_sent_brio', default=False, action='store_true')
     parser.add_argument('--contrast_margin', default=0.01, type=float)
-    parser.add_argument('--brio_loss_coef', default=1, type=float)
+    parser.add_argument('--brio_loss_coef', default=0.1, type=float)
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4
@@ -161,8 +161,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('--max_input_length', type=int, default=1024)
-    parser.add_argument('--train_frac', type=float, default=0.1)
-    parser.add_argument('-add_align', action='store_true', default=False)
+    parser.add_argument('--train_frac', type=float, default=1.0)
     parser.add_argument('--extract_method', type=str, default='select', choices=['generate', 'select'])
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
@@ -195,7 +194,7 @@ if __name__ == '__main__':
     if args.debug:  # Use small data and tiny BART model
         args.hf_model = 'sshleifer/bart-tiny-random'
 
-    # Override: If we are generating a sentence plan, we MUST include <s{idx}> tokens in the source input
+    # Override: If we are generating an extract, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style or args.extract_indicators
     if args.add_sent_toks:
         print('Pre-pending each sentence in the source document with special token <s{idx}>.')

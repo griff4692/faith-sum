@@ -51,7 +51,10 @@ class TransformerSummarizer(pl.LightningModule):
                 self.sent_config.encoder_layers = 2
                 self.sent_config.decoder_layers = 2
                 self.sent_config.classifier_dropout = self.hparams.copy_bart_class_dropout
+                self.sent_config.forced_bos_token_id = None
+                self.sent_config.forced_eos_token_id = None
                 # (everything else is copied from other BARTEncoder)
+                # <s> is never used but there as padding since it's id is 0
                 self.sent_config.vocab_size = 3  # <s> <pad> </s>
                 self.sent_bart = BartForConditionalCopy(self.sent_config)
                 # self.sent_bart.model.encoder.layers[-1].load_state_dict(self.model.model.encoder.layers[-1].state_dict())
@@ -358,8 +361,8 @@ class TransformerSummarizer(pl.LightningModule):
             # Concatenate
             inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
             output = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
-            loss = self.label_smoother(output, labels)
-
+            # loss = self.label_smoother(output, labels)
+            loss = output.loss
             sent_encoder_h.append(output.encoder_last_hidden_state)
             losses.append(loss)
         avg_losses = torch.stack(losses).mean()
@@ -421,7 +424,15 @@ class TransformerSummarizer(pl.LightningModule):
             summaries.append(sum)
         return summaries
 
-    def sample_gen_extracts(self, batch, source, encoder_h, num_return_sequences=1):
+    def generate_with_sent_bart(self, **kwargs):
+        with torch.no_grad():
+            self.sent_bart.prepare_counter_for_generation()
+            self.sent_config.forced_eos_token_id = kwargs['eos_token_id']
+            pred_ids = self.sent_bart.generate(**kwargs)
+            self.sent_bart.reset_counter_for_generation()
+            return pred_ids
+
+    def sample_gen_extracts(self, batch, source, encoder_h, num_return_sequences=1, diversity_penalty=1.0):
         extractive_summaries = []
         raw_predictions = []
         cls_mask = batch['cls_mask']
@@ -434,7 +445,7 @@ class TransformerSummarizer(pl.LightningModule):
             shared_kwargs = {
                 'inputs_embeds': inputs_embeds,
                 'eos_token_id': seq_len,
-                'min_length': 5,  # 3 without the special tokens
+                'min_length': 4,  # 3 without the special token
                 'max_length': 10,
                 'early_stopping': True,
                 'num_return_sequences': num_return_sequences
@@ -446,14 +457,15 @@ class TransformerSummarizer(pl.LightningModule):
             sample_kwargs = {
                 'num_beam_groups': num_return_sequences,
                 'num_beams': num_return_sequences,
-                'diversity_penalty': 1.0,
+                'diversity_penalty': diversity_penalty,
             }
+
             if num_return_sequences == 1:
                 shared_kwargs.update(beam_kwargs)
             else:
                 shared_kwargs.update(sample_kwargs)
 
-            pred_ids = self.sent_bart.generate(**shared_kwargs)
+            pred_ids = self.generate_with_sent_bart(**shared_kwargs)
             raw_predictions.append(pred_ids)
             return_obj = []
             for summary_idx in pred_ids.tolist():
@@ -718,20 +730,11 @@ class TransformerSummarizer(pl.LightningModule):
             'implied_extracts': implied_extracts,
         }
 
-    def remove_special_tokens_from_sent_bart(self, summary_idx, seq_len):
-        special_prefix = [self.sent_config.decoder_start_token_id, self.sent_config.bos_token_id]
-        if summary_idx[:2] == special_prefix:
-            summary_idx_no_special = summary_idx[2:]
-        else:
-            print(f'Predicted Sequence Start != {special_prefix}. Should not occur after fine-tuning.')
-            summary_idx_no_special = summary_idx
-        try:
-            summary_idx_no_special = summary_idx_no_special[:summary_idx_no_special.index(seq_len)]
-        except ValueError:
-            assert summary_idx[-1] == self.sent_config.decoder_start_token_id
-            print('The STOP token was not generated')
-            summary_idx_no_special = summary_idx_no_special[:-1]
-        return summary_idx_no_special
+    def remove_special_tokens_from_sent_bart(self, summary_idx, dynamic_eos_token_id):
+        assert summary_idx[0] == self.sent_config.decoder_start_token_id
+        end_idx = summary_idx.index(dynamic_eos_token_id)
+        assert np.all(np.array(summary_idx[end_idx + 1:]) == self.sent_bart.config.pad_token_id)
+        return summary_idx[1: end_idx]
 
     def measure_plan_abstract_consistency(self, batch, outputs, eval=False, **gen_kwargs):
         extract_idxs = [x['idxs'] for x in outputs['extracts']]

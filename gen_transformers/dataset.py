@@ -33,12 +33,20 @@ class SummaryDataModule(pl.LightningDataModule):
         self.num_workers = 0  # 0 if args.debug else 4
         self.nlp = spacy.load('en_core_web_sm')
 
-    def get_inverse_train_split(self, split, train_frac, **dataloader_kwargs):
+    def get_inverse_train_split(self, split, train_frac, max_examples=None, **dataloader_kwargs):
         split_dataset = self.dataset[split]
-        max_examples = round(train_frac * len(split_dataset))
         n = len(split_dataset)
-        trained_idxs = set(list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False))))
-        idxs = list(sorted(set(range(n)) - trained_idxs))
+        if train_frac > 0:
+            train_num = round(train_frac * len(split_dataset))
+            trained_idxs = set(list(np.sort(np.random.choice(np.arange(n), size=(train_num, ), replace=False))))
+            idxs = list(sorted(set(range(n)) - trained_idxs))
+        else:
+            idxs = list(range(n))
+
+        if max_examples is not None and max_examples < len(idxs):
+            print(f'Subsampling for maximum of {max_examples}')
+            idxs = list(np.sort((np.random.choice(idxs, size=(max_examples,), replace=False))))
+
         print(f'Using {len(idxs)} training examples set aside for re-ranking')
         print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
         split_dataset = split_dataset.select(idxs)

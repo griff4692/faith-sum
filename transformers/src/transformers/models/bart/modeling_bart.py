@@ -1582,6 +1582,8 @@ class BartForConditionalCopy(BartPretrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+        self.decoding_steps = None
+
     def get_encoder(self):
         return self.model.get_encoder()
 
@@ -1680,25 +1682,34 @@ class BartForConditionalCopy(BartPretrainedModel):
         # TODO then expand size of self.cand_classifier from config.d_model * 2 to config.d_model * 2 + |redundancy features|
 
         lm_logits = self.cand_classifier(class_input).view(num_beams, dec_steps, enc_steps)
-
-        # Duplication mask
-        # duplication_mask = torch.BoolTensor(lm_logits.size()).to(self.device)
-        # duplication_mask.fill_(False)
-        # for beam in range(num_beams):
-        #     for dec_step in range(1, dec_steps):  # First step is the start token
-        #         prev_pred_id = decoder_input_ids[beam, dec_step]
-        #         # From this step onward it should be given a score of -inf
-        #         duplication_mask[beam, dec_step:, prev_pred_id] = True
-        # lm_logits.masked_fill_(duplication_mask, -100)  # Pick a large negative
-
         masked_lm_loss = None
-        if labels is not None and num_beams == 1:
+        if labels is not None:
             assert num_beams == 1
+            # Does not work for some reason
+            duplication_mask = torch.BoolTensor(lm_logits.size()).to(self.device)
+            duplication_mask.fill_(False)
+            for dec_step in range(1, dec_steps):  # First step is the start token
+                prev_pred_id = decoder_input_ids[0, dec_step]
+                duplication_mask[0, dec_step:, :prev_pred_id + 1] = True
+            lm_logits.masked_fill_(duplication_mask, -1e3)  # Pick a large negative (fp16 compliant)
             loss_fct = CrossEntropyLoss()
             masked_lm_loss = loss_fct(lm_logits.squeeze(0), labels.squeeze(0))
             # kld_loss = nn.KLDivLoss(log_target=False, reduction='batchmean')
             # lm_logits_lprob = torch.log_softmax(lm_logits.squeeze(0), dim=-1)
             # masked_lm_loss = kld_loss(lm_logits_lprob, loss_labels.squeeze(0).float())
+        else:
+            assert dec_steps == 1
+            if self.decoding_steps == 0:  # First is always decoder_start_token_id
+                assert torch.all(decoder_input_ids == self.config.decoder_start_token_id)
+            else:
+                duplication_mask = torch.BoolTensor(lm_logits.size()).to(self.device)
+                duplication_mask.fill_(False)
+                for beam in range(num_beams):  # Will just return single step
+                    prev_pred_id = decoder_input_ids[beam, 0]
+                    # From this step onward the chosen id and all previous tokens should be given a score of -inf
+                    duplication_mask[beam, 0, :prev_pred_id + 1] = True
+                lm_logits.masked_fill_(duplication_mask, -1e3)  # Pick a large negative (fp16 compliant)
+            self.decoding_steps += 1
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
@@ -1715,6 +1726,12 @@ class BartForConditionalCopy(BartPretrainedModel):
             encoder_hidden_states=outputs.encoder_hidden_states,
             encoder_attentions=outputs.encoder_attentions,
         )
+
+    def prepare_counter_for_generation(self):
+        self.decoding_steps = 0
+
+    def reset_counter_for_generation(self):
+        self.decoding_steps = None
 
     def prepare_inputs_for_generation(
         self,
