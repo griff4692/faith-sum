@@ -1,6 +1,7 @@
 import os
 from string import punctuation
 import ujson
+import regex as re
 
 import numpy as np
 from nltk.corpus import stopwords
@@ -12,6 +13,7 @@ STOPWORDS = set(stopwords.words('english'))
 
 from datasets import load_dataset, load_from_disk
 from gen_transformers.data_utils import Seq2SeqCollate
+from preprocess.helpers import _get_ngrams
 from sum_constants import summarization_name_mapping
 
 
@@ -135,6 +137,21 @@ class SummarizationDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
+    def get_sent_ngrams(self, source_annotated):
+        tps = re.split(r'(<s\d+>)', source_annotated)
+        source_sents = []
+        for tp_idx, tp in enumerate(tps):
+            if re.match(r'(<s\d+>)', tp) is not None:
+                source_sents.append(tps[tp_idx + 1].strip())
+
+        num_sents = len(re.findall(r'(<s\d+>)', source_annotated))
+        assert len(source_sents) == num_sents
+        def get_ngrams(sent):
+            toks = list(map(lambda x: x.lower(), sent.split(' ')))
+            return [_get_ngrams(1, toks), _get_ngrams(2, toks), _get_ngrams(3, toks)]
+        source_ngrams = list(map(get_ngrams, source_sents))
+        return source_ngrams
+
     def __getitem__(self, idx):
         example = self.dataset[idx]
         dataset_id = example['id']
@@ -152,12 +169,14 @@ class SummarizationDataset(Dataset):
             # Use tokenizer min
             min_sent_id = input_ids[1]
             input_ids = [x for x in input_ids if x < min_sent_id]
+
         row = {
             'input_ids': input_ids,
             'labels': example['labels'],
             'source': source_annotated,
             'oracle_labels': oracle_labels,
             'reference': target,  # Use for evaluation
+            'source_ngrams': self.get_sent_ngrams(source_annotated)
         }
 
         if self.args.add_sent_brio:

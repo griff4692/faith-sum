@@ -210,6 +210,7 @@ class TransformerSummarizer(pl.LightningModule):
     def predict_step(self, batch, batch_idx=None, **gen_kwargs):
         source = self.parse_source_text_from_inputs(batch)
         use_hf_rouge = gen_kwargs.pop('use_hf_rouge')
+        source_ngrams = batch.pop('source_ngrams')
         eval = not use_hf_rouge
         references = batch['references']
         batch_size = len(references)
@@ -224,7 +225,7 @@ class TransformerSummarizer(pl.LightningModule):
             encoder_h = output.last_hidden_state
             if self.hparams.extract_method == 'generate':
                 extractive_summaries, _ = self.sample_gen_extracts(
-                    batch, source, encoder_h, num_return_sequences=gen_kwargs['num_return_sequences']
+                    batch, source, encoder_h, source_ngrams, num_return_sequences=gen_kwargs['num_return_sequences']
                 )
             else:
                 extractive_summaries = self.sample_score_extracts(
@@ -347,7 +348,7 @@ class TransformerSummarizer(pl.LightningModule):
     def get_encoder_h(self, batch):
         return self.model.model.encoder(**batch)
 
-    def compute_gen_extract_loss(self, cls_mask, encoder_h, oracle_labels):
+    def compute_gen_extract_loss(self, cls_mask, encoder_h, oracle_labels, source_ngrams):
         batch_size = len(cls_mask)
         losses = []
         sent_encoder_h = []
@@ -360,6 +361,7 @@ class TransformerSummarizer(pl.LightningModule):
             labels = torch.cat([labels, eos_dummy]).unsqueeze(0)
             # Concatenate
             inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
+            self.sent_bart.source_ngrams_cache = source_ngrams[batch_idx]
             output = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
             # loss = self.label_smoother(output, labels)
             loss = output.loss
@@ -432,7 +434,9 @@ class TransformerSummarizer(pl.LightningModule):
             self.sent_bart.reset_counter_for_generation()
             return pred_ids
 
-    def sample_gen_extracts(self, batch, source, encoder_h, num_return_sequences=1, diversity_penalty=1.0):
+    def sample_gen_extracts(
+            self, batch, source, encoder_h, source_ngrams, num_return_sequences=1, diversity_penalty=1.0
+    ):
         extractive_summaries = []
         raw_predictions = []
         cls_mask = batch['cls_mask']
@@ -465,6 +469,8 @@ class TransformerSummarizer(pl.LightningModule):
             else:
                 shared_kwargs.update(sample_kwargs)
 
+            self.sent_bart.source_ngrams_cache = source_ngrams[batch_idx]
+            self.sent_bart.prev_ids = []
             pred_ids = self.generate_with_sent_bart(**shared_kwargs)
             raw_predictions.append(pred_ids)
             return_obj = []
@@ -477,12 +483,13 @@ class TransformerSummarizer(pl.LightningModule):
     def generate_extracts(self, batch, source, encoder_h):
         cls_mask = batch['cls_mask']
         oracle_cand_labels = batch.pop('oracle_cand_labels', None)
-        loss, sent_encoder_h = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'])
+        source_ngrams = batch.pop('source_ngrams', None)
+        loss, sent_encoder_h = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'], source_ngrams)
 
         summaries = None
         if not self.sent_bart.training:
             summaries, _ = self.sample_gen_extracts(
-                batch, source, encoder_h, num_return_sequences=1
+                batch, source, encoder_h, source_ngrams, num_return_sequences=1
             )
 
         brio_info = None
