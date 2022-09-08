@@ -61,8 +61,8 @@ class Seq2SeqCollate:
             'references': references,
         }
 
-        if 'oracle_cand_labels' in batch_list[0]:
-            row['oracle_cand_labels'] = [torch.from_numpy(np.array(x['oracle_cand_labels'], dtype=np.int64)) for x in batch_list]
+        if 'brio_labels' in batch_list[0]:
+            row['brio_labels'] = [torch.from_numpy(x['brio_labels']) for x in batch_list]
 
         if 'source_ngrams' in batch_list[0]:
             row['source_ngrams'] = [x['source_ngrams'] for x in batch_list]

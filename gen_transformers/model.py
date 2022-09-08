@@ -83,8 +83,6 @@ class TransformerSummarizer(pl.LightningModule):
                     return_loss += self.hparams.brio_loss_coef * brio_info['margin_loss']
                     metrics['sent_brio'] = brio_info['margin_loss']
                     metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
-                    if brio_info['brio_rouge1_f1'] is not None:
-                        metrics['brio_rouge1_f1'] = brio_info['brio_rouge1_f1']
                     metrics['brio_rank'] = brio_info['brio_rank']
                     metrics['brio_win_rate'] = brio_info['brio_win_rate']
             else:
@@ -426,10 +424,9 @@ class TransformerSummarizer(pl.LightningModule):
             summaries.append(sum)
         return summaries
 
-    def generate_with_sent_bart(self, **kwargs):
+    def generate_with_sent_bart(self, source_ngrams=None, **kwargs):
         with torch.no_grad():
-            self.sent_bart.prepare_counter_for_generation()
-            self.sent_config.forced_eos_token_id = kwargs['eos_token_id']
+            self.sent_bart.prepare_counter_for_generation(source_ngrams, eos_token_id=kwargs['eos_token_id'])
             pred_ids = self.sent_bart.generate(**kwargs)
             self.sent_bart.reset_counter_for_generation()
             return pred_ids
@@ -469,9 +466,7 @@ class TransformerSummarizer(pl.LightningModule):
             else:
                 shared_kwargs.update(sample_kwargs)
 
-            self.sent_bart.source_ngrams_cache = source_ngrams[batch_idx]
-            self.sent_bart.prev_ids = []
-            pred_ids = self.generate_with_sent_bart(**shared_kwargs)
+            pred_ids = self.generate_with_sent_bart(source_ngrams=source_ngrams[batch_idx], **shared_kwargs)
             raw_predictions.append(pred_ids)
             return_obj = []
             for summary_idx in pred_ids.tolist():
@@ -482,7 +477,7 @@ class TransformerSummarizer(pl.LightningModule):
 
     def generate_extracts(self, batch, source, encoder_h):
         cls_mask = batch['cls_mask']
-        oracle_cand_labels = batch.pop('oracle_cand_labels', None)
+        brio_labels = batch.pop('brio_labels', None)
         source_ngrams = batch.pop('source_ngrams', None)
         loss, sent_encoder_h = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'], source_ngrams)
 
@@ -493,37 +488,31 @@ class TransformerSummarizer(pl.LightningModule):
             )
 
         brio_info = None
-        if self.hparams.add_sent_brio:
+        if self.hparams.add_brio_loss:
             margin_losses = []
             pos_neg_gaps = []
-            brio_scores = []
             brio_ranks = []
             win_fracs = []
             for batch_idx in range(len(cls_mask)):
-                sent_labels = oracle_cand_labels[batch_idx]
-                margin_loss, pos_neg_gap, pred_r1, pred_idx, win_frac = self.brio_step(
-                    sent_labels, sent_encoder_h[batch_idx], scores=None
+                sent_labels = brio_labels[batch_idx]
+                margin_loss, pos_neg_gap, pred_idx, win_frac = self.brio_step(
+                    sent_labels, sent_encoder_h[batch_idx], source_ngrams[batch_idx], scores=None
                 )
                 if margin_loss is not None:
                     margin_losses.append(margin_loss)
                 if pos_neg_gap is not None:
                     pos_neg_gaps.append(pos_neg_gap)
-                brio_scores.append(pred_r1)
                 brio_ranks.append(pred_idx)
                 if win_frac is not None:
                     win_fracs.append(win_frac)
-            margin_losses = torch.stack(margin_losses).mean()
+            # Sum in the BRIO paper, was previously mean for us
+            margin_losses = torch.stack(margin_losses).sum()
             pos_neg_gaps = np.mean(pos_neg_gaps)
-            if brio_scores[0] is None:
-                brio_scores = None
-            else:
-                brio_scores = np.mean(brio_scores)
             brio_ranks = np.mean(brio_ranks)
             win_fracs = np.mean(win_fracs)
             brio_info = {
                 'margin_loss': margin_losses,
                 'pos_neg_gap': pos_neg_gaps,
-                'brio_rouge1_f1': brio_scores,
                 'brio_rank': brio_ranks,
                 'brio_win_rate': win_fracs,
             }
@@ -560,49 +549,45 @@ class TransformerSummarizer(pl.LightningModule):
         return_obj['sent_dist'] = y_hat
         return return_obj
 
-    def brio_step(self, cand_labels, sent_encoder_h, scores=None):
-        num_cand = len(cand_labels)
+    def brio_step(self, cand_labels, sent_encoder_h, source_ngrams, scores=None):
+        num_cand, target_len = cand_labels.size()
+        encoder_len = sent_encoder_h.size()[1]
         if num_cand < 2:
             print(f'{num_cand} BRIO candidates provided')
-            return None, None, None, None, None
+            return None, None, None, None
 
         encoder_outputs = sent_encoder_h.repeat(num_cand, 1, 1).contiguous().clone()
-        # encoder_attention_mask = batch['attention_mask'][batch_idx].unsqueeze(0).repeat(num_cand, 1).contiguous()
         inputs = {
             'encoder_outputs': [encoder_outputs],
-            # 'attention_mask': encoder_attention_mask,
             'labels': cand_labels,
         }
 
-        cand_outputs = self.sent_bart(**inputs, use_cache=False)
-        nll = []
-        for cand_idx in range(num_cand):
-            loss_row_full = {'logits': cand_outputs['logits'][cand_idx]}
-            nll.append(self.label_smoother(loss_row_full, cand_labels[cand_idx]))
+        self.sent_bart.source_ngrams_cache = source_ngrams
+        contrast_outputs = self.sent_bart(**inputs, calculate_loss=False, use_cache=False)
+        loss_fct = nn.CrossEntropyLoss(reduction='none')
+        nll = loss_fct(contrast_outputs.logits.view(-1, encoder_len), cand_labels.view(-1)).view(num_cand, target_len)
+        seq_lens = (cand_labels > -100).sum(dim=1)
+        scores = - nll.sum(dim=1) / seq_lens
 
-        # Compute Rank Score (not for back-prop)
-        margin_losses = []
-        pos_neg_gap = []
+        contrast_loss = 0
         wins, losses = 0, 0
-        for a in range(num_cand - 1):
-            for b in range(a + 1, num_cand):
-                pos_ll = - nll[a]
-                neg_ll = - nll[b]
-                margin = self.hparams.contrast_margin * (b - a)
-                margin_losses.append(torch.clamp(neg_ll - pos_ll + margin, min=0))
-                raw_margin = float((pos_ll - neg_ll).detach().item())
-                pos_neg_gap.append(raw_margin)
-                if raw_margin > 0:
-                    wins += 1
-                else:
-                    losses += 1
+        pos_neg_gap = []
+        for cand_idx in range(1, num_cand):
+            pos_score = scores[:-cand_idx]
+            neg_score = scores[cand_idx:]
+            ones = torch.ones_like(pos_score)
+            loss_func = torch.nn.MarginRankingLoss(self.hparams.brio_margin * cand_idx)
+            loss = loss_func(pos_score, neg_score, ones)
+            contrast_loss += loss
 
-        win_frac = wins / (wins + losses)
-        avg_margin = torch.stack(margin_losses).mean()
+            wins += (pos_score >= neg_score).int().sum().item()
+            losses += (pos_score < neg_score).int().sum().item()
+            pos_neg_gap.append(float((pos_score - neg_score).mean().detach().cpu().item()))
+
         avg_gap = np.mean(pos_neg_gap)
-        score_idx = int(torch.argmin(torch.stack(nll)).item())
-        highest_ll_score = None if scores is None else scores[score_idx]
-        return avg_margin, avg_gap, highest_ll_score, score_idx, win_frac
+        win_frac = wins / (wins + losses)
+        score_idx = int(torch.argmax(scores).item()) / len(scores)
+        return contrast_loss, avg_gap, score_idx, win_frac
 
     def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
         oracle_strs = [x.split('<sep>')[0].replace('<s>', '') for x in self.tokenizer.batch_decode(batch['labels'])]
@@ -740,7 +725,11 @@ class TransformerSummarizer(pl.LightningModule):
     def remove_special_tokens_from_sent_bart(self, summary_idx, dynamic_eos_token_id):
         assert summary_idx[0] == self.sent_config.decoder_start_token_id
         end_idx = summary_idx.index(dynamic_eos_token_id)
-        assert np.all(np.array(summary_idx[end_idx + 1:]) == self.sent_bart.config.pad_token_id)
+        trunc_idx = np.array(summary_idx[end_idx + 1:])
+        if len(trunc_idx) > 0 and np.all(trunc_idx != self.sent_bart.config.pad_token_id):
+            trunc_str = ','.join([str(x) for x in summary_idx[1:end_idx]])
+            full_str = ','.join([str(x) for x in summary_idx])
+            print(f'Warning! Truncating non-padding tokens: {full_str} -> {trunc_str}')
         return summary_idx[1: end_idx]
 
     def measure_plan_abstract_consistency(self, batch, outputs, eval=False, **gen_kwargs):

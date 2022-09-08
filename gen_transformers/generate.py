@@ -65,7 +65,7 @@ if __name__ == '__main__':
     parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('-use_hf_rouge', default=False, action='store_true')  # Much faster to use HF implementation
     parser.add_argument('--bootstraps', default=1, type=int)
-    parser.add_argument('-add_sent_brio', default=False, action='store_true')
+    parser.add_argument('-add_brio_loss', default=False, action='store_true')
     parser.add_argument('-extract_indicators', default=False, action='store_true')
     parser.add_argument(
         '--summary_style',

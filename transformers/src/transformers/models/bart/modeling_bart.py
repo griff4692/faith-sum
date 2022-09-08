@@ -17,8 +17,10 @@ import copy
 import math
 import random
 import warnings
+import itertools
 from typing import List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.utils.checkpoint
 from torch import nn
@@ -1583,6 +1585,7 @@ class BartForConditionalCopy(BartPretrainedModel):
         self.post_init()
 
         self.decoding_steps = None
+        self.is_generate_mode = False
 
     def get_encoder(self):
         return self.model.get_encoder()
@@ -1604,6 +1607,48 @@ class BartForConditionalCopy(BartPretrainedModel):
             new_bias = torch.cat([self.final_logits_bias, extra_bias], dim=1)
         self.register_buffer("final_logits_bias", new_bias)
 
+    def populate_red_feats(self, red_feats, prev_ngrams, source_ngrams, beam, dec_step, enc_steps):
+        def get_redundancy_feature(sent_ngrams, summary_ngrams, bins=10):
+            overlap = len([x for x in sent_ngrams if x in summary_ngrams]) / max(1, len(sent_ngrams))
+            # bin = min(int(overlap * bins), bins - 1)
+            if overlap == 0.0:
+                bin = 0
+            elif overlap < 0.05:
+                bin = 1
+            elif overlap < 0.1:
+                bin = 2
+            elif overlap < 0.15:
+                bin = 3
+            elif overlap < 0.2:
+                bin = 4
+            elif overlap < 0.25:
+                bin = 5
+            elif overlap < 0.3:
+                bin = 6
+            elif overlap < 0.35:
+                bin = 7
+            elif overlap < 0.4:
+                bin = 8
+            else:
+                bin = 9
+            features = [0] * bins
+            features[bin] = 1
+            return features
+        unigrams = set(list(itertools.chain(*[x[0] for x in prev_ngrams])))
+        bigrams = set(list(itertools.chain(*[x[1] for x in prev_ngrams])))
+        trigrams = set(list(itertools.chain(*[x[2] for x in prev_ngrams])))
+        # Aggregate 1-grams, 2-grams, and 3-grams
+        for enc_step in range(enc_steps - 1):  # Don't include the EOS token
+            enc_ngram = source_ngrams[enc_step]
+            enc_unigram = enc_ngram[0]
+            enc_bigram = enc_ngram[1]
+            enc_trigram = enc_ngram[2]
+            uni_feat = get_redundancy_feature(enc_unigram, unigrams)
+            bi_feat = get_redundancy_feature(enc_bigram, bigrams)
+            tri_feat = get_redundancy_feature(enc_trigram, trigrams)
+            red_feat = uni_feat + bi_feat + tri_feat
+            red_feats[beam, dec_step, enc_step, :] = red_feat
+
     @add_start_docstrings_to_model_forward(BART_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=Seq2SeqLMOutput, config_class=_CONFIG_FOR_DOC)
     @add_end_docstrings(BART_GENERATION_EXAMPLE)
@@ -1624,6 +1669,7 @@ class BartForConditionalCopy(BartPretrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        calculate_loss: Optional[bool] = True
     ) -> Union[Tuple, Seq2SeqLMOutput]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
@@ -1671,99 +1717,48 @@ class BartForConditionalCopy(BartPretrainedModel):
         decoder_h_rep = decoder_h.unsqueeze(2).repeat(1, 1, enc_steps, 1).view(num_beams, enc_steps * dec_steps, -1)
 
         source_ngrams = self.source_ngrams_cache
-        import itertools
-        import numpy as np
-        def get_redundancy_feature(sent_ngrams, summary_ngrams, bins=10):
-            overlap = len([x for x in sent_ngrams if x in summary_ngrams]) / max(1, len(sent_ngrams))
-            # bin = min(int(overlap * bins), bins - 1)
-            if overlap == 0.0:
-                bin = 0
-            elif overlap < 0.05:
-                bin = 1
-            elif overlap < 0.1:
-                bin = 2
-            elif overlap < 0.15:
-                bin = 3
-            elif overlap < 0.2:
-                bin = 4
-            elif overlap < 0.25:
-                bin = 5
-            elif overlap < 0.3:
-                bin = 6
-            elif overlap < 0.35:
-                bin = 7
-            elif overlap < 0.4:
-                bin = 8
-            else:
-                bin = 9
-            features = [0] * bins
-            features[bin] = 1
-            return features
-        # redundancy_features = empty tensor of size num_beams, dec_steps, enc_steps
-        red_feats = np.zeros([
-            num_beams, dec_steps, enc_steps, 30
-        ])
 
-        if not self.training and num_beams > 1:
+        # redundancy_features = empty tensor of size num_beams, dec_steps, enc_steps
+        red_feats = np.zeros([num_beams, dec_steps, enc_steps, 30])
+
+        if self.is_generate_mode and num_beams > 1:
             assert dec_steps == 1  # Beam search - only current hidden state is passed
             if self.decoding_steps > 0:
                 self.prev_ids.append(decoder_input_ids)
             for beam in range(num_beams):
                 # These are the previously predicted sentences
                 prev_pred_id = [int(x[beam].item()) for x in self.prev_ids]
-                ngrams = [source_ngrams[pred_id] for pred_id in prev_pred_id]
-                unigrams = set(list(itertools.chain(*[x[0] for x in ngrams])))
-                bigrams = set(list(itertools.chain(*[x[1] for x in ngrams])))
-                trigrams = set(list(itertools.chain(*[x[2] for x in ngrams])))
-                # Aggregate 1-grams, 2-grams, and 3-grams
-                for enc_step in range(enc_steps - 1):  # Don't include the EOS token
-                    enc_ngram = source_ngrams[enc_step]
-                    enc_unigram = enc_ngram[0]
-                    enc_bigram = enc_ngram[1]
-                    enc_trigram = enc_ngram[2]
-                    uni_feat = get_redundancy_feature(enc_unigram, unigrams)
-                    bi_feat = get_redundancy_feature(enc_bigram, bigrams)
-                    tri_feat = get_redundancy_feature(enc_trigram, trigrams)
-                    red_feat = uni_feat + bi_feat + tri_feat
-                    red_feats[beam, 0, enc_step, :] = red_feat
+                prev_ngrams = [source_ngrams[pred_id] for pred_id in prev_pred_id]
+                self.populate_red_feats(
+                    red_feats, prev_ngrams, source_ngrams, beam=beam, dec_step=0, enc_steps=enc_steps
+                )
         else:
-            assert num_beams == 1
-            for dec_step in range(1, dec_steps):  # First step is the start token
-                prev_pred_id = decoder_input_ids[0, 1: dec_step + 1]  # These are the previously predicted sentences
-                ngrams = [source_ngrams[pred_id] for pred_id in prev_pred_id]
-                unigrams = set(list(itertools.chain(*[x[0] for x in ngrams])))
-                bigrams = set(list(itertools.chain(*[x[1] for x in ngrams])))
-                trigrams = set(list(itertools.chain(*[x[2] for x in ngrams])))
-                # Aggregate 1-grams, 2-grams, and 3-grams
-                for enc_step in range(enc_steps - 1):  # Don't include the EOS token
-                    enc_ngram = source_ngrams[enc_step]
-                    enc_unigram = enc_ngram[0]
-                    enc_bigram = enc_ngram[1]
-                    enc_trigram = enc_ngram[2]
-                    uni_feat = get_redundancy_feature(enc_unigram, unigrams)
-                    bi_feat = get_redundancy_feature(enc_bigram, bigrams)
-                    tri_feat = get_redundancy_feature(enc_trigram, trigrams)
-                    red_feat = uni_feat + bi_feat + tri_feat
-                    red_feats[0, dec_step, enc_step, :] = red_feat
+            for beam in range(num_beams):  # May be beams or contrast candidates (BRIO)
+                for dec_step in range(1, dec_steps):  # First step is the start token
+                    # These are the previously predicted sentences
+                    prev_pred_id = decoder_input_ids[beam, 1: dec_step + 1]
+                    prev_ngrams = [source_ngrams[pred_id] for pred_id in prev_pred_id]
+                    self.populate_red_feats(
+                        red_feats, prev_ngrams, source_ngrams, beam=beam, dec_step=dec_step, enc_steps=enc_steps
+                    )
 
         red_input = torch.from_numpy(red_feats).float().to(self.device).view(num_beams, enc_steps * dec_steps, -1)
         class_input = torch.cat([encoder_h_rep, decoder_h_rep, red_input], dim=-1)
         lm_logits = self.cand_classifier(class_input).view(num_beams, dec_steps, enc_steps)
 
-        # class_input = torch.cat([encoder_h_rep, decoder_h_rep], dim=-1)
-        # lm_logits = self.cand_classifier(class_input).view(num_beams, dec_steps, enc_steps)
         masked_lm_loss = None
         if labels is not None:
-            assert num_beams == 1
-            # Does not work for some reason
             duplication_mask = torch.BoolTensor(lm_logits.size()).to(self.device)
             duplication_mask.fill_(False)
-            for dec_step in range(1, dec_steps):  # First step is the start token
-                prev_pred_id = decoder_input_ids[0, dec_step]
-                duplication_mask[0, dec_step:, :prev_pred_id + 1] = True
+            for beam in range(len(lm_logits)):
+                for dec_step in range(1, dec_steps):  # First step is the start token
+                    prev_pred_id = decoder_input_ids[beam, dec_step]
+                    duplication_mask[beam, dec_step:, :prev_pred_id + 1] = True
             lm_logits.masked_fill_(duplication_mask, -1e3)  # Pick a large negative (fp16 compliant)
-            loss_fct = CrossEntropyLoss()
-            masked_lm_loss = loss_fct(lm_logits.squeeze(0), labels.squeeze(0))
+
+            if calculate_loss:
+                loss_fct = CrossEntropyLoss()
+                masked_lm_loss = loss_fct(lm_logits.squeeze(0), labels.squeeze(0))
             # kld_loss = nn.KLDivLoss(log_target=False, reduction='batchmean')
             # lm_logits_lprob = torch.log_softmax(lm_logits.squeeze(0), dim=-1)
             # masked_lm_loss = kld_loss(lm_logits_lprob, loss_labels.squeeze(0).float())
@@ -1797,11 +1792,19 @@ class BartForConditionalCopy(BartPretrainedModel):
             encoder_attentions=outputs.encoder_attentions,
         )
 
-    def prepare_counter_for_generation(self):
+    def prepare_counter_for_generation(self, source_ngrams, eos_token_id):
         self.decoding_steps = 0
+        self.is_generate_mode = True
+        self.config.forced_eos_token_id = eos_token_id
+        self.source_ngrams_cache = source_ngrams
+        self.prev_ids = []
 
     def reset_counter_for_generation(self):
         self.decoding_steps = None
+        self.forced_eos_token_id = None
+        self.is_generate_mode = False
+        self.source_ngrams_cache = None
+        self.prev_ids = []
 
     def prepare_inputs_for_generation(
         self,

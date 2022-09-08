@@ -1,6 +1,6 @@
 import os
 from string import punctuation
-import ujson
+from collections import defaultdict
 import regex as re
 
 import numpy as np
@@ -76,27 +76,54 @@ class SummaryDataModule(pl.LightningDataModule):
             max_examples = 128
         elif max_examples is None and split == 'train' and self.args.train_frac < 1:
             max_examples = round(self.args.train_frac * len(split_dataset))
+
+        brio_candidates = None
+        if self.args.add_brio_loss:
+            # if self.args.brio_experiment is None:
+            #     oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
+            #     with open(oracle_fn, 'r') as fd:
+            #         brio_candidates = ujson.load(fd)
+            # else:
+            cand_fn = os.path.join(
+                self.args.data_dir, 'results',
+                self.args.brio_experiment, f'{split}_sample_outputs.csv'
+            )
+            cands = pd.read_csv(cand_fn)
+            brio_candidates = defaultdict(list)
+            dataset_ids = list(split_dataset['id'])
+            for record in cands.to_dict('records'):
+                extract_rouges = np.array(list(map(float, record['extract_rouges'].split(','))))
+                extract_idxs = [[int(x) for x in idx_str.split(',')] for idx_str in record['extract_idx'].split('<cand>')]
+
+                assert len(extract_rouges) == len(extract_idxs)
+                num_cand = len(extract_rouges)
+                # TODO REMOVE this once we re-run validation for 4 samples
+                extract_rouges = extract_rouges[:min(num_cand, 4)]
+                extract_idxs = extract_idxs[:min(num_cand, 4)]
+
+                priority = np.argsort(-extract_rouges)
+                extract_idxs_ordered = [extract_idxs[i] for i in priority]
+
+                # De-Duplicate
+                extract_idxs_uniq = [
+                    extract_idx for i, extract_idx in enumerate(
+                        extract_idxs_ordered
+                    ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
+                ]
+
+                brio_candidates[dataset_ids[record['dataset_idx']]] = extract_idxs_uniq
+            # Filter dataset to only include ones with BRIO candidates generated or "oracled"
+            available_keys = set(list(brio_candidates.keys()))
+            valid_hf_ids = [i for i, dataset_idx in enumerate(split_dataset['id']) if dataset_idx in available_keys]
+            print(f'Filtering out for {len(valid_hf_ids)} contrastive BRIO examples')
+            split_dataset = split_dataset.select(valid_hf_ids)
+
         n = len(split_dataset)
         idxs = list(range(n))
         if max_examples is not None and max_examples < n:
             idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
             print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
             split_dataset = split_dataset.select(idxs)
-
-        brio_candidates = None
-        if self.args.add_sent_brio:
-            oracle_brio = True  # Versus model predictions (doesn't mean we are training on BRIO)
-            if oracle_brio:
-                oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
-                with open(oracle_fn, 'r') as fd:
-                    brio_candidates = ujson.load(fd)
-            else:
-                cand_fn = os.path.join(
-                    self.args.data_dir, self.args.dataset, 'results', 'gen_extract_full', f'{split}_sample_outputs.csv'
-                )
-                cands = pd.read_csv(cand_fn)
-                # TODO FORMAT THIS so that it looks like candidates
-                brio_candidates = cands
 
         split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, brio_candidates=brio_candidates)
         collate_fn = Seq2SeqCollate(
@@ -179,9 +206,16 @@ class SummarizationDataset(Dataset):
             'source_ngrams': self.get_sent_ngrams(source_annotated)
         }
 
-        if self.args.add_sent_brio:
-            candidates = [np.sort(x['extract_idx']) for x in self.brio_candidates[dataset_id]]
+        if self.args.add_brio_loss:
+            candidates = self.brio_candidates[dataset_id]
             if len(candidates) == 1:
                 candidates.append(candidates[0])  # Revisit This (why do we have 1 candidate sometimes)
-            row['oracle_cand_labels'] = candidates
+
+            num_cand = len(candidates)
+            max_len = max([len(x) for x in candidates])
+            brio_labels = np.zeros([num_cand, max_len], dtype=np.int64)
+            brio_labels.fill(-100)
+            for cand_idx in range(num_cand):
+                brio_labels[cand_idx, :len(candidates[cand_idx])] = candidates[cand_idx]
+            row['brio_labels'] = brio_labels
         return row

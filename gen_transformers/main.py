@@ -44,6 +44,13 @@ def run(args):
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
+    if args.add_brio_loss and args.pretrained_path is None:
+        brio_experiment_dir = os.path.join(args.weight_dir, args.brio_experiment)
+        from glob import glob
+        fns = list(glob(os.path.join(brio_experiment_dir, 'faith_sum', '*', 'checkpoints', '*.ckpt')))
+        assert len(fns) == 1
+        args.pretrained_path = fns[0]
+
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
     if not args.debug:
         tokenizer.save_pretrained(tokenizer_dir)
@@ -64,11 +71,11 @@ def run(args):
             tokenizer.add_special_tokens(special_tokens_dict)
             model.model.resize_token_embeddings(len(tokenizer))
 
-        model.hparams.add_sent_brio = False  # args.add_sent_brio
+        model.hparams.add_brio_loss = args.add_brio_loss
         model.hparams.extract_indicators = args.extract_indicators
-        model.hparams.contrast_margin = args.contrast_margin
+        model.hparams.brio_margin = args.brio_margin
         model.hparams.brio_loss_coef = args.brio_loss_coef
-        val_check_interval = 0.25  # Depending on what you're doing you should change this
+        val_check_interval = 0.5  # Depending on what you're doing you should change this
     datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 
     logger = pl_loggers.WandbLogger(
@@ -142,11 +149,11 @@ if __name__ == '__main__':
     # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
     parser.add_argument('-extract_indicators', default=False, action='store_true')
-    # How many sentences to make visible to the decoder (5 is randomly set based on summary lengths of ~2-5 sentences)
     parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)
-    parser.add_argument('-add_sent_brio', default=False, action='store_true')
-    parser.add_argument('--contrast_margin', default=0.01, type=float)
+    parser.add_argument('-add_brio_loss', default=False, action='store_true')
+    parser.add_argument('--brio_margin', default=0.001, type=float)
     parser.add_argument('--brio_loss_coef', default=0.1, type=float)
+    parser.add_argument('--brio_experiment', default='gen_extract_full_ar_mask_red_feat')
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4
