@@ -698,7 +698,7 @@ class BartEncoder(BartPretrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: BartConfig, embed_tokens: Optional[nn.Embedding] = None, extract_indicators=True):
+    def __init__(self, config: BartConfig, embed_tokens: Optional[nn.Embedding] = None, extract_indicators=True, sentence_indicators=True):
         super().__init__(config)
 
         self.dropout = config.dropout
@@ -711,6 +711,8 @@ class BartEncoder(BartPretrainedModel):
         if extract_indicators:
             print('Initializing extractor indicator embeddings.')
             self.extract_indicator_embeddings = nn.Embedding(3, config.d_model, padding_idx=0)
+        if sentence_indicators:
+            self.sentence_indicator_embeddings = nn.Embedding(3, config.d_model, padding_idx=0)
 
         if embed_tokens is not None:
             self.embed_tokens = embed_tokens
@@ -739,6 +741,7 @@ class BartEncoder(BartPretrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         extract_indicators: Optional[torch.Tensor] = None,
+        sentence_indicators: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         output_attentions: Optional[bool] = None,
@@ -804,10 +807,14 @@ class BartEncoder(BartPretrainedModel):
         embed_pos = self.embed_positions(input_shape)
 
         hidden_states = inputs_embeds + embed_pos
-        # assert extract_indicators is None
         if extract_indicators is not None:
             extract_embeds = self.extract_indicator_embeddings(extract_indicators)
             hidden_states += extract_embeds
+
+        # Comment this out if you don't want them
+        if sentence_indicators is not None:
+            sentence_embeds = self.sentence_indicator_embeddings(sentence_indicators)
+            hidden_states += sentence_embeds
         hidden_states = self.layernorm_embedding(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
@@ -1187,6 +1194,7 @@ class BartModel(BartPretrainedModel):
         self,
         input_ids: torch.LongTensor = None,
         extract_indicators: Optional[torch.Tensor] = None,
+        sentence_indicators: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
@@ -1228,6 +1236,7 @@ class BartModel(BartPretrainedModel):
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
                 extract_indicators=extract_indicators,
+                sentence_indicators=sentence_indicators,
                 attention_mask=attention_mask,
                 head_mask=head_mask,
                 inputs_embeds=inputs_embeds,
@@ -1324,6 +1333,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         extract_indicators: Optional[torch.Tensor] = None,
+        sentence_indicators: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.Tensor] = None,
@@ -1361,6 +1371,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
         outputs = self.model(
             input_ids,
             extract_indicators=extract_indicators,
+            sentence_indicators=sentence_indicators,
             attention_mask=attention_mask,
             decoder_input_ids=decoder_input_ids,
             encoder_outputs=encoder_outputs,
@@ -1448,7 +1459,7 @@ class BartCopyModel(BartPretrainedModel):
         padding_idx, vocab_size = config.pad_token_id, config.vocab_size
         self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
 
-        self.encoder = BartEncoder(config, self.shared, extract_indicators=False)
+        self.encoder = BartEncoder(config, self.shared, extract_indicators=False, sentence_indicators=False)
         self.decoder = BartDecoder(config, self.shared)
 
         # Initialize weights and apply final processing

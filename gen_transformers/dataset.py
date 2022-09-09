@@ -97,10 +97,6 @@ class SummaryDataModule(pl.LightningDataModule):
 
                 assert len(extract_rouges) == len(extract_idxs)
                 num_cand = len(extract_rouges)
-                # TODO REMOVE this once we re-run validation for 4 samples
-                extract_rouges = extract_rouges[:min(num_cand, 4)]
-                extract_idxs = extract_idxs[:min(num_cand, 4)]
-
                 priority = np.argsort(-extract_rouges)
                 extract_idxs_ordered = [extract_idxs[i] for i in priority]
 

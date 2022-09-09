@@ -69,7 +69,12 @@ class TransformerSummarizer(pl.LightningModule):
         extracts = None
         return_loss = 0
 
-        encoder_inputs = {'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask']}
+        encoder_inputs = {
+            'input_ids': batch['input_ids'],
+            'attention_mask': batch['attention_mask'],
+            'sentence_indicators': batch['sentence_indicators']
+        }
+
         if self.hparams.extract_indicators:
             encoder_inputs['extract_indicators'] = implement_oracle_indicators(batch)
         encoder_outputs = self.get_encoder_h(encoder_inputs)
@@ -178,9 +183,6 @@ class TransformerSummarizer(pl.LightningModule):
                     output_dict[k].append(v)
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
         eval_metrics = {}
-        if self.hparams.summary_style in {'abstract_plan', 'plan_abstract'}:
-            from_oracle_rouge = self.generate_from_oracle(batch, reduce=True, **validation_kwargs)
-            eval_metrics.update(from_oracle_rouge)
 
         if len(output_dict['abstracts']) > 0:
             eval_metrics.update(self.compute_rouge(output_dict['abstracts'], batch['references']))
@@ -217,7 +219,8 @@ class TransformerSummarizer(pl.LightningModule):
             # Predict if a sentence is in oracle summary
             encoder_kwargs = {
                 'input_ids': batch['input_ids'],
-                'attention_mask': batch['attention_mask']
+                'attention_mask': batch['attention_mask'],
+                'sentence_indicators': batch['sentence_indicators'],
             }
             output = self.model.model.encoder(**encoder_kwargs)
             encoder_h = output.last_hidden_state
@@ -248,10 +251,6 @@ class TransformerSummarizer(pl.LightningModule):
         outputs_resolved = self.merge_outputs(gen_outputs, extract_outputs)
 
         batch_outputs = []
-        from_oracle_metrics = None
-        if self.hparams.summary_style in {'abstract_plan', 'plan_abstract'}:
-            from_oracle_metrics = self.generate_from_oracle(batch, use_hf_rouge, **gen_kwargs)
-
         for batch_idx, (reference, gen_output) in enumerate(zip(references, outputs_resolved)):
             abstract_flat = '' if gen_output['abstracts'] is None else '<cand>'.join(gen_output['abstracts'])
             extract_flat = '' if gen_output['extracts'] is None else '<cand>'.join(
@@ -276,9 +275,6 @@ class TransformerSummarizer(pl.LightningModule):
             ):
                 dist_flat = '<cand>'.join([','.join(list(map(str, x['sent_dist']))) for x in gen_output['extracts']])
                 save_out['sent_scores'] = dist_flat
-
-            if from_oracle_metrics is not None:
-                save_out.update(from_oracle_metrics[batch_idx])
 
             # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
             if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
@@ -589,41 +585,11 @@ class TransformerSummarizer(pl.LightningModule):
         score_idx = int(torch.argmax(scores).item()) / len(scores)
         return contrast_loss, avg_gap, score_idx, win_frac
 
-    def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
-        oracle_strs = [x.split('<sep>')[0].replace('<s>', '') for x in self.tokenizer.batch_decode(batch['labels'])]
-        references = gen_kwargs.pop('references')
-        results = []
-        for batch_idx in range(len(batch['input_ids'])):
-            decoder_input_ids = self.tokenizer.encode(
-                '<s></s>' + oracle_strs[batch_idx] + '<sep>',
-                add_special_tokens=False, return_tensors='pt'
-            ).to(self.device)
-
-            default_kwargs = {  # Some of these values may get overridden by gen_kwargs
-                'input_ids': batch['input_ids'][batch_idx].unsqueeze(0),
-                'attention_mask': batch['attention_mask'][batch_idx].unsqueeze(0),
-                'decoder_input_ids': decoder_input_ids,
-                'num_return_sequences': 1,
-                'max_length': self.hparams.max_output_length,
-                'no_repeat_ngram_size': 3,
-                'early_stopping': True,
-                'output_scores': True
-            }
-
-            default_kwargs.update(gen_kwargs)
-            pred_ids = self.model.generate(**default_kwargs)
-            pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
-            row = self.compute_rouge([pred], [references[batch_idx]], prefix='oracle_prompt_', eval=eval)
-            results.append(row)
-        if reduce:
-            df = pd.DataFrame(results)
-            return {col: df[col].dropna().mean for col in df.columns}
-        return results
-
     def shared_generate(self, batch, source, references, encoder_outputs=None, **gen_kwargs):
         default_kwargs = {  # Some of these values may get overridden by gen_kwargs
             # 'input_ids': batch['input_ids'],
             'attention_mask': batch['attention_mask'],
+            'sentence_indicators': batch['sentence_indicators'],
             'num_return_sequences': 1,
             'max_length': self.hparams.max_output_length,
             'no_repeat_ngram_size': 3,

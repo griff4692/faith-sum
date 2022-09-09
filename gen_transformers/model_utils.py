@@ -38,6 +38,24 @@ def sentence_indicators(cls_mask, sent_idx_to_mask, prev_mask):
     return sent_mask
 
 
+def alternating_sent_ids(cls_mask, attention_mask):
+    sent_ids = torch.zeros_like(cls_mask, device=cls_mask.device).long()
+    batch_size, max_seq_len = sent_ids.size()
+    for batch_idx in range(batch_size):
+        sent_locs = cls_mask[batch_idx].nonzero()[:, 0]
+        num_sents = len(sent_locs)
+        for sent_idx, sent_loc in enumerate(sent_locs):
+            sent_loc = sent_loc.item()
+            end_loc = sent_locs[sent_idx + 1].item() if sent_idx + 1 < num_sents else max_seq_len
+            if sent_idx % 2 == 0:
+                sent_ids[batch_idx, sent_loc:end_loc] = 2
+            else:
+                sent_ids[batch_idx, sent_loc:end_loc] = 1
+
+    sent_ids.masked_fill_(attention_mask == 0, 0)
+    return sent_ids
+
+
 def implement_oracle_masking(batch):
     updated_attention_masks = []
     batch_size = len(batch['oracle_labels'])

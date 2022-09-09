@@ -5,6 +5,8 @@ import nltk
 import torch
 import numpy as np
 
+from gen_transformers.model_utils import alternating_sent_ids
+
 
 def postprocess_text(texts):
     return ['\n'.join(nltk.sent_tokenize(text.strip())) for text in texts]
@@ -52,13 +54,15 @@ class Seq2SeqCollate:
             torch.LongTensor(x['oracle_labels']) if x['oracle_labels'] is not None else None for x in batch_list
         ]
         references = [x['reference'] for x in batch_list]
+        cls_mask = input_ids_pad >= self.special_id_min
         row = {
             'input_ids': input_ids_pad,
             'attention_mask': attention_mask,
             'labels': label_ids_pad,
-            'cls_mask': input_ids_pad >= self.special_id_min,
+            'cls_mask': cls_mask,
             'oracle_labels': oracle_labels,
             'references': references,
+            'sentence_indicators': alternating_sent_ids(cls_mask, attention_mask)
         }
 
         if 'brio_labels' in batch_list[0]:
