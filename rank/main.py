@@ -36,15 +36,10 @@ def run(args):
 
     tokenizer = AutoTokenizer.from_pretrained('roberta-base')
 
-    # tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
-    # if not args.debug:
-    #     tokenizer.save_pretrained(tokenizer_dir)
-    # if args.pretrained_path is None:
-    #     model = SummaryRanker(args, tokenizer=tokenizer, finetuned_model=finetuned_model.model)
-    # else:
-    #     model = SummaryRanker.load_from_checkpoint(
-    #         checkpoint_path=args.pretrained_path, tokenizer=tokenizer, strict=True
-    #     )
+    add_tokens = [f'<s{i}>' for i in range(args.max_num_sents)]
+    special_tokens_dict = {'additional_special_tokens': add_tokens}
+    tokenizer.add_special_tokens(special_tokens_dict)
+
     model = SummaryRanker(args, tokenizer)
     datamodule = RankDataModule(args, tokenizer=tokenizer)
 
@@ -81,8 +76,7 @@ def run(args):
         default_root_dir=experiment_dir,
         gradient_clip_val=0.1,
         accumulate_grad_batches=args.grad_accum,
-        val_check_interval=1.0 if args.debug else 0.2,
-        check_val_every_n_epoch=args.max_epochs if args.debug else 1,
+        val_check_interval=1.0 if args.debug else 0.1,
         num_sanity_val_steps=0 if args.debug else 2,
         log_every_n_steps=10,
         max_steps=args.max_steps,
@@ -99,7 +93,7 @@ def run(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('BART/PEGASUS Ranker.')
+    parser = argparse.ArgumentParser('Summarization Re-Ranker.')
 
     # Configuration Parameters
     parser.add_argument('-debug', default=False, action='store_true')
@@ -112,7 +106,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_val_examples', default=1024, type=int)
     parser.add_argument('--gpu_device', default=None, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--gen_experiment', default='select_extract_full')
+    parser.add_argument('--gen_experiment', default='gen_extract_full_ar_mask_red_feat')
     parser.add_argument('-no_schedule', default=False, action='store_true')
     parser.add_argument('-offline', default=False, action='store_true')
     parser.add_argument('-find_lr', default=False, action='store_true')
@@ -128,6 +122,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', default=10, type=int)
     parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--max_input_length', type=int, default=512)
+    parser.add_argument('--max_num_sents', type=int, default=200)
 
     args = parser.parse_args()
 

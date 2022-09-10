@@ -76,6 +76,9 @@ class RobertaEmbeddings(nn.Module):
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
 
+        if config.extract_indicators:
+            self.extract_indicator_embeddings = nn.Embedding(2, config.hidden_size, padding_idx=0)
+
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
@@ -97,7 +100,8 @@ class RobertaEmbeddings(nn.Module):
         )
 
     def forward(
-        self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, past_key_values_length=0
+        self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, extract_indicators=None,
+        past_key_values_length=0
     ):
         if position_ids is None:
             if input_ids is not None:
@@ -132,6 +136,11 @@ class RobertaEmbeddings(nn.Module):
         if self.position_embedding_type == "absolute":
             position_embeddings = self.position_embeddings(position_ids)
             embeddings += position_embeddings
+
+        if extract_indicators is not None:
+            extract_embeds = self.extract_indicator_embeddings(extract_indicators)
+            embeddings += extract_embeds
+
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -748,6 +757,7 @@ class RobertaModel(RobertaPreTrainedModel):
         attention_mask: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
+        extract_indicators: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         encoder_hidden_states: Optional[torch.Tensor] = None,
@@ -841,6 +851,7 @@ class RobertaModel(RobertaPreTrainedModel):
             input_ids=input_ids,
             position_ids=position_ids,
             token_type_ids=token_type_ids,
+            extract_indicators=extract_indicators,
             inputs_embeds=inputs_embeds,
             past_key_values_length=past_key_values_length,
         )
@@ -1187,12 +1198,14 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
         attention_mask: Optional[torch.FloatTensor] = None,
         token_type_ids: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
+        extract_indicators: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        classifier_features: Optional[torch.FloatTensor] = None,
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
@@ -1207,6 +1220,7 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
+            extract_indicators=extract_indicators,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
@@ -1214,7 +1228,8 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
             return_dict=return_dict,
         )
         sequence_output = outputs[0]
-        logits = self.classifier(sequence_output)
+        classifier_inputs = torch.cat([sequence_output[:, 0, :], classifier_features], dim=1)
+        logits = self.classifier(classifier_inputs)
 
         loss = None
         if labels is not None:
@@ -1436,7 +1451,7 @@ class RobertaClassificationHead(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.dense = nn.Linear(config.hidden_size + config.num_features, config.hidden_size)
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
@@ -1444,7 +1459,9 @@ class RobertaClassificationHead(nn.Module):
         self.out_proj = nn.Linear(config.hidden_size, config.num_labels)
 
     def forward(self, features, **kwargs):
-        x = features[:, 0, :]  # take <s> token (equiv. to [CLS])
+        # TODO changed from HuggingFace - document this
+        # x = features[:, 0, :]  # take <s> token (equiv. to [CLS])
+        x = features
         x = self.dropout(x)
         x = self.dense(x)
         x = torch.tanh(x)

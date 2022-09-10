@@ -18,7 +18,10 @@ class SummaryRanker(pl.LightningModule):
         assert self.hparams.max_input_length <= self.tokenizer.model_max_length
         self.config = AutoConfig.from_pretrained('roberta-base')
         self.config.num_labels = 1
+        self.config.num_features = 5
+        self.config.extract_indicators = True  # Embeddings for extract tokens
         self.model = RobertaForSequenceClassification.from_pretrained('roberta-base', config=self.config)
+        self.model.resize_token_embeddings(len(tokenizer))
         self.lr = self.hparams.lr  # Necessary for tune_lr to work with PytorchLightning
         self.loss = nn.CrossEntropyLoss(label_smoothing=0.1)
 
@@ -56,19 +59,27 @@ class SummaryRanker(pl.LightningModule):
         return self.shared_step(batch, split='val')
 
     def configure_optimizers(self):
-        # no_decay = ['bias', 'LayerNorm.weight']
         nps = list(self.named_parameters())
-        non_classifier = [p for n, p in nps if 'classifier' not in n and p.requires_grad]
-        classifier = [p for n, p in nps if 'classifier' in n and p.requires_grad]
-        assert len(non_classifier) > 0 and len(classifier) > 0
+
+        classifier = [(n, p) for n, p in nps if 'classifier' in n and p.requires_grad]
+        embeds = [(n, p) for n, p in nps if 'extract_indicator_embeddings' in n and p.requires_grad]
+        used_names = set([x for (x, _) in classifier + embeds])
+        remaining = [(n, p) for n, p in nps if n not in used_names and p.requires_grad]
         grouped_parameters = [
             {
-                'params': non_classifier,
+                'params': [p for n, p in remaining],
+                'weight_decay': self.hparams.weight_decay,
                 'lr': self.lr,
             },
             {
-                'params': classifier,
+                'params': [p for n, p in classifier],
+                'weight_decay': 0.0,
                 'lr': 1e-3,
+            },
+            {
+                'params': [p for n, p in embeds],
+                'weight_decay': 0.0,
+                'lr': 1e-3
             },
         ]
 

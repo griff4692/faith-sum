@@ -1,4 +1,3 @@
-from collections import defaultdict
 import os
 import itertools
 
@@ -8,6 +7,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 import spacy
+from datasets import load_from_disk
 
 from sum_constants import summarization_name_mapping
 from eval.rouge_metric import RougeMetric
@@ -22,6 +22,24 @@ def compute_rouge(rouge_metric, generated, gold):
     return f1s
 
 
+def extract_indicators(cls_mask, sent_idx_to_mask):
+    """
+    :param cls_mask: indications of where sentences tokens are
+    :param sent_idx_to_mask: which sentences to mask (the sentence order, not location in cls_mask)
+    :return:
+    """
+    extract_indicators = torch.zeros_like(cls_mask, device=cls_mask.device).long()
+    sent_locs = cls_mask.nonzero()[:, 0]
+    max_seq_len = len(cls_mask)
+    num_sents = len(sent_locs)
+    for sent_idx, sent_loc in enumerate(sent_locs):
+        sent_loc = sent_loc.item()
+        end_loc = sent_locs[sent_idx + 1].item() if sent_idx + 1 < num_sents else max_seq_len
+        if sent_idx in sent_idx_to_mask:
+            extract_indicators[sent_loc:end_loc] = 1
+    return extract_indicators
+
+
 class RankCollate:
     def __init__(self, tokenizer, max_input_length=512, add_cols=None, split=None):
         self.tokenizer = tokenizer
@@ -30,23 +48,38 @@ class RankCollate:
         self.pad_id = tokenizer.pad_token_id
         self.add_cols = [] if add_cols is None else add_cols
         self.split = split
+        additional_ids = self.tokenizer.additional_special_tokens_ids
+        self.special_id_min = 999999 if len(additional_ids) == 0 else min(self.tokenizer.additional_special_tokens_ids)
 
     def __call__(self, batch_list):
         # tokenize the inputs and labels
         batch_size = len(batch_list)
-        abstracts_flat = list(itertools.chain(*[x['abstracts'] for x in batch_list]))
-        num_cands = len(batch_list[0]['abstracts'])
+        # abstracts_flat = list(itertools.chain(*[x['abstracts'] for x in batch_list]))
+        extract_idxs_flat = list(itertools.chain(*[x['extract_idxs'] for x in batch_list]))
+        num_cands = len(batch_list[0]['extract_idxs'])
         sources_flat = list(itertools.chain(*[[x['source']] * num_cands for x in batch_list]))
         batch_inputs = self.tokenizer(
-            abstracts_flat,
+            # abstracts_flat,
             sources_flat,
             padding='longest',
             truncation=True,
             max_length=self.max_input_length,
             return_tensors='pt'
         )
-        scores = [x['scores'] for x in batch_list]
 
+        cls_mask = batch_inputs['input_ids'] >= self.special_id_min
+        extract_indicator_ids = []
+        n = len(cls_mask)
+        for flat_idx in range(n):
+            extract_indicator_ids.append(
+                extract_indicators(cls_mask[flat_idx], extract_idxs_flat[flat_idx])
+            )
+        extract_indicator_ids = torch.stack(extract_indicator_ids)
+        extract_indicator_ids.masked_fill_(batch_inputs['attention_mask'] == 0, 0)
+        batch_inputs['extract_indicators'] = extract_indicator_ids
+        scores = [x['scores'] for x in batch_list]
+        features_flat = torch.from_numpy(np.array(list(itertools.chain(*[x['features'] for x in batch_list])))).float()
+        batch_inputs['classifier_features'] = features_flat
         norm_scores = np.zeros([batch_size, num_cands])
         for batch_idx, score_arr in enumerate(scores):
             score_arr = np.array(score_arr)
@@ -65,58 +98,55 @@ class RankDataModule(pl.LightningDataModule):
         self.tokenizer = tokenizer
         self.num_workers = 0 if args.debug else 16
         self.nlp = spacy.load('en_core_web_sm')
-
-        beam_fn = os.path.join(self.args.data_dir, 'results', 'gen_abstract_full', 'validation_beam_outputs.csv')
-        sample_fn = os.path.join(
-            self.args.data_dir, 'results', self.args.gen_experiment, 'from_sample_extract.csv'
-        )
-
-        # sample_fn = os.path.join(
-        #     self.args.data_dir, 'results', 'gen_abstract_full', 'validation_sample_outputs.csv'
-        # )
-
-        beam_df = pd.read_csv(beam_fn)
-        sample_df = pd.read_csv(sample_fn)
-
-        avail_idxs = sample_df['dataset_idx'].unique().tolist()
-        beam_df = beam_df[beam_df['dataset_idx'].isin(set(avail_idxs))]
-
-        sample_records = {record['dataset_idx']: record for record in sample_df.to_dict('records')}
-        beam_records = {record['dataset_idx']: record for record in beam_df.to_dict('records')}
-        np.random.seed(1992)
-        train_frac = 0.8
-        n = len(sample_records)
-        train_cutoff = round(train_frac * n)
-        np.random.shuffle(avail_idxs)
-
-        self.splits = {
-            'train': avail_idxs[:train_cutoff],
-            'validation': avail_idxs[train_cutoff:]
-        }
-
-        num_train = len(self.splits['train'])
-        num_val = len(self.splits['validation'])
-        print(f'{num_train} train examples. {num_val} validation.')
-
-        combined_data = defaultdict(dict)
-        for dataset_idx in avail_idxs:
-            combined_data[dataset_idx] = {
-                'dataset_idx': dataset_idx,
-                'beam': beam_records[dataset_idx],
-                'sample': sample_records[dataset_idx]
-            }
-        self.dataset = list(combined_data.values())
+        self.dataset = load_from_disk(os.path.join(args.data_dir, args.dataset))
 
     def get_split(self, split, max_examples=None):
-        split_dataset = list(filter(lambda example: example['dataset_idx'] in self.splits[split], self.dataset))
+        split_fn = os.path.join(
+            self.args.data_dir, 'results', self.args.gen_experiment, f'{split}_sample_outputs.csv'
+        )
+        split_df = pd.read_csv(split_fn)
+        split_data = self.dataset[split]
+
+        annotated_source = split_data['source_annotated']
+        oracle_idxs = split_data['oracle_idxs']
+        split_dataset = []
+        for record in split_df.to_dict('records'):
+            try:
+                cand_extract_idx = [[int(x) for x in idx.split(',')] for idx in record['extract_idx'].split('<cand>')]
+            except Exception as e:
+                print(f'Skipping: {e}')
+                continue
+
+            extract_rouges = [float(x) for x in record['extract_rouges'].split(',')]
+            if min(extract_rouges) == max(extract_rouges):
+                print(f'Min and max ROUGE is the same: {min(extract_rouges)}. Skipping')
+                continue
+
+            split_dataset.append({
+                'dataset_idx': record['dataset_idx'],
+                'annotated_source': annotated_source[record['dataset_idx']],
+                'reference': record['reference'],
+                'oracle_extract_idx': oracle_idxs[record['dataset_idx']],
+                'cand_extract_idx': cand_extract_idx,
+                'num_candidates': len(cand_extract_idx),
+                'cand_extract_rouges': extract_rouges,
+            })
+
+        # Removing incomplete extract candidates
+        max_candidates = max([x['num_candidates'] for x in split_dataset])
+        split_dataset_filt = [
+            x for x in split_dataset if x['num_candidates'] == max_candidates
+        ]
+        print(f'{len(split_dataset)}/{len(split_dataset_filt)} have the max number of candidates={max_candidates}.')
+
         if self.args.debug and max_examples is None:
             max_examples = 128
-        n = len(split_dataset)
+        n = len(split_dataset_filt)
         rand_idxs = None
         if max_examples is not None and max_examples < n:
             rand_idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
-            split_dataset = [split_dataset[i] for i in rand_idxs]
-        split_dataset_pl = RankDataset(self.args, split_dataset, split, self.nlp)
+            split_dataset_filt = [split_dataset_filt[i] for i in rand_idxs]
+        split_dataset_pl = RankDataset(self.args, split_dataset_filt, split, self.nlp)
         collate_fn = RankCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
@@ -156,35 +186,54 @@ class RankDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
+    def build_features(self, extract_idxs, beam_frac, source_sents):
+        num_sents = len(extract_idxs)
+        num_source_sents = len(source_sents)
+        sent_frac = num_sents / num_source_sents
+        extract = [source_sents[i] for i in extract_idxs]
+        source_toks = ' '.join(source_sents).split(' ')
+        num_source_toks = len(source_toks)
+        extract_toks = ' '.join(extract).split(' ')
+        num_extract_toks = len(extract_toks)
+        token_frac = num_extract_toks  / num_source_toks
+        average_pos = np.mean(extract_idxs) / len(source_sents)
+        return [
+            beam_frac,
+            num_sents,
+            sent_frac,
+            token_frac,
+            average_pos
+        ]
+
     def __getitem__(self, idx):
         example = self.dataset[idx]
+        source = example['annotated_source']
+        oracle_extract_idx = example['oracle_extract_idx']
+        cand_extract_idx = example['cand_extract_idx']
+        n = len(cand_extract_idx)
+        cand_extract_rouges = example['cand_extract_rouges']
 
-        beam = example['beam']
-        sample = example['sample']
+        # Sort the extract indices
+        beam_priority = np.argsort(-np.array(cand_extract_rouges))
+        cand_extract_idx_ordered = [cand_extract_idx[i] for i in beam_priority]
+        cand_extract_rouges_ordered = [cand_extract_rouges[i] for i in beam_priority]
 
-        source = sample['source']
-        reference = sample['reference']
-        pred_abstracts = sample['from_extract_abstract'] if 'from_extract_abstract' in sample else sample['abstract']
-        pred_abstracts = pred_abstracts.split('<cand>')
-        pred_abstracts.insert(0, beam['abstract'])
+        features = []
+        import regex as re
+        source_sents = re.split(r'(<s\d+>)', source)
+        source_sents = [
+            source_sents[i + 1].strip() for i in range(len(source_sents))
+            if re.match(r'<s\d+>', source_sents[i]) is not None
+        ]
+        for cand_idx in range(n):
+            extract_idxs = cand_extract_idx_ordered[cand_idx]
+            beam_idx = beam_priority[cand_idx]
+            beam_frac = (beam_idx + 1) / n
+            features.append(self.build_features(extract_idxs, beam_frac, source_sents))
 
-        rouges = []
-        for abstract in pred_abstracts:
-            rouges.append(compute_rouge(self.rouge_metric, abstract, reference)[0])
-
-        oracle_order = np.argsort(-np.array(rouges))
-        pred_abstracts = [pred_abstracts[i] for i in oracle_order]
-        # pred_abstracts[0] = 'WINNER: '
-        rouges = [rouges[i] for i in oracle_order]
-        if len(pred_abstracts) != self.num_candidates:
-            print(len(pred_abstracts))
-            delta = self.num_candidates - len(pred_abstracts)
-            additional_copies = [pred_abstracts[-1]] * delta
-            additional_scores = [rouges[-1]] * delta
-            pred_abstracts = pred_abstracts + additional_copies
-            rouges = rouges + additional_scores
         return {
             'source': source,
-            'abstracts': pred_abstracts,
-            'scores': rouges,
+            'features': features,
+            'extract_idxs': cand_extract_idx_ordered,
+            'scores': cand_extract_rouges_ordered,
         }
