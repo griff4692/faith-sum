@@ -83,7 +83,7 @@ if __name__ == '__main__':
         'Yale-LILY/brio-cnndm-uncased',
     ])
     parser.add_argument('--split', default='validation')
-    parser.add_argument('--train_frac', default=0.8, type=float)
+    parser.add_argument('--train_frac', default=0.0, type=float)
 
     args = parser.parse_args()
     args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style or args.extract_indicators
