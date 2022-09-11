@@ -22,10 +22,11 @@ class SummaryRanker(pl.LightningModule):
         self.config.extract_indicators = True  # Embeddings for extract tokens
         self.model = RobertaForSequenceClassification.from_pretrained('roberta-base', config=self.config)
         self.model.resize_token_embeddings(len(tokenizer))
-        self.lr = self.hparams.lr  # Necessary for tune_lr to work with PytorchLightning
+        self.lr = None if not hasattr(self.hparams, 'lr') else self.hparams.lr
         self.loss = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     def shared_step(self, batch, split='train'):
+        batch.pop('dataset_idx', None)
         is_train = split == 'train'
         scores = batch['scores']
         score_dist = batch['score_dist']
@@ -57,6 +58,21 @@ class SummaryRanker(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         return self.shared_step(batch, split='val')
+
+    def predict_step(self, batch):
+        batch_inputs = batch['inputs']
+        n = len(batch_inputs['input_ids'])
+        dataset_idx = batch.pop('dataset_idx')
+        batch_size = len(dataset_idx)
+        assert n % batch_size == 0
+        num_candidates = n // batch_size
+        with torch.no_grad():
+            outputs = self.model(**batch_inputs)
+            logits = outputs.logits
+            logits = logits.view(batch_size, num_candidates)
+            pred_dist = torch.softmax(logits, dim=1).cpu().numpy()
+            return dataset_idx, pred_dist
+
 
     def configure_optimizers(self):
         nps = list(self.named_parameters())

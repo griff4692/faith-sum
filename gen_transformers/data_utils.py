@@ -69,8 +69,11 @@ class Seq2SeqCollate:
         return row
 
 
-def get_path_from_exp(weights_dir, experiment):
-    dir = os.path.join(weights_dir, experiment)
+def get_path_from_exp(weights_dir, experiment=None):
+    if experiment is None:
+        dir = weights_dir
+    else:
+        dir = os.path.join(weights_dir, experiment)
     paths = list(Path(dir).rglob('*.ckpt'))
     if len(paths) == 0:
         raise Exception(f'No weights found in {dir}')

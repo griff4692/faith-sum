@@ -1,5 +1,6 @@
 import os
 import itertools
+import regex as re
 
 import numpy as np
 import pytorch_lightning as pl
@@ -87,7 +88,8 @@ class RankCollate:
             norm_scores[batch_idx] = normed
 
         norm_scores = torch.from_numpy(norm_scores)
-        return {'inputs': batch_inputs, 'scores': scores, 'score_dist': norm_scores}
+        dataset_idx = [x['dataset_idx'] for x in batch_list]
+        return {'inputs': batch_inputs, 'scores': scores, 'score_dist': norm_scores, 'dataset_idx': dataset_idx}
 
 
 class RankDataModule(pl.LightningDataModule):
@@ -219,7 +221,6 @@ class RankDataset(Dataset):
         cand_extract_rouges_ordered = [cand_extract_rouges[i] for i in beam_priority]
 
         features = []
-        import regex as re
         source_sents = re.split(r'(<s\d+>)', source)
         source_sents = [
             source_sents[i + 1].strip() for i in range(len(source_sents))
@@ -236,4 +237,5 @@ class RankDataset(Dataset):
             'features': features,
             'extract_idxs': cand_extract_idx_ordered,
             'scores': cand_extract_rouges_ordered,
+            'dataset_idx': example['dataset_idx']
         }

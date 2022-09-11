@@ -14,6 +14,14 @@ from rank.dataset import RankDataModule
 from rank.model import SummaryRanker
 
 
+def build_tokenizer(max_num_sents=200):
+    tokenizer = AutoTokenizer.from_pretrained('roberta-base')
+    add_tokens = [f'<s{i}>' for i in range(max_num_sents)]
+    special_tokens_dict = {'additional_special_tokens': add_tokens}
+    tokenizer.add_special_tokens(special_tokens_dict)
+    return tokenizer
+
+
 def run(args):
     if args.gpu_device is not None:
         gpus = [args.gpu_device]
@@ -34,12 +42,7 @@ def run(args):
     experiment_dir = os.path.join(args.weight_dir, args.experiment, 'rank')
     os.makedirs(os.path.join(experiment_dir, 'wandb'), exist_ok=True)  # Only way to make sure it's writable
 
-    tokenizer = AutoTokenizer.from_pretrained('roberta-base')
-
-    add_tokens = [f'<s{i}>' for i in range(args.max_num_sents)]
-    special_tokens_dict = {'additional_special_tokens': add_tokens}
-    tokenizer.add_special_tokens(special_tokens_dict)
-
+    tokenizer = build_tokenizer(max_num_sents=args.max_num_sents)
     model = SummaryRanker(args, tokenizer)
     datamodule = RankDataModule(args, tokenizer=tokenizer)
 
@@ -59,8 +62,8 @@ def run(args):
         save_last=False,
         mode=primary_metric_mode
     )
-    early_stopping = EarlyStopping(primary_eval_metric, mode=primary_metric_mode, patience=5, verbose=True)
-    callbacks = [checkpoint_callback, early_stopping]
+    # early_stopping = EarlyStopping(primary_eval_metric, mode=primary_metric_mode, patience=5, verbose=True)
+    callbacks = [checkpoint_callback]
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')
         callbacks.append(lr_monitor)
@@ -118,8 +121,8 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=2)
     parser.add_argument('--grad_accum', type=int, default=4)
     parser.add_argument('--warmup_steps', type=int, default=200)
-    parser.add_argument('--max_steps', default=10000, type=int)
-    parser.add_argument('--max_epochs', default=10, type=int)
+    parser.add_argument('--max_steps', default=100000, type=int)
+    parser.add_argument('--max_epochs', default=20, type=int)
     parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--max_input_length', type=int, default=512)
     parser.add_argument('--max_num_sents', type=int, default=200)

@@ -102,7 +102,9 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
         }
 
     shared_kwargs.update(gen_kwargs)
-    pred_ids = model.model.generate(**shared_kwargs)
+    model = model.half()
+    with torch.no_grad(), torch.cuda.amp.autocast():
+        pred_ids = model.model.generate(**shared_kwargs)
     pred_str = tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
 
     cand_metrics, best_metric, avg_r1_f1, diversity = model.score_candidates(
@@ -130,7 +132,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu_device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--wandb_name', default='extract_indicators')
-    parser.add_argument('--extract_experiment', default='select_extract_full')
+    parser.add_argument('--extract_experiment', default='gen_extract_full_ar_mask_red_feat')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-do_not_save', default=False, action='store_true')
     parser.add_argument('--hf_model', default='facebook/bart-base')
