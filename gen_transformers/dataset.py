@@ -1,3 +1,4 @@
+import ujson
 import os
 from string import punctuation
 from collections import defaultdict
@@ -19,6 +20,22 @@ from sum_constants import summarization_name_mapping
 
 def remove_stopwords(tokens):
     return [w for w in tokens if not w.lower() in STOPWORDS and w not in punctuation and len(w.strip()) > 0]
+
+
+def get_sent_ngrams(source_annotated):
+    tps = re.split(r'(<s\d+>)', source_annotated)
+    source_sents = []
+    for tp_idx, tp in enumerate(tps):
+        if re.match(r'(<s\d+>)', tp) is not None:
+            source_sents.append(tps[tp_idx + 1].strip())
+
+    num_sents = len(re.findall(r'(<s\d+>)', source_annotated))
+    assert len(source_sents) == num_sents
+    def get_ngrams(sent):
+        toks = list(map(lambda x: x.lower(), sent.split(' ')))
+        return [_get_ngrams(1, toks), _get_ngrams(2, toks), _get_ngrams(3, toks)]
+    source_ngrams = list(map(get_ngrams, source_sents))
+    return source_ngrams
 
 
 class SummaryDataModule(pl.LightningDataModule):
@@ -79,39 +96,38 @@ class SummaryDataModule(pl.LightningDataModule):
 
         brio_candidates = None
         if self.args.add_brio_loss:
-            # if self.args.brio_experiment is None:
-            #     oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
-            #     with open(oracle_fn, 'r') as fd:
-            #         brio_candidates = ujson.load(fd)
-            # else:
-            cand_fn = os.path.join(
-                self.args.data_dir, 'results',
-                self.args.brio_experiment, f'{split}_sample_outputs.csv'
-            )
-            cands = pd.read_csv(cand_fn)
-            brio_candidates = defaultdict(list)
-            dataset_ids = list(split_dataset['id'])
-            for record in cands.to_dict('records'):
-                extract_rouges = np.array(list(map(float, record['extract_rouges'].split(','))))
-                extract_idxs = [[int(x) for x in idx_str.split(',')] for idx_str in record['extract_idx'].split('<cand>')]
+            if self.args.brio_experiment is None:
+                oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
+                with open(oracle_fn, 'r') as fd:
+                    brio_candidates = ujson.load(fd)
+                    n = len(brio_candidates)
+                    brio_candidates = {k: v for k, v in brio_candidates.items() if len(v) >= 2}
+                    filt_n = len(brio_candidates)
+                    print(f'{filt_n}/{n} have more than 1 candidate provided for {split} set')
+            else:
+                cand_fn = os.path.join(
+                    self.args.data_dir, 'results',
+                    self.args.brio_experiment, f'{split}_sample_outputs.csv'
+                )
+                cands = pd.read_csv(cand_fn)
+                brio_candidates = defaultdict(list)
+                dataset_ids = list(split_dataset['id'])
+                for record in cands.to_dict('records'):
+                    extract_rouges = np.array(list(map(float, record['extract_rouges'].split(','))))
+                    extract_idxs = [[int(x) for x in idx_str.split(',')] for idx_str in record['extract_idx'].split('<cand>')]
 
-                assert len(extract_rouges) == len(extract_idxs)
-                num_cand = len(extract_rouges)
-                # TODO REMOVE this once we re-run validation for 4 samples
-                extract_rouges = extract_rouges[:min(num_cand, 4)]
-                extract_idxs = extract_idxs[:min(num_cand, 4)]
+                    assert len(extract_rouges) == len(extract_idxs)
+                    priority = np.argsort(-extract_rouges)
+                    extract_idxs_ordered = [extract_idxs[i] for i in priority]
 
-                priority = np.argsort(-extract_rouges)
-                extract_idxs_ordered = [extract_idxs[i] for i in priority]
+                    # De-Duplicate
+                    extract_idxs_uniq = [
+                        extract_idx for i, extract_idx in enumerate(
+                            extract_idxs_ordered
+                        ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
+                    ]
 
-                # De-Duplicate
-                extract_idxs_uniq = [
-                    extract_idx for i, extract_idx in enumerate(
-                        extract_idxs_ordered
-                    ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
-                ]
-
-                brio_candidates[dataset_ids[record['dataset_idx']]] = extract_idxs_uniq
+                    brio_candidates[dataset_ids[record['dataset_idx']]] = extract_idxs_uniq
             # Filter dataset to only include ones with BRIO candidates generated or "oracled"
             available_keys = set(list(brio_candidates.keys()))
             valid_hf_ids = [i for i, dataset_idx in enumerate(split_dataset['id']) if dataset_idx in available_keys]
@@ -164,21 +180,6 @@ class SummarizationDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def get_sent_ngrams(self, source_annotated):
-        tps = re.split(r'(<s\d+>)', source_annotated)
-        source_sents = []
-        for tp_idx, tp in enumerate(tps):
-            if re.match(r'(<s\d+>)', tp) is not None:
-                source_sents.append(tps[tp_idx + 1].strip())
-
-        num_sents = len(re.findall(r'(<s\d+>)', source_annotated))
-        assert len(source_sents) == num_sents
-        def get_ngrams(sent):
-            toks = list(map(lambda x: x.lower(), sent.split(' ')))
-            return [_get_ngrams(1, toks), _get_ngrams(2, toks), _get_ngrams(3, toks)]
-        source_ngrams = list(map(get_ngrams, source_sents))
-        return source_ngrams
-
     def __getitem__(self, idx):
         example = self.dataset[idx]
         dataset_id = example['id']
@@ -203,19 +204,26 @@ class SummarizationDataset(Dataset):
             'source': source_annotated,
             'oracle_labels': oracle_labels,
             'reference': target,  # Use for evaluation
-            'source_ngrams': self.get_sent_ngrams(source_annotated)
+            'source_ngrams': get_sent_ngrams(source_annotated)
         }
 
         if self.args.add_brio_loss:
             candidates = self.brio_candidates[dataset_id]
-            if len(candidates) == 1:
-                candidates.append(candidates[0])  # Revisit This (why do we have 1 candidate sometimes)
+            for i in range(len(candidates)):
+                if type(candidates[i]) == dict:
+                    if i < len(candidates) - 1:
+                        assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
+                    candidates[i] = list(sorted(candidates[i]['extract_idx']))
 
-            num_cand = len(candidates)
-            max_len = max([len(x) for x in candidates])
-            brio_labels = np.zeros([num_cand, max_len], dtype=np.int64)
-            brio_labels.fill(-100)
-            for cand_idx in range(num_cand):
-                brio_labels[cand_idx, :len(candidates[cand_idx])] = candidates[cand_idx]
+            # Add Gold Label as the 'most positive'
+            candidates.insert(0, oracle_labels)
+
+            # num_cand = len(candidates)
+            # max_len = max([len(x) for x in candidates])
+            # brio_labels = np.zeros([num_cand, max_len], dtype=np.int64)
+            # brio_labels.fill(-100)
+            # for cand_idx in range(num_cand):
+            #     brio_labels[cand_idx, :len(candidates[cand_idx])] = candidates[cand_idx]
+            brio_labels = candidates
             row['brio_labels'] = brio_labels
         return row

@@ -69,7 +69,7 @@ if __name__ == '__main__':
     parser.add_argument('-extract_indicators', default=False, action='store_true')
     parser.add_argument(
         '--summary_style',
-        default='extract_abstract',
+        default='extract',
         choices=[
             'extract_abstract',
             'abstract',

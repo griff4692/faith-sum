@@ -44,12 +44,13 @@ def run(args):
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
-    if args.add_brio_loss and args.pretrained_path is None:
-        brio_experiment_dir = os.path.join(args.weight_dir, args.brio_experiment)
-        from glob import glob
-        fns = list(glob(os.path.join(brio_experiment_dir, 'faith_sum', '*', 'checkpoints', '*.ckpt')))
-        assert len(fns) == 1
-        args.pretrained_path = fns[0]
+    # DON'T use pre-trained model for BRIO
+    # if args.add_brio_loss and args.pretrained_path is None:
+    #     brio_experiment_dir = os.path.join(args.weight_dir, args.brio_experiment)
+    #     from glob import glob
+    #     fns = list(glob(os.path.join(brio_experiment_dir, 'faith_sum', '*', 'checkpoints', '*.ckpt')))
+    #     assert len(fns) == 1
+    #     args.pretrained_path = fns[0]
 
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
     if not args.debug:
@@ -75,7 +76,10 @@ def run(args):
         model.hparams.extract_indicators = args.extract_indicators
         model.hparams.brio_margin = args.brio_margin
         model.hparams.brio_loss_coef = args.brio_loss_coef
-        val_check_interval = 0.5  # Depending on what you're doing you should change this
+
+    # if args.add_brio_loss:
+    #     val_check_interval = 0.05  # Depending on what you're doing you should change this
+
     datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 
     logger = pl_loggers.WandbLogger(
@@ -86,7 +90,7 @@ def run(args):
         entity='griffinadams',
     )
 
-    monitor_metric = 'val_combined'
+    monitor_metric = 'validation/combined'
     mode = 'min'
     checkpoint_callback = ModelCheckpoint(
         monitor=monitor_metric,
@@ -152,8 +156,11 @@ if __name__ == '__main__':
     parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)
     parser.add_argument('-add_brio_loss', default=False, action='store_true')
     parser.add_argument('--brio_margin', default=0.001, type=float)
-    parser.add_argument('--brio_loss_coef', default=0.1, type=float)
-    parser.add_argument('--brio_experiment', default='gen_extract_full_ar_mask_red_feat')
+    parser.add_argument('--brio_weight', default=1, type=float)
+    parser.add_argument('--mle_weight', default=1, type=float)
+    parser.add_argument('--brio_experiment', default=None)  #'gen_extract_full_ar_mask_red_feat')
+    parser.add_argument('--brio_length_penalty', default=1.0, type=float)
+    parser.add_argument('--brio_scale', default=1.0, type=float)
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4

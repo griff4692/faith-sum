@@ -80,7 +80,7 @@ class TransformerSummarizer(pl.LightningModule):
             if self.hparams.extract_method == 'generate':
                 extract_loss, extracts, brio_info = self.generate_extracts(batch, source, encoder_h)
                 if brio_info is not None:
-                    return_loss += self.hparams.brio_loss_coef * brio_info['margin_loss']
+                    return_loss += self.hparams.brio_weight * brio_info['margin_loss']
                     metrics['sent_brio'] = brio_info['margin_loss']
                     metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
                     metrics['brio_rank'] = brio_info['brio_rank']
@@ -89,7 +89,7 @@ class TransformerSummarizer(pl.LightningModule):
                 assert self.hparams.extract_method == 'select'
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
             metrics['extract'] = extract_loss
-            return_loss += extract_loss
+            return_loss += self.hparams.mle_weight * extract_loss
 
         # score is just extraction (no word-level generation)
         if 'abstract' in self.hparams.summary_style:
@@ -114,7 +114,7 @@ class TransformerSummarizer(pl.LightningModule):
         shared_output = self.shared_step(batch, source=None, build_extracts=False)  # Don't generate extracts
         metrics, return_loss = shared_output['metrics'], shared_output['return_loss']
         metrics['combined'] = return_loss
-        self.log_metrics(metrics, is_train=True, prefix='train_')
+        self.log_metrics(metrics, is_train=True)
         return return_loss
 
     def score_extracts(self, batch, source, encoder_h, build=True):
@@ -143,7 +143,7 @@ class TransformerSummarizer(pl.LightningModule):
         shared_output = self.shared_step(batch, source=source, build_extracts=True)
         metrics, return_loss, extracts = shared_output['metrics'], shared_output['return_loss'], shared_output['extracts']
         metrics['combined'] = return_loss
-        self.log_metrics(metrics, is_train=False, prefix='val_')
+        self.log_metrics(metrics, is_train=False)
         extract_outputs = [None for _ in range(batch_size)]
         if extracts is not None:
             for batch_idx in range(batch_size):
@@ -202,7 +202,7 @@ class TransformerSummarizer(pl.LightningModule):
                 self.compute_rouge(extracts, output_dict['abstracts'], prefix='extract_gen_')
             )
 
-        self.log_metrics(eval_metrics, is_train=False, prefix='')
+        self.log_metrics(eval_metrics, is_train=False)
         return return_loss
 
     def predict_step(self, batch, batch_idx=None, **gen_kwargs):
@@ -276,6 +276,14 @@ class TransformerSummarizer(pl.LightningModule):
             ):
                 dist_flat = '<cand>'.join([','.join(list(map(str, x['sent_dist']))) for x in gen_output['extracts']])
                 save_out['sent_scores'] = dist_flat
+
+            if (
+                    gen_output['extracts'] is not None
+                    and len(gen_output['extracts']) > 0
+                    and 'beam_score' in gen_output['extracts'][0]
+            ):
+                dist_flat = ','.join([str(x['beam_score']) for x in gen_output['extracts']])
+                save_out['extract_beam_scores'] = dist_flat
 
             if from_oracle_metrics is not None:
                 save_out.update(from_oracle_metrics[batch_idx])
@@ -446,19 +454,21 @@ class TransformerSummarizer(pl.LightningModule):
             shared_kwargs = {
                 'inputs_embeds': inputs_embeds,
                 'eos_token_id': seq_len,
-                'min_length': 4,  # 3 without the special token
+                'min_length': 4,  # 2 without the special token
                 'max_length': 10,
                 'early_stopping': True,
-                'num_return_sequences': num_return_sequences
+                'num_return_sequences': num_return_sequences,
+                'output_scores': True,
+                'return_dict_in_generate': True,
             }
             beam_kwargs = {
                 'num_beams': 4,
             }
 
             sample_kwargs = {
-                'num_beam_groups': num_return_sequences,
+                # 'num_beam_groups': num_return_sequences,
                 'num_beams': num_return_sequences,
-                'diversity_penalty': diversity_penalty,
+                # 'diversity_penalty': diversity_penalty,
             }
 
             if num_return_sequences == 1:
@@ -466,12 +476,16 @@ class TransformerSummarizer(pl.LightningModule):
             else:
                 shared_kwargs.update(sample_kwargs)
 
-            pred_ids = self.generate_with_sent_bart(source_ngrams=source_ngrams[batch_idx], **shared_kwargs)
+            outputs = self.generate_with_sent_bart(source_ngrams=source_ngrams[batch_idx], **shared_kwargs)
+            beam_scores = outputs.sequences_scores.cpu().numpy().tolist()
+            pred_ids = outputs.sequences
             raw_predictions.append(pred_ids)
             return_obj = []
-            for summary_idx in pred_ids.tolist():
+            for pred_idx, summary_idx in enumerate(pred_ids.tolist()):
                 summary_idx_no_special = self.remove_special_tokens_from_sent_bart(summary_idx, seq_len)
-                return_obj.append(self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special))
+                summary_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
+                summary_obj['beam_score'] = beam_scores[pred_idx]
+                return_obj.append(summary_obj)
             extractive_summaries.append(return_obj)
         return extractive_summaries, raw_predictions
 
@@ -496,7 +510,8 @@ class TransformerSummarizer(pl.LightningModule):
             for batch_idx in range(len(cls_mask)):
                 sent_labels = brio_labels[batch_idx]
                 margin_loss, pos_neg_gap, pred_idx, win_frac = self.brio_step(
-                    sent_labels, sent_encoder_h[batch_idx], source_ngrams[batch_idx], scores=None
+                    sent_labels, sent_encoder_h[batch_idx], source_ngrams[batch_idx],
+                    eos_token_id=cls_mask[batch_idx].sum().item(), scores=None
                 )
                 if margin_loss is not None:
                     margin_losses.append(margin_loss)
@@ -506,7 +521,7 @@ class TransformerSummarizer(pl.LightningModule):
                 if win_frac is not None:
                     win_fracs.append(win_frac)
             # Sum in the BRIO paper, was previously mean for us
-            margin_losses = torch.stack(margin_losses).sum()
+            margin_losses = torch.stack(margin_losses).mean()
             pos_neg_gaps = np.mean(pos_neg_gaps)
             brio_ranks = np.mean(brio_ranks)
             win_fracs = np.mean(win_fracs)
@@ -549,9 +564,23 @@ class TransformerSummarizer(pl.LightningModule):
         return_obj['sent_dist'] = y_hat
         return return_obj
 
-    def brio_step(self, cand_labels, sent_encoder_h, source_ngrams, scores=None):
-        num_cand, target_len = cand_labels.size()
+    def brio_step(self, cand_labels, sent_encoder_h, source_ngrams, eos_token_id, scores=None):
+        # Add EOS token to cand_labels and convert to LongTensor
+        cand_labels_eos = []
+        for cand_label in cand_labels:
+            cand_labels_eos.append(list(cand_label) + [eos_token_id])
+
+        num_cand = len(cand_labels_eos)
+        max_len = max([len(x) for x in cand_labels_eos])
+        brio_labels = np.zeros([num_cand, max_len], dtype=np.int64)
+        brio_labels.fill(-100)
+        for cand_idx in range(num_cand):
+            brio_labels[cand_idx, :len(cand_labels_eos[cand_idx])] = cand_labels_eos[cand_idx]
+        brio_labels = torch.from_numpy(brio_labels).to(self.device)
+
+        num_cand, target_len = brio_labels.size()
         encoder_len = sent_encoder_h.size()[1]
+        assert eos_token_id == encoder_len - 1
         if num_cand < 2:
             print(f'{num_cand} BRIO candidates provided')
             return None, None, None, None
@@ -559,15 +588,19 @@ class TransformerSummarizer(pl.LightningModule):
         encoder_outputs = sent_encoder_h.repeat(num_cand, 1, 1).contiguous().clone()
         inputs = {
             'encoder_outputs': [encoder_outputs],
-            'labels': cand_labels,
+            'labels': brio_labels,
         }
 
         self.sent_bart.source_ngrams_cache = source_ngrams
-        contrast_outputs = self.sent_bart(**inputs, calculate_loss=False, use_cache=False)
+
+        contrast_outputs = self.sent_bart(
+            **inputs, calculate_loss=False, use_cache=False,
+        )
+
         loss_fct = nn.CrossEntropyLoss(reduction='none')
-        nll = loss_fct(contrast_outputs.logits.view(-1, encoder_len), cand_labels.view(-1)).view(num_cand, target_len)
-        seq_lens = (cand_labels > -100).sum(dim=1)
-        scores = - nll.sum(dim=1) / seq_lens
+        nll = loss_fct(contrast_outputs.logits.view(-1, encoder_len), brio_labels.view(-1)).view(num_cand, target_len)
+        seq_lens = (brio_labels > -100).sum(dim=1) ** self.hparams.brio_length_penalty
+        scores = (- nll.sum(dim=1) / seq_lens) * self.hparams.brio_scale
 
         contrast_loss = 0
         wins, losses = 0, 0
@@ -883,8 +916,8 @@ class TransformerSummarizer(pl.LightningModule):
         no_decay = ['bias', 'LayerNorm.weight']
         nps = list(self.named_parameters())
 
-        ext_embed = [(n, p) for n, p in nps if 'extract_indicator_embeddings' in n]
-        nps = [(n, p) for n, p in nps if 'extract_indicator_embeddings' not in n]
+        ext_embed = [(n, p) for n, p in nps if 'extract_indicator_embeddings' in n]  # or 'contrast_projection' in n]
+        nps = [(n, p) for n, p in nps if 'extract_indicator_embeddings' not in n]  #  and 'contrast_projection' not in n]
 
         grouped_parameters = [
             {
@@ -928,6 +961,9 @@ class TransformerSummarizer(pl.LightningModule):
         items.pop('v_num', None)
         return items
 
-    def log_metrics(self, metrics, is_train, prefix=''):
+    def log_metrics(self, metrics, is_train):
         for k, v in metrics.items():
-            self.log(f'{prefix}{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)
+            split_str = 'train' if is_train else 'validation'
+            if is_train:
+                self.log(f'{split_str}_{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)
+            self.log(f'{split_str}/{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)

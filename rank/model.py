@@ -4,6 +4,7 @@ import pytorch_lightning as pl
 import torch.nn as nn
 import numpy as np
 import torch
+from scipy.stats import pearsonr
 from transformers import RobertaForSequenceClassification, AutoConfig
 from transformers.optimization import get_linear_schedule_with_warmup
 
@@ -48,7 +49,13 @@ class SummaryRanker(pl.LightningModule):
         pred_scores = np.array([scores[batch_idx][argmax_logits[batch_idx].item()] for batch_idx in range(batch_size)])
         pred_scores_mean = np.mean(pred_scores)
 
+        corels = []
+        for batch_idx in range(batch_size):
+            corels.append(pearsonr(scores[batch_idx], pred_dist[batch_idx].detach().cpu().numpy())[0])
+        avg_corel = np.mean(corels)
+
         self.log(f'{split}/loss', loss, on_step=is_train, on_epoch=not is_train, prog_bar=True)
+        self.log(f'{split}/corel', avg_corel, on_step=is_train, on_epoch=not is_train, prog_bar=True)
         self.log(f'{split}/expected_rouge', expected_rouge, on_step=is_train, on_epoch=not is_train, prog_bar=True)
         self.log(f'{split}/score', pred_scores_mean, on_step=is_train, on_epoch=not is_train, prog_bar=True)
         return -expected_rouge
@@ -72,7 +79,6 @@ class SummaryRanker(pl.LightningModule):
             logits = logits.view(batch_size, num_candidates)
             pred_dist = torch.softmax(logits, dim=1).cpu().numpy()
             return dataset_idx, pred_dist
-
 
     def configure_optimizers(self):
         nps = list(self.named_parameters())

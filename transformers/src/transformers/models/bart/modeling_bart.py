@@ -1737,7 +1737,7 @@ class BartForConditionalCopy(BartPretrainedModel):
                 for dec_step in range(1, dec_steps):  # First step is the start token
                     # These are the previously predicted sentences
                     prev_pred_id = decoder_input_ids[beam, 1: dec_step + 1]
-                    prev_ngrams = [source_ngrams[pred_id] for pred_id in prev_pred_id]
+                    prev_ngrams = [source_ngrams[pred_id] for pred_id in prev_pred_id if pred_id < len(source_ngrams)]
                     self.populate_red_feats(
                         red_feats, prev_ngrams, source_ngrams, beam=beam, dec_step=dec_step, enc_steps=enc_steps
                     )

@@ -55,12 +55,12 @@ class RankCollate:
     def __call__(self, batch_list):
         # tokenize the inputs and labels
         batch_size = len(batch_list)
-        # abstracts_flat = list(itertools.chain(*[x['abstracts'] for x in batch_list]))
+        extracts_flat = list(itertools.chain(*[x['extracts'] for x in batch_list]))
         extract_idxs_flat = list(itertools.chain(*[x['extract_idxs'] for x in batch_list]))
         num_cands = len(batch_list[0]['extract_idxs'])
         sources_flat = list(itertools.chain(*[[x['source']] * num_cands for x in batch_list]))
         batch_inputs = self.tokenizer(
-            # abstracts_flat,
+            extracts_flat,
             sources_flat,
             padding='longest',
             truncation=True,
@@ -183,7 +183,6 @@ class RankDataset(Dataset):
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
         self.ids2oracles = ids2oracles
         self.rouge_metric = RougeMetric()
-        self.num_candidates = 17
 
     def __len__(self):
         return len(self.dataset)
@@ -197,7 +196,7 @@ class RankDataset(Dataset):
         num_source_toks = len(source_toks)
         extract_toks = ' '.join(extract).split(' ')
         num_extract_toks = len(extract_toks)
-        token_frac = num_extract_toks  / num_source_toks
+        token_frac = num_extract_toks / num_source_toks
         average_pos = np.mean(extract_idxs) / len(source_sents)
         return [
             beam_frac,
@@ -226,6 +225,12 @@ class RankDataset(Dataset):
             source_sents[i + 1].strip() for i in range(len(source_sents))
             if re.match(r'<s\d+>', source_sents[i]) is not None
         ]
+
+        cand_extracts_ordered = []
+        for extract_idxs in cand_extract_idx_ordered:
+            extract_sents = [source_sents[extract_idx] for extract_idx in sorted(extract_idxs)]
+            cand_extracts_ordered.append(' '.join(extract_sents))
+
         for cand_idx in range(n):
             extract_idxs = cand_extract_idx_ordered[cand_idx]
             beam_idx = beam_priority[cand_idx]
@@ -236,6 +241,7 @@ class RankDataset(Dataset):
             'source': source,
             'features': features,
             'extract_idxs': cand_extract_idx_ordered,
+            'extracts': cand_extracts_ordered,
             'scores': cand_extract_rouges_ordered,
             'dataset_idx': example['dataset_idx']
         }

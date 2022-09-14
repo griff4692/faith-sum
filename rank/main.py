@@ -4,11 +4,12 @@ os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 
 import argparse
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.plugins import DDPPlugin
 import torch
 from transformers import AutoTokenizer
+
 from global_utils import get_free_gpus, set_same_seed
 from rank.dataset import RankDataModule
 from rank.model import SummaryRanker
@@ -115,6 +116,7 @@ if __name__ == '__main__':
     parser.add_argument('-find_lr', default=False, action='store_true')
     # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
+    parser.add_argument('--summary_style', default='extract', choices=['extract', 'abstract', 'from_extract'])
 
     # Hyper-parameters
     parser.add_argument('--lr', type=float, default=1e-5)

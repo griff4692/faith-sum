@@ -37,28 +37,9 @@ def compute_rouge(generated, gold, rouge_metric, prefix=''):
     return stats
 
 
-def get_alignments(source_toks, summary, nlp):
-    sum_sents = convert_to_sents(summary, nlp)
-    sum_sents_tok = [[str(token.text) for token in sentence] for sentence in sum_sents]
-    aligned_sents = list(map(lambda x: gain_selection(source_toks, [x], 3, lower=False, sort=False)[0], sum_sents_tok))
-    aligned_sents_flat = list(set(list(itertools.chain(*aligned_sents))))
-    return aligned_sents, aligned_sents_flat
-
-
 def get_idx(idx_str):
     idxs = idx_str.split(',')
     return list(map(int, idxs))
-
-
-def get_priority(source_toks, summary, nlp):
-    sum_sents = convert_to_sents(summary, nlp)
-    sum_sents_tok = [[str(token.text) for token in sentence] for sentence in sum_sents]
-    gs = gain_selection(source_toks, sum_sents_tok, summary_size=0)
-    sent_r1s = list(map(lambda x: float(x), gs[2].split(',')))
-    sent_r2s = list(map(lambda x: float(x), gs[3].split(',')))
-    assert len(sent_r1s) == len(source_toks)
-    avg_rs = np.array([(a + b) / 2.0 for (a, b) in zip(sent_r1s, sent_r2s)])
-    return np.argsort(- avg_rs), avg_rs
 
 
 def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_min, num_return_sequences=1):
@@ -126,6 +107,17 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
     }
 
 
+def get_extract_idxs_from_str(extract_str):
+    if len(extract_str) == 0:
+        print('Empty Prediction. Predicting first sentence.')
+        return [0]
+    try:
+        return list(map(int, extract_str.split(',')))
+    except:
+        print('Parse Error. Predicting first sentence.')
+        return [0]
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Generate From Extract')
 
@@ -139,6 +131,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_examples', default=999999, type=int)
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--extract_mode', default='sample', choices=['sample', 'beam'])
+    parser.add_argument('--top_k', default=None, type=int)
     parser.add_argument('--num_return_sequences', default=1, type=int)
     parser.add_argument('--split', default='validation')
 
@@ -151,7 +144,6 @@ if __name__ == '__main__':
     if n > args.max_examples:
         outputs = outputs.sample(n=args.max_examples, replace=False, random_state=111)
         n = len(outputs)
-    nlp = spacy.load('en_core_web_sm')
 
     data_dir = os.path.join(args.data_dir, args.dataset)
     dataset = load_from_disk(data_dir)[args.split]
@@ -184,7 +176,9 @@ if __name__ == '__main__':
         # Get source tokens
         reference = record['reference']
 
-        extract_idx = [list(map(int, x.split(','))) for x in record['extract_idx'].split('<cand>')]
+        extract_idx = [get_extract_idxs_from_str(x) for x in record['extract_idx'].split('<cand>')]
+        if args.top_k is not None and args.top_k < len(extract_idx):
+            extract_idx = extract_idx[:args.top_k]
         gen_output = gen_from_guide(
             model, tokenizer, source_annotated, extract_idx, special_id_min,
             num_return_sequences=args.num_return_sequences
@@ -222,6 +216,7 @@ if __name__ == '__main__':
 
     updated_df = pd.DataFrame(updated_records)
     if not args.do_not_save:
+        top_k_str = '' if args.top_k is None else f'_{args.top_k}'
         updated_out_fn = os.path.join(results_dir, f'{args.split}_from_{args.extract_mode}_extract.csv')
         print(f'Saving prompted abstracts to {updated_out_fn}')
         updated_df.to_csv(updated_out_fn, index=False)

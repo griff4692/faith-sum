@@ -76,6 +76,7 @@ class RobertaEmbeddings(nn.Module):
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
 
+        self.extract_indicator_embeddings = None
         if config.extract_indicators:
             self.extract_indicator_embeddings = nn.Embedding(2, config.hidden_size, padding_idx=0)
 
@@ -137,7 +138,7 @@ class RobertaEmbeddings(nn.Module):
             position_embeddings = self.position_embeddings(position_ids)
             embeddings += position_embeddings
 
-        if extract_indicators is not None:
+        if extract_indicators is not None and self.extract_indicator_embeddings is not None:
             extract_embeds = self.extract_indicator_embeddings(extract_indicators)
             embeddings += extract_embeds
 

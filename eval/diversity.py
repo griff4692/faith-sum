@@ -33,7 +33,8 @@ if __name__ == '__main__':
     results_dir = os.path.join(args.data_dir, 'results', args.experiment)
     in_fn = os.path.join(results_dir, args.fn + '.csv')
     data_df = pd.read_csv(in_fn)
-    candidates = data_df[args.candidate_column].tolist()
+    candidates = data_df[args.candidate_column].dropna().tolist()
+    print(candidates[0])
 
     scores = []
     for candidate_set in tqdm(candidates):
