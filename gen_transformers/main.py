@@ -44,14 +44,6 @@ def run(args):
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
-    # DON'T use pre-trained model for BRIO
-    # if args.add_brio_loss and args.pretrained_path is None:
-    #     brio_experiment_dir = os.path.join(args.weight_dir, args.brio_experiment)
-    #     from glob import glob
-    #     fns = list(glob(os.path.join(brio_experiment_dir, 'faith_sum', '*', 'checkpoints', '*.ckpt')))
-    #     assert len(fns) == 1
-    #     args.pretrained_path = fns[0]
-
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
     if not args.debug:
         tokenizer.save_pretrained(tokenizer_dir)
@@ -77,8 +69,8 @@ def run(args):
         model.hparams.brio_margin = args.brio_margin
         model.hparams.brio_loss_coef = args.brio_loss_coef
 
-    # if args.add_brio_loss:
-    #     val_check_interval = 0.05  # Depending on what you're doing you should change this
+    if args.add_brio_loss:
+        val_check_interval = 0.1
 
     datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 
@@ -153,17 +145,19 @@ if __name__ == '__main__':
     # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
     parser.add_argument('-extract_indicators', default=False, action='store_true')
-    parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)
+    parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)  # TODO try with dropout
     parser.add_argument('-add_brio_loss', default=False, action='store_true')
     parser.add_argument('--brio_margin', default=0.001, type=float)
     parser.add_argument('--brio_weight', default=1, type=float)
     parser.add_argument('--mle_weight', default=1, type=float)
-    parser.add_argument('--brio_experiment', default=None)  #'gen_extract_full_ar_mask_red_feat')
+    parser.add_argument('--brio_experiment', default='gen_extract_full_ar_mask_red_feat')
     parser.add_argument('--brio_length_penalty', default=1.0, type=float)
     parser.add_argument('--brio_scale', default=1.0, type=float)
+    parser.add_argument('--brio_score_mode', default='score', choices=['score', 'likelihood', 'similarity'])
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4
+    parser.add_argument('--high_lr', type=float, default=1e-3)  # For newly initialized parameters
     parser.add_argument('--weight_decay', type=float, default=5e-5)
     # Gradient accumulation will adjust for the ratio between target_batch_size and per_device_train_bs
     parser.add_argument('--target_batch_size', type=int, default=16)
@@ -176,7 +170,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--train_frac', type=float, default=1.0)
-    parser.add_argument('--extract_method', type=str, default='select', choices=['generate', 'select'])
+    parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
     parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
@@ -189,7 +183,7 @@ if __name__ == '__main__':
     # Task-specific / Project-specific parameters
     parser.add_argument(
         '--summary_style',
-        default='extract_abstract',
+        default='extract',
         choices=[
             'extract_abstract',
             'abstract',

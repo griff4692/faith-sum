@@ -67,6 +67,7 @@ if __name__ == '__main__':
     parser.add_argument('--bootstraps', default=1, type=int)
     parser.add_argument('-add_brio_loss', default=False, action='store_true')
     parser.add_argument('-extract_indicators', default=False, action='store_true')
+    parser.add_argument('-add_doc_token', default=False, action='store_true')
     parser.add_argument(
         '--summary_style',
         default='extract',

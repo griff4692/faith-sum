@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 import torch.nn as nn
 import numpy as np
 import torch
-from scipy.stats import pearsonr
+from scipy.stats import spearmanr
 from transformers import RobertaForSequenceClassification, AutoConfig
 from transformers.optimization import get_linear_schedule_with_warmup
 
@@ -51,14 +51,14 @@ class SummaryRanker(pl.LightningModule):
 
         corels = []
         for batch_idx in range(batch_size):
-            corels.append(pearsonr(scores[batch_idx], pred_dist[batch_idx].detach().cpu().numpy())[0])
+            corels.append(spearmanr(scores[batch_idx], pred_dist[batch_idx].detach().cpu().numpy())[0])
         avg_corel = np.mean(corels)
 
         self.log(f'{split}/loss', loss, on_step=is_train, on_epoch=not is_train, prog_bar=True)
         self.log(f'{split}/corel', avg_corel, on_step=is_train, on_epoch=not is_train, prog_bar=True)
         self.log(f'{split}/expected_rouge', expected_rouge, on_step=is_train, on_epoch=not is_train, prog_bar=True)
         self.log(f'{split}/score', pred_scores_mean, on_step=is_train, on_epoch=not is_train, prog_bar=True)
-        return -expected_rouge
+        return loss  # -expected_rouge
 
     def training_step(self, batch, batch_idx):
         return self.shared_step(batch, split='train')

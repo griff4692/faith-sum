@@ -7,6 +7,8 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 import argparse
 import numpy as np
 import pandas as pd
+import torch.nn as nn
+from scipy.stats import spearmanr
 from tqdm import tqdm
 from datasets import load_from_disk
 from gen_transformers.dataset import get_sent_ngrams
@@ -26,12 +28,13 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--gpu_device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--wandb_name', default='brio_just_rank')
+    parser.add_argument('--wandb_name', default='brio_score_w_doc')
     parser.add_argument('--rank_experiment', default='gen_extract_full_ar_mask_red_feat')
     # How many processes to use when loading batches on CPU
     parser.add_argument('--split', default='validation')
     parser.add_argument('--hf_model', default='facebook/bart-base')
     parser.add_argument('--max_examples', default=999999, type=int)
+    parser.add_argument('--score_mode', default='score')
 
     # Hyper-parameters: Should be the same as used when training
     parser.add_argument('--max_input_length', type=int, default=512)
@@ -70,43 +73,73 @@ if __name__ == '__main__':
     all_input_ids = dataset['input_ids']
     records = outputs.to_dict('records')
     special_id_min = min(tokenizer.additional_special_tokens_ids)
+    corels = []
+    top_ranks = []
+    pred_rouges = []
+    first_rouges = []
 
     for record in tqdm(records, total=len(records)):
-        # sent_scores = np.array(list(map(float, record['sent_scores'].split(','))))
         source_annotated = all_source_annotated[record['dataset_idx']]
         source_ngrams = get_sent_ngrams(source_annotated)
         input_ids = all_input_ids[record['dataset_idx']]
         # Get source tokens
         reference = record['reference']
-
-        # cls_mask = input_ids >
+        extract_rouges = np.array([float(x) for x in record['extract_rouges'].split(',')])
         extract_idx = [get_extract_idxs_from_str(x) for x in record['extract_idx'].split('<cand>')]
 
         encoder_inputs = {
             'input_ids': torch.LongTensor(input_ids).to(args.gpu_device).unsqueeze(0)
         }
-        encoder_outputs = model.get_encoder_h(encoder_inputs)
+        with torch.no_grad():
+            encoder_outputs = model.get_encoder_h(encoder_inputs)
         encoder_h = encoder_outputs.last_hidden_state
         cls_mask = encoder_inputs['input_ids'] >= special_id_min
+        cls_mask[:, 0] = True  # Doc Token
+
         cls_h = encoder_h[cls_mask].unsqueeze(0)
-        seq_len = cls_h.size()[1]
-
-        extract_rouges = [float(x) for x in record['extract_rouges'].split(',')]
-
         num_cand = len(extract_idx)
-        for i in range(num_cand):
-            extract_idx[i].append(seq_len)
 
-        max_len = max([len(x) for x in extract_idx])
+        eos_token_id = cls_h.size()[1] - 1  # Decrement the document token
+        if args.score_mode == 'likelihood':
+            # Add 'dynamic' eos token id to end of sequences
+            for i in range(num_cand):
+                extract_idx[i].append(eos_token_id)
 
-        brio_labels = np.zeros([num_cand, max_len], dtype=np.int64)
-        brio_labels.fill(-100)
-        for cand_idx in range(num_cand):
-            num = len(extract_idx[cand_idx])
-            brio_labels[cand_idx, :num] = extract_idx[cand_idx]
-        brio_labels = torch.from_numpy(brio_labels).to(args.gpu_device)
+            max_len = max([len(x) for x in extract_idx])
+
+            brio_labels = np.zeros([num_cand, max_len], dtype=np.int64)
+            brio_labels.fill(-100)
+            for cand_idx in range(num_cand):
+                num = len(extract_idx[cand_idx])
+                brio_labels[cand_idx, :num] = extract_idx[cand_idx]
+            brio_labels = torch.from_numpy(brio_labels).to(args.gpu_device)
+            model.sent_bart.source_ngrams_cache = source_ngrams
+        else:
+            brio_labels = None  # Encoder-only
 
         stop_input_id = torch.LongTensor([0]).to(args.gpu_device)
-        inputs_embeds = torch.cat([cls_h, model.stop_embed(stop_input_id).unsqueeze(0)], dim=1).repeat(num_cand, 1, 1)
-        model.sent_bart.source_ngrams_cache = source_ngrams
-        output = model.sent_bart(inputs_embeds=inputs_embeds, calculate_loss=False, labels=brio_labels)
+        inputs_embeds = torch.cat([cls_h, model.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
+        if args.score_mode == 'likelihood':
+            inputs_embeds = inputs_embeds.repeat(num_cand, 1, 1)
+            contrast_outputs = model.sent_bart(inputs_embeds=inputs_embeds, calculate_loss=False, labels=brio_labels)
+            loss_fct = nn.CrossEntropyLoss(reduction='none')
+            nll = loss_fct(contrast_outputs.logits.view(-1, eos_token_id), brio_labels.view(-1)).view(num_cand, -1)
+            seq_lens = (brio_labels > -100).sum(dim=1) ** args.brio_length_penalty
+            scores = (- nll.sum(dim=1) / seq_lens).detach().cpu().numpy().tolist()
+        else:
+            with torch.no_grad():
+                encoder_h = model.sent_bart.model.encoder(inputs_embeds=inputs_embeds)[0][0]
+            encoder_sent = encoder_h[1:, :]
+            pooled_extract = torch.stack([encoder_sent[x].mean(dim=0) for x in extract_idx])
+            encoder_doc_rep = encoder_h[:1, :].repeat(len(pooled_extract), 1)
+            pooled = torch.cat([encoder_doc_rep, pooled_extract], dim=1)
+            scores = model.sent_bart.calibration_classifier(pooled).squeeze(1).detach().cpu().numpy().tolist()
+
+        corels.append(spearmanr(scores, extract_rouges)[0])
+        pred_priority = np.argsort(-np.array(scores))
+        pred_ordered_rouges = [extract_rouges[pred_idx] for pred_idx in pred_priority]
+        top_ranks.append(int(np.argmax(pred_ordered_rouges)) + 1)
+        pred_rouges.append(pred_ordered_rouges[0])
+        first_rouges.append(extract_rouges[0])
+
+        print(np.mean(corels), np.mean(top_ranks), np.mean(pred_rouges), np.mean(first_rouges))

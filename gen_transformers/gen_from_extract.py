@@ -168,7 +168,7 @@ if __name__ == '__main__':
     df = []
     updated_records = []
     stats = []
-    wins, losses = 0, 0
+    wins, losses, ties = 0, 0, 0
     compare_col = 'best_extract_rouge1_f1' if args.extract_mode == 'sample' else 'extract_rouge1_f1'
     for record in tqdm(records, total=len(records)):
         # sent_scores = np.array(list(map(float, record['sent_scores'].split(','))))
@@ -195,6 +195,7 @@ if __name__ == '__main__':
             more = {
                 'avg_extract_rouge1_f1': record['avg_extract_rouge1_f1'],
                 'avg_from_extract_rouge1_f1': gen_output['avg_from_extract_rouge1_f1'],
+                'min_from_extract_rouge1_f1': gen_output['min_from_extract_rouge1_f1'],
                 'diversity': gen_output['diversity']
             }
             stat_row.update(more)
@@ -202,12 +203,17 @@ if __name__ == '__main__':
 
         if gen_output['best_from_extract_rouge1_f1'] >= record[compare_col]:
             wins += 1
+            gen_output['abstract_win'] = 1
+        elif gen_output['best_from_extract_rouge1_f1'] == record[compare_col]:
+            ties += 1
+            gen_output['abstract_win'] = 0  # Treat as a loss for lower-bound
         else:
             losses += 1
+            gen_output['abstract_win'] = 0
         gen_output['best_ensemble_rouge1_f1'] = best_ensemble_rouge1_f1
         record.update(gen_output)
         updated_records.append(record)
-        print(f'Abstract Wins: {wins}. Losses: {losses}.')
+        print(f'Abstract Wins: {wins}. Losses: {losses}. Ties: {ties}')
     stats = pd.DataFrame(stats)
     avgs = {k: stats[k].mean() for k in stats.columns}
     print(avgs)
@@ -231,3 +237,5 @@ if __name__ == '__main__':
     print(f'Average Extract Tokens: {extract_tok_len}')
     print(f'Average From Extract Abstract Tokens: {from_extract_tok_len}')
     print(f'Average Reference Tokens: {ref_tok_len}')
+    avg_win = updated_df['abstract_win'].mean() / len(updated_df)
+    print(f'Fraction of From Extract Wins over Extract: {avg_win}')

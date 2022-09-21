@@ -1578,6 +1578,15 @@ class BartForConditionalCopy(BartPretrainedModel):
             1,
             config.classifier_dropout,
         )
+        self.calibration_classifier = BartClassificationHead(
+            config.d_model * 2,
+            config.d_model,
+            1,
+            config.classifier_dropout,
+        )
+        self.model._init_weights(self.calibration_classifier.dense)
+        self.model._init_weights(self.calibration_classifier.out_proj)
+
         self.model._init_weights(self.cand_classifier.dense)
         self.model._init_weights(self.cand_classifier.out_proj)
 
@@ -1709,6 +1718,9 @@ class BartForConditionalCopy(BartPretrainedModel):
 
         encoder_h = outputs.encoder_last_hidden_state
         decoder_h = outputs.last_hidden_state
+
+        # encoder_h_doc = encoder_h[:, 0]
+        encoder_h = encoder_h[:, 1:]  # Shift it over to the right by one
 
         dec_steps = decoder_h.size()[1]
         enc_steps = encoder_h.size()[1]

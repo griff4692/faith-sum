@@ -11,6 +11,7 @@ import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
 STOPWORDS = set(stopwords.words('english'))
+from tqdm import tqdm
 
 from datasets import load_dataset, load_from_disk
 from gen_transformers.data_utils import Seq2SeqCollate
@@ -49,7 +50,7 @@ class SummaryDataModule(pl.LightningDataModule):
         else:
             self.dataset = load_dataset(args.dataset)
         self.tokenizer = tokenizer
-        self.num_workers = 0  # 0 if args.debug else 4
+        self.num_workers = 0 if args.debug else 8
         self.nlp = spacy.load('en_core_web_sm')
 
     def get_inverse_train_split(self, split, train_frac, max_examples=None, **dataloader_kwargs):
@@ -70,7 +71,7 @@ class SummaryDataModule(pl.LightningDataModule):
         print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
         split_dataset = split_dataset.select(idxs)
 
-        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split)
+        split_dataset_pl = SummarizationDataset(self.args, split_dataset, self.tokenizer, split)
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
@@ -109,16 +110,24 @@ class SummaryDataModule(pl.LightningDataModule):
                     self.args.data_dir, 'results',
                     self.args.brio_experiment, f'{split}_sample_outputs.csv'
                 )
+                print(f'Loading in over-generated candidates from {cand_fn}')
                 cands = pd.read_csv(cand_fn)
                 brio_candidates = defaultdict(list)
                 dataset_ids = list(split_dataset['id'])
-                for record in cands.to_dict('records'):
+                for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
                     extract_rouges = np.array(list(map(float, record['extract_rouges'].split(','))))
-                    extract_idxs = [[int(x) for x in idx_str.split(',')] for idx_str in record['extract_idx'].split('<cand>')]
+                    try:
+                        extract_idxs = [
+                            [int(x) for x in idx_str.split(',')] for idx_str in record['extract_idx'].split('<cand>')
+                        ]
+                    except:
+                        print('Cannot parse empty extract')
+                        continue
 
                     assert len(extract_rouges) == len(extract_idxs)
                     priority = np.argsort(-extract_rouges)
                     extract_idxs_ordered = [extract_idxs[i] for i in priority]
+                    extract_rouges_ordered = [extract_rouges[i] for i in priority]
 
                     # De-Duplicate
                     extract_idxs_uniq = [
@@ -127,11 +136,17 @@ class SummaryDataModule(pl.LightningDataModule):
                         ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
                     ]
 
-                    brio_candidates[dataset_ids[record['dataset_idx']]] = extract_idxs_uniq
-            # Filter dataset to only include ones with BRIO candidates generated or "oracled"
+                    extract_rouges_uniq = [
+                        extract_rouges_ordered[i] for i, extract_idx in enumerate(
+                            extract_idxs_ordered
+                        ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
+                    ]
+
+                    brio_candidates[dataset_ids[record['dataset_idx']]] = [extract_idxs_uniq, extract_rouges_uniq]
+            # Filter dataset to only include ones with BRIO candidates generated or 'oracled'
             available_keys = set(list(brio_candidates.keys()))
             valid_hf_ids = [i for i, dataset_idx in enumerate(split_dataset['id']) if dataset_idx in available_keys]
-            print(f'Filtering out for {len(valid_hf_ids)} contrastive BRIO examples')
+            print(f'Filtering out for {len(valid_hf_ids)}/{len(split_dataset)} contrastive BRIO examples')
             split_dataset = split_dataset.select(valid_hf_ids)
 
         n = len(split_dataset)
@@ -141,7 +156,9 @@ class SummaryDataModule(pl.LightningDataModule):
             print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
             split_dataset = split_dataset.select(idxs)
 
-        split_dataset_pl = SummarizationDataset(self.args, split_dataset, split, brio_candidates=brio_candidates)
+        split_dataset_pl = SummarizationDataset(
+            self.args, split_dataset, self.tokenizer, split, brio_candidates=brio_candidates
+        )
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
@@ -169,10 +186,11 @@ class SummaryDataModule(pl.LightningDataModule):
 
 
 class SummarizationDataset(Dataset):
-    def __init__(self, args, dataset, split, brio_candidates=None):
+    def __init__(self, args, dataset, tokenizer, split, brio_candidates=None):
         super(SummarizationDataset, self).__init__()
         self.args = args
         self.dataset = dataset
+        self.tokenizer = tokenizer
         self.split = split
         self.brio_candidates = brio_candidates
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
@@ -208,22 +226,41 @@ class SummarizationDataset(Dataset):
         }
 
         if self.args.add_brio_loss:
-            candidates = self.brio_candidates[dataset_id]
+            candidates, scores = self.brio_candidates[dataset_id].copy()  # We modify it in place so let's insert
             for i in range(len(candidates)):
                 if type(candidates[i]) == dict:
                     if i < len(candidates) - 1:
                         assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
                     candidates[i] = list(sorted(candidates[i]['extract_idx']))
 
-            # Add Gold Label as the 'most positive'
-            candidates.insert(0, oracle_labels)
+            # scores = np.array(scores)
+            # normed = list((scores - min(scores)) / (max(scores) - min(scores)))
 
-            # num_cand = len(candidates)
-            # max_len = max([len(x) for x in candidates])
-            # brio_labels = np.zeros([num_cand, max_len], dtype=np.int64)
-            # brio_labels.fill(-100)
-            # for cand_idx in range(num_cand):
-            #     brio_labels[cand_idx, :len(candidates[cand_idx])] = candidates[cand_idx]
-            brio_labels = candidates
-            row['brio_labels'] = brio_labels
+            oracle_in_list = any([
+                list(oracle_labels) == cand for cand in candidates
+            ])
+            # If we want to include the oracle in the Gold
+            if not oracle_in_list:  # If the model didn't already generate the oracle
+                # Add Gold Label as the 'most positive'
+                candidates.insert(0, list(oracle_labels))
+                # normed.insert(0, 1)  # Oracle has a min-max normalized ROUGE score of 1
+
+            # tps = re.split(r'(<s\d+>)', source_annotated)
+            # source_sents = []
+            # for tp_idx, tp in enumerate(tps):
+            #     if re.match(r'(<s\d+>)', tp) is not None:
+            #         source_sents.append(tps[tp_idx + 1].strip())
+            #
+            # brio_extracts = []
+            # for cand_idx in candidates:
+            #     brio_extracts.append(' '.join([source_sents[i] for i in cand_idx]))
+            #
+            # with self.tokenizer.as_target_tokenizer():
+            #     brio_word_labels = np.array(self.tokenizer(
+            #         brio_extracts, max_length=1024, truncation=True, padding='longest'
+            #     )['input_ids'], dtype=np.int64)
+            #     brio_word_labels[np.where(brio_word_labels == self.tokenizer.pad_token_id)] = -100
+
+            row['brio_word_labels'] = candidates # brio_word_labels (change back if you need this)
+            row['brio_sent_labels'] = candidates
         return row
