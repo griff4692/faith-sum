@@ -154,6 +154,7 @@ if __name__ == '__main__':
     parser.add_argument('--brio_length_penalty', default=1.0, type=float)
     parser.add_argument('--brio_scale', default=1.0, type=float)
     parser.add_argument('--brio_score_mode', default='score', choices=['score', 'likelihood', 'similarity'])
+    parser.add_argument('-include_gold', default=False, action='store_true')
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4

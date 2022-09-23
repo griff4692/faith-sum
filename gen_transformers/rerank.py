@@ -26,7 +26,7 @@ if __name__ == '__main__':
     # Configuration Parameters
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--dataset', default='cnn_dailymail')
-    parser.add_argument('--gpu_device', default=0, type=int)
+    parser.add_argument('--gpu_device', default=1, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--wandb_name', default='brio_score_w_doc')
     parser.add_argument('--rank_experiment', default='gen_extract_full_ar_mask_red_feat')
@@ -59,7 +59,7 @@ if __name__ == '__main__':
     results_dir = os.path.join(args.data_dir, 'results', args.rank_experiment)
     rank_fn = os.path.join(results_dir, f'{args.split}_sample_outputs.csv')
     print(f'Loading in predictions from {rank_fn}')
-    outputs = pd.read_csv(os.path.join(results_dir, f'{args.split}_sample_outputs.csv'))
+    outputs = pd.read_csv(os.path.join(results_dir, f'{args.split}_diverse_sample_outputs.csv'))
     outputs.dropna(subset=['extract'], inplace=True)
     n = len(outputs)
     if n > args.max_examples:

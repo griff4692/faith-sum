@@ -82,7 +82,7 @@ class TransformerSummarizer(pl.LightningModule):
         if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
             if self.hparams.extract_method == 'generate':
-                extract_loss, extracts, brio_info = self.generate_extracts(batch, source, encoder_h)
+                extract_loss, extracts, brio_info, sent_decoder_h = self.generate_extracts(batch, source, encoder_h)
                 if brio_info is not None:
                     return_loss += self.hparams.brio_weight * brio_info['margin_loss']
                     metrics['sent_brio'] = brio_info['margin_loss']
@@ -92,12 +92,14 @@ class TransformerSummarizer(pl.LightningModule):
                     metrics['rank_corel'] = brio_info['rank_corel']
             else:
                 assert self.hparams.extract_method == 'select'
+                sent_decoder_h = None
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
             metrics['extract'] = extract_loss
             return_loss += self.hparams.mle_weight * extract_loss
 
         # score is just extraction (no word-level generation)
         if 'abstract' in self.hparams.summary_style:
+            # sent_decoder_h add to encoder_outputs
             updated_inputs = {
                 'encoder_outputs': encoder_outputs,
                 'attention_mask': batch['attention_mask'],
@@ -231,7 +233,8 @@ class TransformerSummarizer(pl.LightningModule):
             encoder_h = output.last_hidden_state
             if self.hparams.extract_method == 'generate':
                 extractive_summaries, _ = self.sample_gen_extracts(
-                    batch, source, encoder_h, source_ngrams, num_return_sequences=gen_kwargs['num_return_sequences']
+                    batch, source, encoder_h, source_ngrams, num_return_sequences=gen_kwargs['num_return_sequences'],
+                    sample_method=gen_kwargs['sample_method']
                 )
             else:
                 extractive_summaries = self.sample_score_extracts(
@@ -369,6 +372,7 @@ class TransformerSummarizer(pl.LightningModule):
         batch_size = len(cls_mask)
         losses = []
         sent_encoder_h = []
+        sent_decoder_h = []
         stop_input_id = torch.LongTensor([0]).to(self.device)
         for batch_idx in range(batch_size):
             cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
@@ -379,13 +383,14 @@ class TransformerSummarizer(pl.LightningModule):
             # Concatenate
             inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
             self.sent_bart.source_ngrams_cache = source_ngrams[batch_idx]
-            output = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels)
+            output = self.sent_bart(inputs_embeds=inputs_embeds, labels=labels, output_hidden_states=True)
             # loss = self.label_smoother(output, labels)
             loss = output.loss
             sent_encoder_h.append(output.encoder_last_hidden_state)
+            sent_decoder_h.append(output.decoder_hidden_states[-1].mean(dim=0))
             losses.append(loss)
         avg_losses = torch.stack(losses).mean()
-        return avg_losses, sent_encoder_h
+        return avg_losses, sent_encoder_h, sent_decoder_h
 
     def sample_score_extracts(self, batch, source, encoder_h, num_return_sequences=1, topk=10, joint_rank=True):
         batch_size = len(batch['cls_mask'])
@@ -451,7 +456,8 @@ class TransformerSummarizer(pl.LightningModule):
             return pred_ids
 
     def sample_gen_extracts(
-            self, batch, source, encoder_h, source_ngrams, num_return_sequences=1, diversity_penalty=1.0
+            self, batch, source, encoder_h, source_ngrams, num_return_sequences=1, diversity_penalty=1.0,
+            sample_method=None
     ):
         extractive_summaries = []
         raw_predictions = []
@@ -477,15 +483,21 @@ class TransformerSummarizer(pl.LightningModule):
             }
 
             sample_kwargs = {
-                # 'num_beam_groups': num_return_sequences,
                 'num_beams': num_return_sequences,
-                # 'diversity_penalty': diversity_penalty,
             }
+
+            if sample_method == 'diverse':
+                diverse_kwargs = {
+                    'num_beam_groups': num_return_sequences,
+                    'diversity_penalty': diversity_penalty,
+                }
+                sample_kwargs.update(diverse_kwargs)
 
             if num_return_sequences == 1:
                 shared_kwargs.update(beam_kwargs)
             else:
                 shared_kwargs.update(sample_kwargs)
+                assert sample_method in {'beam', 'diverse'}  # Haven't implemented others yet
 
             outputs = self.generate_with_sent_bart(source_ngrams=source_ngrams[batch_idx], **shared_kwargs)
             beam_scores = outputs.sequences_scores.cpu().numpy().tolist()
@@ -507,7 +519,9 @@ class TransformerSummarizer(pl.LightningModule):
         brio_scores = batch.pop('brio_scores', None)
         brio_norm_scores = batch.pop('brio_norm_scores', None)
         source_ngrams = batch.pop('source_ngrams', None)
-        loss, sent_encoder_h = self.compute_gen_extract_loss(cls_mask, encoder_h, batch['oracle_labels'], source_ngrams)
+        loss, sent_encoder_h, sent_decoder_h = self.compute_gen_extract_loss(
+            cls_mask, encoder_h, batch['oracle_labels'], source_ngrams
+        )
         summaries = None
         if not self.sent_bart.training:
             summaries, _ = self.sample_gen_extracts(
@@ -528,7 +542,7 @@ class TransformerSummarizer(pl.LightningModule):
                     encoder_h[batch_idx].unsqueeze(0),
                     sent_encoder_h[batch_idx],
                     source_ngrams[batch_idx],
-                    eos_token_id=self.get_eos(cls_mask[batch_idx].sum().item()), scores=brio_scores
+                    eos_token_id=self.get_eos(cls_mask[batch_idx].sum().item()), gold_scores=brio_norm_scores[batch_idx]
                 )
 
                 rank_corels.append(rank_corel)
@@ -552,7 +566,7 @@ class TransformerSummarizer(pl.LightningModule):
                 'brio_win_rate': win_fracs,
                 'rank_corel': rank_corel,
             }
-        return loss, summaries, brio_info
+        return loss, summaries, brio_info, sent_decoder_h
 
     def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
         all_summaries = []
@@ -586,7 +600,7 @@ class TransformerSummarizer(pl.LightningModule):
         return return_obj
 
     def brio_step(
-            self, sent_labels, encoder_h, sent_encoder_h, source_ngrams, eos_token_id, scores=None,
+            self, sent_labels, encoder_h, sent_encoder_h, source_ngrams, eos_token_id, gold_scores=None,
     ):
         # Add EOS token to cand_labels and convert to LongTensor
         cand_labels_eos = []
@@ -636,10 +650,13 @@ class TransformerSummarizer(pl.LightningModule):
                 encoder_sent = encoder_h[:, 1:, :]
                 pooled_extract = torch.stack([encoder_sent[i, x].mean(dim=0) for i, x in enumerate(sent_labels)])
             encoder_doc_rep = encoder_h[:, 0, :]
+
+            # pooled = self.sent_bart.dropout(torch.cat([
+            #     self.sent_bart.calibration_projection(self.sent_bart.dropout(encoder_doc_rep)),
+            #     self.sent_bart.calibration_projection(self.sent_bart.dropout(pooled_extract))
+            # ], dim=1))
             pooled = torch.cat([encoder_doc_rep, pooled_extract], dim=1)
             scores = self.sent_bart.calibration_classifier(pooled).squeeze(1)
-            # loss_func = nn.KLDivLoss(reduction='none')
-            # kl_loss = loss_func(torch.log_softmax(scores, dim=0), torch.softmax(norm_scores * 5, dim=0)).sum()
         elif self.hparams.brio_score_mode == 'likelihood':
             loss_fct = nn.CrossEntropyLoss(reduction='none')
             nll = loss_fct(
@@ -652,19 +669,26 @@ class TransformerSummarizer(pl.LightningModule):
             encoder_doc = encoder_h[0, 0, :]  # It's repeated so just take first instance
             encoder_sent = encoder_h[:, 1:, :]
             pooled_extract = torch.stack([encoder_sent[i, x].mean(dim=0) for i, x in enumerate(sent_labels)])
-            # TODO add projection layer
+            pooled_extract = self.sent_bart.calibration_projection(self.sent_bart.dropout(pooled_extract))
+            encoder_doc = self.sent_bart.calibration_projection(self.sent_bart.dropout(encoder_doc))
             scores = torch.cosine_similarity(pooled_extract, encoder_doc)
 
-        corel = spearmanr(-scores.detach().cpu().numpy(), list(range(len(scores))))[0]
+        # loss_func = nn.KLDivLoss(reduction='none')
+        # kl_loss = loss_func(torch.log_softmax(scores, dim=0), torch.softmax(gold_scores.half(), dim=0)).sum()
 
+        corel = spearmanr(-scores.detach().cpu().numpy(), list(range(len(scores))))[0]
         contrast_loss = 0
         wins, losses = 0, 0
         pos_neg_gap = []
         # ROUGE is always between gold-standard reference (abstract) and extract
         # Oracle Extract, Highest Scoring Generated Extract, ..., Lowest Scoring Generated Extract
 
-        gold_score = scores[0]
-        model_scores = scores[1:]
+        if self.hparams.include_gold:
+            gold_score = scores[0]
+            model_scores = scores[1:]
+        else:
+            model_scores = scores
+            gold_score = None
         # Update num_cand to remove gold
         num_cand = len(model_scores)
 
@@ -675,22 +699,27 @@ class TransformerSummarizer(pl.LightningModule):
             pos_score = model_scores[:-cand_idx]
             neg_score = model_scores[cand_idx:]
             ones = torch.ones_like(pos_score)
-            loss_func = torch.nn.MarginRankingLoss(self.hparams.brio_margin * cand_idx)
+            loss_func = torch.nn.MarginRankingLoss(self.hparams.brio_margin * cand_idx, reduction='mean')
             loss = loss_func(pos_score, neg_score, ones)
             contrast_loss += loss
 
-            wins += (pos_score >= neg_score).int().sum().item()
+            wins += (pos_score > neg_score).int().sum().item()
             losses += (pos_score < neg_score).int().sum().item()
             pos_neg_gap.append(float((pos_score - neg_score).mean().detach().cpu().item()))
 
-        # Gold summary loss
-        gold_score_exp = gold_score.expand_as(model_scores)
-        ones = torch.ones(gold_score_exp.size()).cuda(self.device)
-        loss_func = torch.nn.MarginRankingLoss(0.0)
-        contrast_loss += loss_func(gold_score_exp, model_scores, ones)
+        # Gold summary Loss (triplet ranking)
+        if gold_score is not None:
+            gold_score_exp = gold_score.expand_as(model_scores)
+            ones = torch.ones(gold_score_exp.size()).cuda(self.device)
+            loss_func = torch.nn.MarginRankingLoss(0.0)
+            contrast_loss += loss_func(gold_score_exp, model_scores, ones)
 
         avg_gap = np.mean(pos_neg_gap)
-        win_frac = wins / (wins + losses)
+        if wins + losses == 0:
+            print('Warning: all predicted the same score. Setting win fraction to 0.5')
+            win_frac = 0.5
+        else:
+            win_frac = wins / (wins + losses)
         score_idx = int(torch.argmax(model_scores).item()) / len(model_scores)
         return contrast_loss, avg_gap, score_idx, win_frac, corel
 

@@ -50,6 +50,7 @@ class SummaryDataModule(pl.LightningDataModule):
         else:
             self.dataset = load_dataset(args.dataset)
         self.tokenizer = tokenizer
+        # TODO change back
         self.num_workers = 0 if args.debug else 8
         self.nlp = spacy.load('en_core_web_sm')
 
@@ -233,17 +234,16 @@ class SummarizationDataset(Dataset):
                         assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
                     candidates[i] = list(sorted(candidates[i]['extract_idx']))
 
-            # scores = np.array(scores)
-            # normed = list((scores - min(scores)) / (max(scores) - min(scores)))
+            scores = np.array(scores)
+            norm_scores = (scores - min(scores)) / (max(scores) - min(scores))
 
             oracle_in_list = any([
                 list(oracle_labels) == cand for cand in candidates
             ])
             # If we want to include the oracle in the Gold
-            if not oracle_in_list:  # If the model didn't already generate the oracle
+            if not oracle_in_list and self.args.include_gold:  # If the model didn't already generate the oracle
                 # Add Gold Label as the 'most positive'
                 candidates.insert(0, list(oracle_labels))
-                # normed.insert(0, 1)  # Oracle has a min-max normalized ROUGE score of 1
 
             # tps = re.split(r'(<s\d+>)', source_annotated)
             # source_sents = []
@@ -261,6 +261,7 @@ class SummarizationDataset(Dataset):
             #     )['input_ids'], dtype=np.int64)
             #     brio_word_labels[np.where(brio_word_labels == self.tokenizer.pad_token_id)] = -100
 
-            row['brio_word_labels'] = candidates # brio_word_labels (change back if you need this)
+            row['brio_word_labels'] = candidates  # brio_word_labels (change back if you need this)
             row['brio_sent_labels'] = candidates
+            row['brio_norm_scores'] = norm_scores
         return row

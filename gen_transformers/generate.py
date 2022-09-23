@@ -56,6 +56,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_input_length', type=int, default=1024)
     # Beam Search or Nucleus Sampling (more diverse)
     parser.add_argument('-sample_gen', default=False, action='store_true')
+    parser.add_argument('--sample_method', default='diverse', choices=['beam', 'diverse', 'nucleus', 'top_k'])
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
     parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--length_penalty', default=2.0, type=float)
@@ -143,12 +144,17 @@ if __name__ == '__main__':
                 args.split, max_examples=args.max_examples, **dataloader_kwargs
             )
         outputs = []
-        gen_kwargs = SAMPLE_KWARGS[args.dataset] if args.sample_gen else GEN_KWARGS[args.dataset]
+        if args.sample_gen and args.sample_method != 'beam':
+            gen_kwargs = SAMPLE_KWARGS[args.dataset]
+        else:
+            gen_kwargs = GEN_KWARGS[args.dataset]
         gen_kwargs['length_penalty'] = args.length_penalty
         gen_kwargs['use_hf_rouge'] = args.use_hf_rouge
 
         # No reason to over-generate
         gen_kwargs['num_return_sequences'] = args.num_return_sequences if args.sample_gen else 1
+        if args.sample_gen and args.summary_style == 'extract':
+            gen_kwargs['sample_method'] = args.sample_method
         for batch_idx, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
             batch = {k: v.to(gpu) if type(v) == torch.Tensor else v for k, v in batch.items()}
             start = args.batch_size * batch_idx
@@ -162,7 +168,13 @@ if __name__ == '__main__':
                 outputs += batch_stats
 
         outputs = pd.DataFrame(outputs)
-        method = '_sample' if args.sample_gen else '_beam'
+        if args.sample_gen:
+            if args.sample_method == 'diverse':
+                method = '_sample_w_diverse'
+            elif args.sample_method == 'beam':
+                method = '_sample_w_beam'
+        else:
+            method = '_beam'
         out_fn = os.path.join(results_dir, f'{args.split}{method}_outputs.csv')
         if not args.do_not_save:
             print(f'Saving {len(outputs)} ROUGE scores and predictions to {out_fn}')
