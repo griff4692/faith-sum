@@ -147,13 +147,14 @@ if __name__ == '__main__':
     parser.add_argument('-extract_indicators', default=False, action='store_true')
     parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)  # TODO try with dropout
     parser.add_argument('-add_brio_loss', default=False, action='store_true')
+    parser.add_argument('-is_word_brio', default=False, action='store_true')
     parser.add_argument('--brio_margin', default=0.001, type=float)
     parser.add_argument('--brio_weight', default=1, type=float)
     parser.add_argument('--mle_weight', default=1, type=float)
-    parser.add_argument('--brio_experiment', default='gen_extract_full_ar_mask_red_feat')
+    parser.add_argument('--brio_experiment', default=None)
     parser.add_argument('--brio_length_penalty', default=1.0, type=float)
     parser.add_argument('--brio_scale', default=1.0, type=float)
-    parser.add_argument('--brio_score_mode', default='score', choices=['score', 'likelihood', 'similarity'])
+    parser.add_argument('--brio_score_mode', default='likelihood', choices=['score', 'likelihood', 'similarity'])
     parser.add_argument('-include_gold', default=False, action='store_true')
 
     # Hyper-Parameters

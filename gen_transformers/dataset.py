@@ -98,14 +98,28 @@ class SummaryDataModule(pl.LightningDataModule):
 
         brio_candidates = None
         if self.args.add_brio_loss:
-            if self.args.brio_experiment is None:
-                oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
-                with open(oracle_fn, 'r') as fd:
-                    brio_candidates = ujson.load(fd)
-                    n = len(brio_candidates)
-                    brio_candidates = {k: v for k, v in brio_candidates.items() if len(v) >= 2}
-                    filt_n = len(brio_candidates)
-                    print(f'{filt_n}/{n} have more than 1 candidate provided for {split} set')
+            # if self.args.brio_experiment is None:
+            #     oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
+            #     with open(oracle_fn, 'r') as fd:
+            #         brio_candidates = ujson.load(fd)
+            #         n = len(brio_candidates)
+            #         brio_candidates = {k: v for k, v in brio_candidates.items() if len(v) >= 2}
+            #         filt_n = len(brio_candidates)
+            #         print(f'{filt_n}/{n} have more than 1 candidate provided for {split} set')
+            if self.args.is_word_brio:
+                extract_fn = '/nlp/projects/faithsum/results/add_doc/'
+                cand_fn = extract_fn + f'{split}_from_sample_w_diverse_extract_4.csv'
+                print(f'Loading in over-generated candidates from {cand_fn}')
+                cands = pd.read_csv(cand_fn)
+                brio_candidates = defaultdict(list)
+                dataset_ids = list(split_dataset['id'])
+                for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
+                    rouges = np.array(list(map(float, record['from_extract_rouges'].split('<cand>'))))
+                    priority = np.argsort(-rouges)
+                    from_extract_abstracts = record['from_extract_abstract'].split('<cand>')
+                    cands_ordered = [from_extract_abstracts[i] for i in priority]
+                    extract_rouges_ordered = [rouges[i] for i in priority]
+                    brio_candidates[dataset_ids[record['dataset_idx']]] = [cands_ordered, extract_rouges_ordered]
             else:
                 cand_fn = os.path.join(
                     self.args.data_dir, 'results',
@@ -228,11 +242,11 @@ class SummarizationDataset(Dataset):
 
         if self.args.add_brio_loss:
             candidates, scores = self.brio_candidates[dataset_id].copy()  # We modify it in place so let's insert
-            for i in range(len(candidates)):
-                if type(candidates[i]) == dict:
-                    if i < len(candidates) - 1:
-                        assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
-                    candidates[i] = list(sorted(candidates[i]['extract_idx']))
+            # for i in range(len(candidates)):
+            #     if type(candidates[i]) == dict:
+            #         if i < len(candidates) - 1:
+            #             assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
+            #         candidates[i] = list(sorted(candidates[i]['extract_idx']))
 
             scores = np.array(scores)
             norm_scores = (scores - min(scores)) / (max(scores) - min(scores))
@@ -244,6 +258,7 @@ class SummarizationDataset(Dataset):
             if not oracle_in_list and self.args.include_gold:  # If the model didn't already generate the oracle
                 # Add Gold Label as the 'most positive'
                 candidates.insert(0, list(oracle_labels))
+                norm_scores.insert(0, 1)
 
             # tps = re.split(r'(<s\d+>)', source_annotated)
             # source_sents = []
@@ -254,14 +269,15 @@ class SummarizationDataset(Dataset):
             # brio_extracts = []
             # for cand_idx in candidates:
             #     brio_extracts.append(' '.join([source_sents[i] for i in cand_idx]))
-            #
-            # with self.tokenizer.as_target_tokenizer():
-            #     brio_word_labels = np.array(self.tokenizer(
-            #         brio_extracts, max_length=1024, truncation=True, padding='longest'
-            #     )['input_ids'], dtype=np.int64)
-            #     brio_word_labels[np.where(brio_word_labels == self.tokenizer.pad_token_id)] = -100
 
-            row['brio_word_labels'] = candidates  # brio_word_labels (change back if you need this)
-            row['brio_sent_labels'] = candidates
+            if self.args.is_word_brio:
+                with self.tokenizer.as_target_tokenizer():
+                    brio_word_labels = np.array(self.tokenizer(
+                        candidates, max_length=1024, truncation=True, padding='longest'
+                    )['input_ids'], dtype=np.int64)
+                    brio_word_labels[np.where(brio_word_labels == self.tokenizer.pad_token_id)] = -100
+                row['brio_word_labels'] = brio_word_labels   # brio_word_labels (change back if you need this)
+            else:
+                row['brio_sent_labels'] = candidates
             row['brio_norm_scores'] = norm_scores
         return row

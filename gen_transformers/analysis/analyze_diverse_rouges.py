@@ -15,9 +15,9 @@ def get_arr(num_str):
 
 if __name__ == '__main__':
     # 'gen_extract_full_ar_mask_red_feat' 'gen_abstract_full' # Gen abstract full
-    experiment = 'gen_extract_full_ar_mask_red_feat'
-    output = 'validation_extract'  # validation_from_sample_extract
-    summary_style = 'extract'  # from_extract
+    experiment = 'add_doc'
+    output = 'validation_from_sample_w_diverse_extract'  # validation_from_sample_extract
+    summary_style = 'from_extract'  # from_extract
     col = f'{summary_style}_rouges'
     df = pd.read_csv(f'/nlp/projects/faithsum/results/{experiment}/{output}.csv').dropna(subset=[col])
 

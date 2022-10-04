@@ -20,8 +20,8 @@ if __name__ == '__main__':
     df = pd.read_csv(os.path.join(data_dir, f'results/{experiment}/validation_sample_outputs.csv'))
     data_dir = os.path.join(data_dir, 'cnn_dailymail')
     dataset = load_from_disk(data_dir)
-    implied_idxs = df['implied_extract_idx'].tolist()
     beam_num_unique_plans = [[] for _ in range(16)]
+    beam_num_unique_extracts = [[] for _ in range(16)]
     beam_implied_rouges = [[] for _ in range(16)]
     source_annotated = dataset['validation']['source_annotated']
     for record in df.to_dict('records'):
@@ -37,10 +37,14 @@ if __name__ == '__main__':
             print('Empty extract')
             continue
         seen = set()
+        seen_extracts = set()
         for beam, arr in enumerate(cand_str):
+            arr_str = '_'.join([str(x) for x in arr])
+            seen_extracts.add(arr_str)
             for idx in arr:
                 seen.add(idx)
             beam_num_unique_plans[beam].append(len(seen) / num_sents)
+            beam_num_unique_extracts[beam].append(len(seen_extracts))
         extract_rouges = [float(x) for x in record[score_col].split(',')]
         for beam in range(len(extract_rouges)):
             val = np.mean([extract_rouges[i] for i in range(beam + 1)])
@@ -49,7 +53,13 @@ if __name__ == '__main__':
     for beam, arr in enumerate(beam_num_unique_plans):
         # print(f'{beam + 1},{np.mean(arr)}')
         print(np.mean(arr))
-    print('Extract ROUGES...')
+
+    print('\nFraction Unique Extracts...')
+    for beam, arr in enumerate(beam_num_unique_extracts):
+        # print(f'{beam + 1},{np.mean(arr)}')
+        print(np.mean(arr))
+
+    print('\nExtract ROUGES...')
     for beam, arr in enumerate(beam_implied_rouges):
         # print(f'{beam + 1},{np.mean(arr)}')
         print(np.mean(arr))

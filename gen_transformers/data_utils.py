@@ -61,8 +61,8 @@ class Seq2SeqCollate:
             'references': references,
         }
 
-        # if 'brio_word_labels' in batch_list[0]:
-        #     row['brio_word_labels'] = [torch.from_numpy(x['brio_word_labels']) for x in batch_list]
+        if 'brio_word_labels' in batch_list[0]:
+            row['brio_word_labels'] = [torch.from_numpy(x['brio_word_labels']) for x in batch_list]
 
         if 'brio_sent_labels' in batch_list[0]:
             row['brio_sent_labels'] = [x['brio_sent_labels'] for x in batch_list]

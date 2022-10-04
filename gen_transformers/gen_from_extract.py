@@ -65,7 +65,7 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
         'encoder_outputs': encoder_outputs,
         'attention_mask': attention_mask,
         'num_return_sequences': num_return_sequences,
-        'length_penalty': 4.0,
+        'length_penalty': 2.0,  # previously was 4.0,
         'max_length': 142,
         'min_length': 56,
         'no_repeat_ngram_size': 3,
@@ -77,9 +77,9 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
         }
     else:
         gen_kwargs = {
-            'diversity_penalty': 1.0,
+            # 'diversity_penalty': 1.0,
             'num_beams': num_return_sequences,
-            'num_beam_groups': num_return_sequences,
+            # 'num_beam_groups': num_return_sequences,
         }
 
     shared_kwargs.update(gen_kwargs)
@@ -124,13 +124,14 @@ if __name__ == '__main__':
     parser.add_argument('--gpu_device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--wandb_name', default='extract_indicators')
-    parser.add_argument('--extract_experiment', default='gen_extract_full_ar_mask_red_feat')
+    parser.add_argument('--extract_experiment', default='add_doc')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-do_not_save', default=False, action='store_true')
     parser.add_argument('--hf_model', default='facebook/bart-base')
     parser.add_argument('--max_examples', default=999999, type=int)
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--extract_mode', default='sample', choices=['sample', 'beam'])
+    parser.add_argument('--sample_mode', default='diverse', choices=['diverse', 'beam'])
     parser.add_argument('--top_k', default=None, type=int)
     parser.add_argument('--num_return_sequences', default=1, type=int)
     parser.add_argument('--split', default='validation')
@@ -138,7 +139,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
-    outputs = pd.read_csv(os.path.join(results_dir, f'{args.split}_{args.extract_mode}_outputs.csv'))
+    if args.extract_mode == 'beam':
+        extract_str = 'beam'
+    else:
+        extract_str = f'{args.extract_mode}_w_{args.sample_mode}'
+    in_fn = os.path.join(results_dir, f'{args.split}_{extract_str}_outputs.csv')
+    print(f'Reading in extracts from {in_fn}')
+    outputs = pd.read_csv(in_fn)
     outputs.dropna(subset=['extract'], inplace=True)
     n = len(outputs)
     if n > args.max_examples:
@@ -223,9 +230,12 @@ if __name__ == '__main__':
     updated_df = pd.DataFrame(updated_records)
     if not args.do_not_save:
         top_k_str = '' if args.top_k is None else f'_{args.top_k}'
-        updated_out_fn = os.path.join(results_dir, f'{args.split}_from_{args.extract_mode}_extract.csv')
-        print(f'Saving prompted abstracts to {updated_out_fn}')
-        updated_df.to_csv(updated_out_fn, index=False)
+        out_fn = os.path.join(
+            results_dir,
+            f'{args.split}_from_{extract_str}_extract{top_k_str}.csv'
+        )
+        print(f'Saving prompted abstracts to {out_fn}')
+        updated_df.to_csv(out_fn, index=False)
 
     extract_tok_len = updated_df['extract'].apply(lambda x: len(
         x.split('<cand>')[0].split(' '))).mean()
