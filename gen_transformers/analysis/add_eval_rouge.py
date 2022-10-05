@@ -9,6 +9,10 @@ from p_tqdm import p_uimap
 from eval.rouge_metric import RougeMetric
 
 
+# DEFAULT_FN = '/nlp/projects/faithsum/results/add_doc/validation_from_sample_w_diverse_extract_4.csv'
+DEFAULT_FN = '/nlp/projects/faithsum/results/add_doc/validation_from_sample_w_diverse_extract.csv'
+
+
 def get_arr(num_str):
     if '<cand>' in num_str:
         delim = '<cand>'
@@ -56,28 +60,28 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('ADD PERL ROUGE Eval')
 
     parser.add_argument('--gpu_device', default=0, type=int)
-    parser.add_argument('--experiment', default='gen_extract_full_ar_mask_red_feat')
+    parser.add_argument('--experiment', default='add_doc')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--gen_mode', default='sample', choices=['sample', 'beam'])
+    parser.add_argument('--fn', default=DEFAULT_FN)
     parser.add_argument('--split', default='validation')
-    parser.add_argument('--columns', default='extract', choices=[
-        'extract', 'extract,from_extract', 'abstract', 'abstract,implied_abstract'
+    parser.add_argument('--columns', default='extract,from_extract_abstract', choices=[
+        'extract', 'extract,from_extract_abstract', 'abstract', 'abstract,implied_abstract'
     ])
+    parser.add_argument('--num_cpus', default=16, type=int)
 
     args = parser.parse_args()
-
     rouge_metric = RougeMetric()
 
-    results_dir = os.path.join(args.data_dir, 'results', args.experiment)
-    fn = os.path.join(results_dir, f'{args.split}_{args.gen_mode}_outputs.csv')
-    outputs = pd.read_csv(fn)
+    outputs = pd.read_csv(args.fn)
     records = outputs.to_dict('records')
 
     args = parser.parse_args()
 
-    augmented_records = p_uimap(lambda record: process_example(args, record, rouge_metric), records, num_cpus=16)
+    augmented_records = p_uimap(
+        lambda record: process_example(args, record, rouge_metric), records, num_cpus=args.num_cpus
+    )
     # augmented_records = list(map(lambda record: process_example(args, record, rouge_metric), records))
     augmented_df = pd.DataFrame(augmented_records).sort_values(by='dataset_idx').reset_index(drop=True)
 
-    print(f'Saving with PERL eval ROUGE columns added back to {fn}')
-    augmented_df.to_csv(fn, index=False)
+    print(f'Saving with PERL eval ROUGE columns added back to {args.fn}')
+    augmented_df.to_csv(args.fn, index=False)

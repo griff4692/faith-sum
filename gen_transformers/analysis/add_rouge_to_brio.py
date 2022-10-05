@@ -1,7 +1,7 @@
-from collections import defaultdict
 from datasets import load_from_disk
+import ujson
+from tqdm import tqdm
 
-import pandas as pd
 import argparse
 import os
 from collections import Counter
@@ -22,37 +22,24 @@ def evaluate_summary(rouge_metric, generated, gold, prefix=''):
     return stats
 
 
-def process_example(args, record, rouge_metric):
-    try:
-        metric_str = defaultdict(list)
-        for col in args.columns.split(','):
-            summaries = record[col].split('<cand>')
-            metrics = list(map(lambda s: evaluate_summary(rouge_metric, s, record['reference']), summaries))
-            mean_f1s = []
-            for m in metrics:
-                for k, v in m.items():
-                    metric_str['eval' + '_' + col + '_' + k].append(str(v))
-                mean_f1 = (m['rouge1_f1'] + m['rouge2_f1'] + m['rougeL_f1']) / 3.0
-                mean_f1s.append(mean_f1)
-                metric_str['eval' + '_' + col + '_mean_f1'].append(str(mean_f1))
-
-            # existing_rouges = get_arr(record[col + '_rouges'])
-            # corel = spearmanr(existing_rouges, mean_f1s)[0]
-        for k in metric_str:
-            metric_str[k] = ','.join(metric_str[k])
-        record.update(metric_str)
-    except Exception as e:
-        print('Issue parsing example: ', str(e))
-    return record
+def process_example(brio_outputs, rouge_metric, reference, source):
+    candidates = brio_outputs[0]
+    metrics = list(map(lambda s: evaluate_summary(rouge_metric, s, reference), candidates))
+    brio_outputs.append(metrics)
+    print(candidates)
+    print('\n\n')
+    print(reference)
+    print('\n\n')
+    print(source)
+    print('\n\n\n\n\n\n')
+    return 1
 
 
-def find_article(brio_fn, brio_obj, articles_no_space, articles_vocab, covered_ids):
+def find_article(brio_fn, brio_obj, articles_no_space, articles_vocab):
     brio_article_no_space = re.sub(r'[^a-z]+', '', ''.join(brio_obj['article'])).lower().strip()
     found_idxs = []
     vocab_counts = Counter(' '.join(brio_obj['article']).lower().strip().split(' '))
     for cand_idx, ans in enumerate(articles_no_space):
-        if ids[cand_idx] in covered_ids:
-            continue
         if brio_article_no_space in ans or ans in brio_article_no_space:
             found_idxs.append(cand_idx)
             break
@@ -63,8 +50,6 @@ def find_article(brio_fn, brio_obj, articles_no_space, articles_vocab, covered_i
         best_match = 0
         best_cand_idx = None
         for cand_idx, vocab in enumerate(articles_vocab):
-            if ids[cand_idx] in covered_ids:
-                continue
             match = 0
             for k, v in vocab_counts.items():
                 if k in vocab:
@@ -84,71 +69,94 @@ if __name__ == '__main__':
 
     rouge_metric = RougeMetric()
 
-    data_dir = os.path.join(args.data_dir, 'cnndm_cased')
-
-    from glob import glob
-    pattern = os.path.join(data_dir, '*', '*.json')
-
-    fns = list(glob(pattern))
-
-    print(len(fns))
+    out_fn = os.path.join(args.data_dir, 'cnn_brio_outputs.json')
 
     orig_data_dir = os.path.join(args.data_dir, 'cnn_dailymail')
+    print('Loading original data')
     dataset = load_from_disk(orig_data_dir)
-    import ujson
-    from tqdm import tqdm
-    brio_inputs = {'validation': {}, 'test': {}, 'train': {}}
-    for fn in tqdm(fns):
-        with open(fn, 'r') as fd:
-            brio_output = ujson.load(fd)
-            if 'train' in fn:
-                split = 'train'
-            elif 'val' in fn:
-                split = 'validation'
-            else:
-                split = 'test'
-            brio_inputs[split][fn] = brio_output
+    #
+    # train_id2reference = dict(zip(dataset['train']['id'], dataset['train']['highlights']))
+    # train_id2source = dict(zip(dataset['train']['id'], dataset['train']['article']))
+    #
+    # with open(out_fn, 'r') as fd:
+    #     brio_outputs = ujson.load(fd)
+    #
+    # for did, arr in brio_outputs['train'].items():
+    #     ref = train_id2reference[did]
+    #     print(ref)
+    #     print(arr[0][0])
+    #     print('\n\n\n')
+    #
+    # exit(0)
+    if True:  # not os.path.exists(out_fn):
+        data_dir = os.path.join(args.data_dir, 'cnndm_cased')
 
-    brio_outputs = {
-        'train': {},
-        'validation': {},
-        'test': {},
-    }
+        from glob import glob
+        pattern = os.path.join(data_dir, '*', '*.json')
 
-    for split, split_data in dataset.items():
-        articles = split_data['article']
-        split_brio = brio_inputs[split]
+        fns = list(glob(pattern))[:100]
 
-        articles_vocab = []
-        for article in tqdm(articles):
-            articles_vocab.append(Counter(article.lower().strip().split(' ')))
+        print(len(fns))
+        brio_inputs = {'validation': {}, 'test': {}, 'train': {}}
+        for fn in tqdm(fns):
+            with open(fn, 'r') as fd:
+                if 'train' in fn:
+                    split = 'train'
+                elif 'val' in fn:
+                    split = 'validation'
+                else:
+                    split = 'test'
+                brio_inputs[split][fn] = ujson.load(fd)
 
-        articles_no_space = list(tqdm(map(
-            lambda x: re.sub(r'[^a-z]+', '', x).lower().strip(), articles), total=len(articles)))
-        ids = split_data['id']
-        covered_ids = set()
+        brio_outputs = {
+            'train': {},
+            'validation': {},
+            'test': {},
+        }
 
-        outputs = list(p_uimap(
-            lambda fn: find_article(fn, split_brio[fn], articles_no_space, articles_vocab, covered_ids), split_brio))
+        for split in ['validation', 'test', 'train']:
+            split_data = dataset[split]
+            articles = split_data['article']
+            split_ids = split_data['id']
+            split_brio = brio_inputs[split]
 
-        for fn, best_cand_idx in outputs:
-            candidates = []
-            cand_rouges = []
-            for cand in brio_inputs[split][fn]:
-                candidates.append('\n'.join(cand[0]))
-                cand_rouges.append(float(cand[1]))
-            brio_outputs[split][ids[best_cand_idx]] = [candidates, cand_rouges, fn, best_cand_idx]
-            # covered_ids.add(ids[best_cand_idx])
+            articles_vocab = []
+            for article in tqdm(articles):
+                articles_vocab.append(Counter(article.lower().strip().split(' ')))
 
-    out_fn = os.path.join(args.data_dir, 'cnn_brio_outputs.json')
-    print(f'Saving data to {out_fn}')
-    with open(out_fn, 'w') as fd:
-        ujson.dump(brio_outputs, fd)
+            articles_no_space = list(tqdm(map(
+                lambda x: re.sub(r'[^a-z]+', '', x).lower().strip(), articles), total=len(articles)))
+            outputs = list(p_uimap(
+                lambda fn: find_article(
+                    fn, split_brio[fn], articles_no_space, articles_vocab), split_brio
+            ))
 
-    exit(0)
-    augmented_records = p_uimap(lambda record: process_example(args, record, rouge_metric), records, num_cpus=16)
-    # augmented_records = list(map(lambda record: process_example(args, record, rouge_metric), records))
-    augmented_df = pd.DataFrame(augmented_records).sort_values(by='dataset_idx').reset_index(drop=True)
+            for fn, best_cand_idx in outputs:
+                candidates = []
+                cand_rouges = []
+                for cand in brio_inputs[split][fn]['candidates']:
+                    candidates.append('\n'.join(cand[0]))
+                    cand_rouges.append(float(cand[1]))
+                brio_outputs[split][split_ids[best_cand_idx]] = [candidates, cand_rouges, fn, best_cand_idx]
 
-    # print(f'Saving with PERL eval ROUGE columns added back to {out_fn}')
-    # augmented_df.to_csv(out_fn, index=False)
+        out_fn = os.path.join(args.data_dir, 'cnn_brio_outputs.json')
+        print(f'Saving data to {out_fn}')
+        with open(out_fn, 'w') as fd:
+            ujson.dump(brio_outputs, fd)
+    else:
+        val_id2reference = dict(zip(dataset['validation']['id'], dataset['validation']['highlights']))
+        val_id2source = dict(zip(dataset['validation']['id'], dataset['validation']['article']))
+        with open(out_fn, 'r') as fd:
+            brio_outputs = ujson.load(fd)
+        valid_brio_outputs = brio_outputs['validation']
+        complete = sum(list(p_uimap(
+            lambda dataset_id: process_example(
+                valid_brio_outputs[dataset_id], rouge_metric, reference=val_id2reference[dataset_id],
+                source=val_id2source[dataset_id]
+            ), valid_brio_outputs, num_cpus=1
+        )))
+        print(complete)
+
+        # print(f'Saving data to {out_fn}')
+        # with open(out_fn, 'w') as fd:
+        #     ujson.dump(brio_outputs, fd)

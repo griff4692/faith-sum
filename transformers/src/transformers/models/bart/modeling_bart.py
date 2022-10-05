@@ -1047,6 +1047,9 @@ class BartDecoder(BartPretrainedModel):
         hidden_states = inputs_embeds + positions
         hidden_states = self.layernorm_embedding(hidden_states)
 
+        # Pre-pend Prompt
+        # hidden_states = torch.cat([decoder_prompt, hidden_states])
+
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         # decoder layers
@@ -1188,6 +1191,7 @@ class BartModel(BartPretrainedModel):
         input_ids: torch.LongTensor = None,
         extract_indicators: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        # decoder_prompt: Optional[torch.LongTensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.Tensor] = None,
@@ -1246,6 +1250,7 @@ class BartModel(BartPretrainedModel):
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
+            # decoder_prompt=decoder_prompt,
             attention_mask=decoder_attention_mask,
             encoder_hidden_states=encoder_outputs[0],
             encoder_attention_mask=attention_mask,
@@ -1324,6 +1329,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         extract_indicators: Optional[torch.Tensor] = None,
+        # decoder_prompt: Optional[torch.LongTensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.Tensor] = None,
@@ -1363,6 +1369,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
             extract_indicators=extract_indicators,
             attention_mask=attention_mask,
             decoder_input_ids=decoder_input_ids,
+            # decoder_prompt=decoder_prompt,
             encoder_outputs=encoder_outputs,
             decoder_attention_mask=decoder_attention_mask,
             head_mask=head_mask,

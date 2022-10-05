@@ -79,6 +79,7 @@ class TransformerSummarizer(pl.LightningModule):
             encoder_inputs['extract_indicators'] = implement_oracle_indicators(batch)
         encoder_outputs = self.get_encoder_h(encoder_inputs)
         encoder_h = encoder_outputs.last_hidden_state
+        sent_decoder_h = None
 
         if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
@@ -93,14 +94,17 @@ class TransformerSummarizer(pl.LightningModule):
                     metrics['rank_corel'] = brio_info['rank_corel']
             else:
                 assert self.hparams.extract_method == 'select'
-                sent_decoder_h = None
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
             metrics['extract'] = extract_loss
             return_loss += self.hparams.mle_weight * extract_loss
 
         # score is just extraction (no word-level generation)
         if 'abstract' in self.hparams.summary_style:
-            # sent_decoder_h add to encoder_outputs
+            # sent_decoder_h add to encoder or decoder outputs
+            # sent_decoder_h_pad = torch.nn.utils.rnn.pad_sequence(sent_decoder_h, padding_value=0.0).transpose(1, 0)
+
+            # Model the word-level sentence encoder states with the sentence-level decoder states
+
             updated_inputs = {
                 'encoder_outputs': encoder_outputs,
                 'attention_mask': batch['attention_mask'],
@@ -232,10 +236,6 @@ class TransformerSummarizer(pl.LightningModule):
                     output_dict[k].append(v)
         # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
         eval_metrics = {}
-        if self.hparams.summary_style in {'abstract_plan', 'plan_abstract'}:
-            from_oracle_rouge = self.generate_from_oracle(batch, reduce=True, **validation_kwargs)
-            eval_metrics.update(from_oracle_rouge)
-
         if len(output_dict['abstracts']) > 0:
             eval_metrics.update(self.compute_rouge(output_dict['abstracts'], batch['references']))
             implied_extracts = [x['summary'] for x in output_dict['implied_extracts']]
@@ -278,8 +278,7 @@ class TransformerSummarizer(pl.LightningModule):
             encoder_h = output.last_hidden_state
             if self.hparams.extract_method == 'generate':
                 extractive_summaries, _ = self.sample_gen_extracts(
-                    batch, source, encoder_h, source_ngrams, num_return_sequences=gen_kwargs['num_return_sequences'],
-                    sample_method=gen_kwargs['sample_method']
+                    batch, source, encoder_h, source_ngrams, **gen_kwargs
                 )
             else:
                 extractive_summaries = self.sample_score_extracts(
@@ -304,10 +303,6 @@ class TransformerSummarizer(pl.LightningModule):
         outputs_resolved = self.merge_outputs(gen_outputs, extract_outputs)
 
         batch_outputs = []
-        from_oracle_metrics = None
-        if self.hparams.summary_style in {'abstract_plan', 'plan_abstract'}:
-            from_oracle_metrics = self.generate_from_oracle(batch, use_hf_rouge, **gen_kwargs)
-
         for batch_idx, (reference, gen_output) in enumerate(zip(references, outputs_resolved)):
             abstract_flat = '' if gen_output['abstracts'] is None else '<cand>'.join(gen_output['abstracts'])
             extract_flat = '' if gen_output['extracts'] is None else '<cand>'.join(
@@ -340,9 +335,6 @@ class TransformerSummarizer(pl.LightningModule):
             ):
                 dist_flat = ','.join([str(x['beam_score']) for x in gen_output['extracts']])
                 save_out['extract_beam_scores'] = dist_flat
-
-            if from_oracle_metrics is not None:
-                save_out.update(from_oracle_metrics[batch_idx])
 
             # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
             if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
@@ -500,10 +492,7 @@ class TransformerSummarizer(pl.LightningModule):
             self.sent_bart.reset_counter_for_generation()
             return pred_ids
 
-    def sample_gen_extracts(
-            self, batch, source, encoder_h, source_ngrams, num_return_sequences=1, diversity_penalty=1.0,
-            sample_method=None
-    ):
+    def sample_gen_extracts(self, batch, source, encoder_h, source_ngrams, **gen_kwargs):
         extractive_summaries = []
         raw_predictions = []
         cls_mask = batch['cls_mask']
@@ -513,38 +502,19 @@ class TransformerSummarizer(pl.LightningModule):
             cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
             inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
             eos_token_id = self.get_eos(cls_h.size()[1])
-            shared_kwargs = {
+            fixed_kwargs = {
                 'inputs_embeds': inputs_embeds,
                 'eos_token_id': eos_token_id,
-                'min_length': 3,  # 2 without the special token
-                'max_length': 10,
                 'early_stopping': True,
-                'num_return_sequences': num_return_sequences,
                 'output_scores': True,
                 'return_dict_in_generate': True,
             }
-            beam_kwargs = {
-                'num_beams': 4,
-            }
 
-            sample_kwargs = {
-                'num_beams': num_return_sequences,
-            }
-
-            if sample_method == 'diverse':
-                diverse_kwargs = {
-                    'num_beam_groups': num_return_sequences,
-                    'diversity_penalty': diversity_penalty,
-                }
-                sample_kwargs.update(diverse_kwargs)
-
-            if num_return_sequences == 1:
-                shared_kwargs.update(beam_kwargs)
-            else:
-                shared_kwargs.update(sample_kwargs)
-                assert sample_method in {'beam', 'diverse'}  # Haven't implemented others yet
-
-            outputs = self.generate_with_sent_bart(source_ngrams=source_ngrams[batch_idx], **shared_kwargs)
+            fixed_kwargs.update(**gen_kwargs)
+            # for k, v in fixed_kwargs.items():
+            #     if k not in {'inputs_embeds', 'eos_token_id'}:
+            #         print(k, v)
+            outputs = self.generate_with_sent_bart(source_ngrams=source_ngrams[batch_idx], **fixed_kwargs)
             beam_scores = outputs.sequences_scores.cpu().numpy().tolist()
             pred_ids = outputs.sequences
             raw_predictions.append(pred_ids)
@@ -569,10 +539,12 @@ class TransformerSummarizer(pl.LightningModule):
         )
         summaries = None
         if not self.sent_bart.training:
-            summaries, _ = self.sample_gen_extracts(
-                batch, source, encoder_h, source_ngrams, num_return_sequences=1
-            )
-
+            gen_kwargs = {
+                'min_length': 3,  # 2 without the special token
+                'max_length': 10,
+                'num_beams': 4,
+            }
+            summaries, _ = self.sample_gen_extracts(batch, source, encoder_h, source_ngrams, **gen_kwargs)
         brio_info = None
         if self.hparams.add_brio_loss:
             margin_losses = []
@@ -864,58 +836,31 @@ class TransformerSummarizer(pl.LightningModule):
         score_idx = int(torch.argmax(model_scores).item()) / len(model_scores)
         return contrast_loss, avg_gap, score_idx, win_frac, corel
 
-    def generate_from_oracle(self, batch, reduce=False, eval=False, **gen_kwargs):
-        oracle_strs = [x.split('<sep>')[0].replace('<s>', '') for x in self.tokenizer.batch_decode(batch['labels'])]
-        references = gen_kwargs.pop('references')
-        results = []
-        for batch_idx in range(len(batch['input_ids'])):
-            decoder_input_ids = self.tokenizer.encode(
-                '<s></s>' + oracle_strs[batch_idx] + '<sep>',
-                add_special_tokens=False, return_tensors='pt'
-            ).to(self.device)
-
-            default_kwargs = {  # Some of these values may get overridden by gen_kwargs
-                'input_ids': batch['input_ids'][batch_idx].unsqueeze(0),
-                'attention_mask': batch['attention_mask'][batch_idx].unsqueeze(0),
-                'decoder_input_ids': decoder_input_ids,
-                'num_return_sequences': 1,
-                'max_length': self.hparams.max_output_length,
-                'no_repeat_ngram_size': 3,
-                'early_stopping': True,
-                'output_scores': True
-            }
-
-            default_kwargs.update(gen_kwargs)
-            pred_ids = self.model.generate(**default_kwargs)
-            pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
-            row = self.compute_rouge([pred], [references[batch_idx]], prefix='oracle_prompt_', eval=eval)
-            results.append(row)
-        if reduce:
-            df = pd.DataFrame(results)
-            return {col: df[col].dropna().mean for col in df.columns}
-        return results
-
     def shared_generate(self, batch, source, references, encoder_outputs=None, **gen_kwargs):
-        default_kwargs = {  # Some of these values may get overridden by gen_kwargs
-            # 'input_ids': batch['input_ids'],
+        fixed_kwargs = {  # Some of these values may get overridden by gen_kwargs
             'attention_mask': batch['attention_mask'],
-            'num_return_sequences': 1,
-            'max_length': self.hparams.max_output_length,
             'no_repeat_ngram_size': 3,
             'early_stopping': True,
             'output_scores': True
         }
         if encoder_outputs is not None:
-            default_kwargs['encoder_outputs'] = encoder_outputs
+            fixed_kwargs['encoder_outputs'] = encoder_outputs
         else:
-            default_kwargs['input_ids'] = batch['input_ids']
+            fixed_kwargs['input_ids'] = batch['input_ids']
 
         if self.hparams.extract_indicators:
             # Change this from oracle if you want something else
-            default_kwargs['extract_indicators'] = implement_oracle_indicators(batch)
+            fixed_kwargs['extract_indicators'] = implement_oracle_indicators(batch)
 
-        default_kwargs.update(gen_kwargs)
-        pred_ids = self.model.generate(**default_kwargs)
+        # Update them with user-specific kwargs
+        fixed_kwargs.update(gen_kwargs)
+
+        # Uncomment to print out the exact arguments passed to #generate
+        # for k, v in fixed_kwargs.items():
+        #     if k not in {'attention_mask', 'input_ids', 'encoder_outputs'}:
+        #         print(k, v)
+
+        pred_ids = self.model.generate(**fixed_kwargs)
         gold_ids = batch['labels']
         gold_ids[torch.where(batch['labels'] == -100)] = 1
 
@@ -1151,7 +1096,7 @@ class TransformerSummarizer(pl.LightningModule):
         avg_r1_f1 = np.mean([x[f'best_{prefix}_rouge1_f1'] for x in cand_metrics])
         best_cand = np.argmax(cand_scores)
         best_metric = self.compute_rouge([candidates[best_cand]], reference, prefix=f'best_{prefix}_', eval=eval)
-        diversity = diversity_score(candidates)
+        diversity = np.mean(diversity_score(candidates))
         return cand_metrics, best_metric, avg_r1_f1, diversity
 
     def configure_optimizers(self):

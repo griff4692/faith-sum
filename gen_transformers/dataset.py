@@ -54,6 +54,12 @@ class SummaryDataModule(pl.LightningDataModule):
         self.num_workers = 0 if args.debug else 8
         self.nlp = spacy.load('en_core_web_sm')
 
+        if self.args.is_word_brio and self.args.use_regular_candidates:
+            candidates_fn = '/nlp/projects/faithsum/cnn_brio_outputs.json'
+            print(f'Loading {candidates_fn}')
+            with open(candidates_fn, 'r') as fd:
+                self.brio_candidates = ujson.load(fd)
+
     def get_inverse_train_split(self, split, train_frac, max_examples=None, **dataloader_kwargs):
         split_dataset = self.dataset[split]
         n = len(split_dataset)
@@ -107,23 +113,35 @@ class SummaryDataModule(pl.LightningDataModule):
             #         filt_n = len(brio_candidates)
             #         print(f'{filt_n}/{n} have more than 1 candidate provided for {split} set')
             if self.args.is_word_brio:
-                extract_fn = '/nlp/projects/faithsum/results/add_doc/'
-                cand_fn = extract_fn + f'{split}_from_sample_w_diverse_extract_4.csv'
-                print(f'Loading in over-generated candidates from {cand_fn}')
-                cands = pd.read_csv(cand_fn)
-                brio_candidates = defaultdict(list)
-                dataset_ids = list(split_dataset['id'])
-                for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
-                    rouges = np.array(list(map(float, record['from_extract_rouges'].split('<cand>'))))
-                    priority = np.argsort(-rouges)
-                    from_extract_abstracts = record['from_extract_abstract'].split('<cand>')
-                    cands_ordered = [from_extract_abstracts[i] for i in priority]
-                    extract_rouges_ordered = [rouges[i] for i in priority]
-                    brio_candidates[dataset_ids[record['dataset_idx']]] = [cands_ordered, extract_rouges_ordered]
+                if self.args.use_regular_candidates:
+                    max_brio_candidates = 4
+                    brio_candidates_raw = self.brio_candidates[split]
+                    brio_candidates = {}
+                    for dataset_id, arr in brio_candidates_raw.items():
+                        candidates = arr[0][:max_brio_candidates]
+                        rouges = np.array(arr[1][:max_brio_candidates])
+                        priority = np.argsort(-rouges)
+                        cands_ordered = [candidates[i] for i in priority]
+                        rouges_ordered = [rouges[i] for i in priority]
+                        brio_candidates[dataset_id] = [cands_ordered, rouges_ordered]
+                else:
+                    extract_fn = '/nlp/projects/faithsum/results/add_doc/'
+                    cand_fn = extract_fn + f'{split}_from_sample_w_diverse_extract_4.csv'
+                    print(f'Loading in over-generated candidates from {cand_fn}')
+                    cands = pd.read_csv(cand_fn)
+                    brio_candidates = {}
+                    dataset_ids = list(split_dataset['id'])
+                    for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
+                        rouges = np.array(list(map(float, record['from_extract_rouges'].split('<cand>'))))
+                        priority = np.argsort(-rouges)
+                        from_extract_abstracts = record['from_extract_abstract'].split('<cand>')
+                        cands_ordered = [from_extract_abstracts[i] for i in priority]
+                        rouges_ordered = [rouges[i] for i in priority]
+                        brio_candidates[dataset_ids[record['dataset_idx']]] = [cands_ordered, rouges_ordered]
             else:
                 cand_fn = os.path.join(
                     self.args.data_dir, 'results',
-                    self.args.brio_experiment, f'{split}_sample_outputs.csv'
+                    self.args.brio_experiment, f'{split}_sample_w_diverse_outputs.csv'
                 )
                 print(f'Loading in over-generated candidates from {cand_fn}')
                 cands = pd.read_csv(cand_fn)
@@ -143,6 +161,10 @@ class SummaryDataModule(pl.LightningDataModule):
                     priority = np.argsort(-extract_rouges)
                     extract_idxs_ordered = [extract_idxs[i] for i in priority]
                     extract_rouges_ordered = [extract_rouges[i] for i in priority]
+
+                    if len(priority) < 2:
+                        print(f'Only {len(priority)} candidate provided for this example.')
+                        continue
 
                     # De-Duplicate
                     extract_idxs_uniq = [
@@ -242,11 +264,11 @@ class SummarizationDataset(Dataset):
 
         if self.args.add_brio_loss:
             candidates, scores = self.brio_candidates[dataset_id].copy()  # We modify it in place so let's insert
-            # for i in range(len(candidates)):
-            #     if type(candidates[i]) == dict:
-            #         if i < len(candidates) - 1:
-            #             assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
-            #         candidates[i] = list(sorted(candidates[i]['extract_idx']))
+            for i in range(len(candidates)):
+                if type(candidates[i]) == dict:
+                    if i < len(candidates) - 1:
+                        assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
+                    candidates[i] = list(sorted(candidates[i]['extract_idx']))
 
             scores = np.array(scores)
             norm_scores = (scores - min(scores)) / (max(scores) - min(scores))

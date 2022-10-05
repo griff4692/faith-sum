@@ -82,8 +82,8 @@ def run(args):
         entity='griffinadams',
     )
 
-    monitor_metric = 'validation/combined'
-    mode = 'min'
+    monitor_metric = f'validation/{args.val_monitor_metric}'
+    mode = args.val_metric_mode
     checkpoint_callback = ModelCheckpoint(
         monitor=monitor_metric,
         save_top_k=1,
@@ -148,14 +148,17 @@ if __name__ == '__main__':
     parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)  # TODO try with dropout
     parser.add_argument('-add_brio_loss', default=False, action='store_true')
     parser.add_argument('-is_word_brio', default=False, action='store_true')
+    parser.add_argument('-use_regular_candidates', default=False, action='store_true')
     parser.add_argument('--brio_margin', default=0.001, type=float)
     parser.add_argument('--brio_weight', default=1, type=float)
     parser.add_argument('--mle_weight', default=1, type=float)
-    parser.add_argument('--brio_experiment', default=None)
-    parser.add_argument('--brio_length_penalty', default=1.0, type=float)
+    parser.add_argument('--brio_experiment', default='add_doc')
+    parser.add_argument('--brio_length_penalty', default=2.0, type=float)
     parser.add_argument('--brio_scale', default=1.0, type=float)
     parser.add_argument('--brio_score_mode', default='likelihood', choices=['score', 'likelihood', 'similarity'])
     parser.add_argument('-include_gold', default=False, action='store_true')
+    parser.add_argument('--val_monitor_metric', default='combined')
+    parser.add_argument('--val_metric_mode', default='min')
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4
@@ -179,7 +182,8 @@ if __name__ == '__main__':
         'facebook/bart-base',
         'facebook/bart-large',
         'Yale-LILY/brio-cnndm-uncased',
-        'google/pegasus-large'
+        'google/pegasus-large',
+        'facebook/bart-large-cnn'
     ])
 
     # Task-specific / Project-specific parameters

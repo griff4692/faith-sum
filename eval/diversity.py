@@ -3,7 +3,6 @@ import os
 import argparse
 
 import nltk
-from datasets import load_metric
 from nltk.translate.bleu_score import sentence_bleu
 import numpy as np
 import pandas as pd
@@ -33,21 +32,23 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Score for Diversity')
 
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--wandb_name', default='extract_indicators')
-    parser.add_argument('--experiment', default='gen_abstract_full')
-    parser.add_argument('--fn', default='validation_sample_outputs')
-    parser.add_argument('--candidate_column', default='abstract')
+    parser.add_argument('--experiment', default='add_doc')
+    parser.add_argument('--fn', default='validation_sample_w_diverse_outputs')
+    parser.add_argument('--candidate_column', default='extract')
 
     args = parser.parse_args()
 
     results_dir = os.path.join(args.data_dir, 'results', args.experiment)
     in_fn = os.path.join(results_dir, args.fn + '.csv')
     data_df = pd.read_csv(in_fn)
-    candidates = data_df[args.candidate_column].dropna().tolist()
+    candidates = data_df[args.candidate_column].fillna('NOPE').tolist()
 
     all_scores = []
     beam_scores = []
     for candidate_set in tqdm(candidates):
+        if candidate_set == 'NOPE':
+            all_scores.append(None)
+            continue
         cand_list = candidate_set.split('<cand>')
         scores = diversity_score(cand_list)
         all_scores.append(np.mean(scores))
@@ -57,9 +58,15 @@ if __name__ == '__main__':
         for beam, score, in enumerate(scores):
             beam_scores[beam].append(score)
 
+    diversity_col = args.candidate_column + '_self_bleu'
+    print(f'Adding column: {diversity_col}')
+    data_df[diversity_col] = all_scores
+    print(f'Re-saving output with new column {diversity_col} back to {in_fn}')
+    data_df.to_csv(in_fn, index=False)
+
     for beam, score_arr in enumerate(scores):
         avg_beam_diversity = np.mean(score_arr)
         print(f'Beam {beam}: {avg_beam_diversity}')
 
-    avg_diversity = np.mean(all_scores)
-    print(f'Average Diversity: {avg_diversity}')
+    avg_diversity = np.mean(list(filter(None, all_scores)))
+    print(f'Average Self-BLEU: {avg_diversity}')
