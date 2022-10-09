@@ -159,6 +159,7 @@ if __name__ == '__main__':
     parser.add_argument('-include_gold', default=False, action='store_true')
     parser.add_argument('--val_monitor_metric', default='combined')
     parser.add_argument('--val_metric_mode', default='min')
+    parser.add_argument('--oracle_drop_p', default=0.0, type=float)
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4

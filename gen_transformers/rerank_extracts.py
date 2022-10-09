@@ -26,18 +26,20 @@ if __name__ == '__main__':
     # Configuration Parameters
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--dataset', default='cnn_dailymail')
-    parser.add_argument('--gpu_device', default=1, type=int)
+    parser.add_argument('--gpu_device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--wandb_name', default='brio_score_w_doc')
-    parser.add_argument('--rank_experiment', default='gen_extract_full_ar_mask_red_feat')
+    parser.add_argument('--wandb_name', default='brio_likelihood_v3')
+    parser.add_argument('--rank_experiment', default='add_doc')
     # How many processes to use when loading batches on CPU
-    parser.add_argument('--split', default='validation')
+    parser.add_argument('--split', default='test')
     parser.add_argument('--hf_model', default='facebook/bart-base')
     parser.add_argument('--max_examples', default=999999, type=int)
-    parser.add_argument('--score_mode', default='score')
+    parser.add_argument('--decode_method', default='beam')
+    parser.add_argument('--num_candidates', default=16, type=int)
+    parser.add_argument('--score_mode', default='likelihood')
 
-    # Hyper-parameters: Should be the same as used when training
-    parser.add_argument('--max_input_length', type=int, default=512)
+    # Hyper-Parameters: Should be the same as used when training
+    parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--max_num_sents', type=int, default=200)
 
     args = parser.parse_args()
@@ -57,9 +59,9 @@ if __name__ == '__main__':
     ).to(args.gpu_device).eval()
 
     results_dir = os.path.join(args.data_dir, 'results', args.rank_experiment)
-    rank_fn = os.path.join(results_dir, f'{args.split}_sample_outputs.csv')
+    rank_fn = os.path.join(results_dir, f'{args.split}_{args.decode_method}_{args.num_candidates}_outputs.csv')
     print(f'Loading in predictions from {rank_fn}')
-    outputs = pd.read_csv(os.path.join(results_dir, f'{args.split}_diverse_sample_outputs.csv'))
+    outputs = pd.read_csv(rank_fn)
     outputs.dropna(subset=['extract'], inplace=True)
     n = len(outputs)
     if n > args.max_examples:
@@ -74,17 +76,21 @@ if __name__ == '__main__':
     records = outputs.to_dict('records')
     special_id_min = min(tokenizer.additional_special_tokens_ids)
     corels = []
+    beam_corels = []
     top_ranks = []
     pred_rouges = []
     first_rouges = []
 
+    rouge_col = 'eval_extract_rouge1_f1'
     for record in tqdm(records, total=len(records)):
-        source_annotated = all_source_annotated[record['dataset_idx']]
+        # For now, look it up
+        dataset_idx = record['dataset_idx']
+        source_annotated = all_source_annotated[dataset_idx]
+        input_ids = all_input_ids[dataset_idx]
         source_ngrams = get_sent_ngrams(source_annotated)
-        input_ids = all_input_ids[record['dataset_idx']]
         # Get source tokens
         reference = record['reference']
-        extract_rouges = np.array([float(x) for x in record['extract_rouges'].split(',')])
+        extract_rouges = np.array([float(x) for x in record[rouge_col].split(',')])
         extract_idx = [get_extract_idxs_from_str(x) for x in record['extract_idx'].split('<cand>')]
 
         encoder_inputs = {
@@ -123,9 +129,10 @@ if __name__ == '__main__':
             inputs_embeds = inputs_embeds.repeat(num_cand, 1, 1)
             contrast_outputs = model.sent_bart(inputs_embeds=inputs_embeds, calculate_loss=False, labels=brio_labels)
             loss_fct = nn.CrossEntropyLoss(reduction='none')
-            nll = loss_fct(contrast_outputs.logits.view(-1, eos_token_id), brio_labels.view(-1)).view(num_cand, -1)
-            seq_lens = (brio_labels > -100).sum(dim=1) ** args.brio_length_penalty
-            scores = (- nll.sum(dim=1) / seq_lens).detach().cpu().numpy().tolist()
+            assert contrast_outputs.logits.size()[-1] == eos_token_id + 1
+            nll = loss_fct(contrast_outputs.logits.view(-1, contrast_outputs.logits.size()[-1]), brio_labels.view(-1)).view(num_cand, -1)
+            seq_lens = (brio_labels > -100).sum(dim=1) ** model.hparams.brio_length_penalty
+            scores = ((- nll.sum(dim=1) / seq_lens) * model.hparams.brio_scale).detach().cpu().numpy().tolist()
         else:
             with torch.no_grad():
                 encoder_h = model.sent_bart.model.encoder(inputs_embeds=inputs_embeds)[0][0]
@@ -141,5 +148,18 @@ if __name__ == '__main__':
         top_ranks.append(int(np.argmax(pred_ordered_rouges)) + 1)
         pred_rouges.append(pred_ordered_rouges[0])
         first_rouges.append(extract_rouges[0])
-
-        print(np.mean(corels), np.mean(top_ranks), np.mean(pred_rouges), np.mean(first_rouges))
+        beam_corels.append(spearmanr(list(range(len(extract_rouges) - 1, -1, -1)), extract_rouges)[0])
+        print(
+            f'Corel: {np.mean(corels)}. Beam Corel: {np.mean(beam_corels)}. Rank: {np.mean(top_ranks)}, '
+            f'Predicted ROUGE-1: {np.mean(pred_rouges)}. First Candidate ROUGE-1: {np.mean(first_rouges)}'
+        )
+        record['rank_scores'] = ','.join(list(map(str, scores)))
+    outputs = pd.DataFrame(records)
+    print('Fini!')
+    print(
+        f'Pred Corel: {np.mean(corels)}. Beam Corel: {np.mean(beam_corels)}. Rank: {np.mean(top_ranks)}, '
+        f'Predicted ROUGE-1: {np.mean(pred_rouges)}. First Candidate ROUGE-1: {np.mean(first_rouges)}.'
+    )
+    rank_out_fn = rank_fn.split('.')[0] + '_w_predicted_ranks.csv'
+    print(f'Saving back to {rank_out_fn}')
+    outputs.to_csv(rank_out_fn, index=False)

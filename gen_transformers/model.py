@@ -854,12 +854,6 @@ class TransformerSummarizer(pl.LightningModule):
 
         # Update them with user-specific kwargs
         fixed_kwargs.update(gen_kwargs)
-
-        # Uncomment to print out the exact arguments passed to #generate
-        # for k, v in fixed_kwargs.items():
-        #     if k not in {'attention_mask', 'input_ids', 'encoder_outputs'}:
-        #         print(k, v)
-
         pred_ids = self.model.generate(**fixed_kwargs)
         gold_ids = batch['labels']
         gold_ids[torch.where(batch['labels'] == -100)] = 1
@@ -1096,7 +1090,9 @@ class TransformerSummarizer(pl.LightningModule):
         avg_r1_f1 = np.mean([x[f'best_{prefix}_rouge1_f1'] for x in cand_metrics])
         best_cand = np.argmax(cand_scores)
         best_metric = self.compute_rouge([candidates[best_cand]], reference, prefix=f'best_{prefix}_', eval=eval)
-        diversity = np.mean(diversity_score(candidates))
+        diversity = 0
+        if len(candidates) >= 2:
+            diversity = np.mean(diversity_score(candidates))
         return cand_metrics, best_metric, avg_r1_f1, diversity
 
     def configure_optimizers(self):

@@ -40,7 +40,7 @@ if __name__ == '__main__':
     parser.add_argument('--prediction_col', default='from_extract_abstract')
     parser.add_argument('--rank_experiment', default='add_doc')
     # How many processes to use when loading batches on CPU
-    parser.add_argument('--split', default='validation')
+    parser.add_argument('--split', default='test')
     parser.add_argument('--hf_model', default='facebook/bart-large-cnn')
     parser.add_argument('--max_examples', default=999999, type=int)
     parser.add_argument('--score_mode', default='likelihood')

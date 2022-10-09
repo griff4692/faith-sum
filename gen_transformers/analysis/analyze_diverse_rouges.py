@@ -1,4 +1,5 @@
 import itertools
+import json
 
 import numpy as np
 import pandas as pd
@@ -14,14 +15,77 @@ def get_arr(num_str):
 
 
 if __name__ == '__main__':
-    # 'gen_extract_full_ar_mask_red_feat' 'gen_abstract_full' # Gen abstract full
     experiment = 'add_doc'
-    output = 'validation_from_sample_w_diverse_extract'  # validation_from_sample_extract
-    summary_style = 'from_extract'  # from_extract
-    col = f'{summary_style}_rouges'
-    df = pd.read_csv(f'/nlp/projects/faithsum/results/{experiment}/{output}.csv').dropna(subset=[col])
+    output = 'test_from_beam_16_extract'  # validation_from_sample_extract
+    summary_style = 'from_extract_abstract'  # from_extract
+    if summary_style == 'abstract':
+        rouge_col = f'eval_{summary_style}_rouge1_f1'
+        diversity_col = 'diversity'
+    elif summary_style == 'implied_extract':
+        rouge_col = f'eval_{summary_style}_rouge1_f1'
+        diversity_col = 'implied_diversity'
+    elif summary_style == 'from_extract_abstract':
+        rouge_col = f'eval_{summary_style}_rouge1_f1'
+        diversity_col = 'diversity'
+    else:
+        rouge_col = f'eval_{summary_style}_rouge1_f1'
+        diversity_col = f'{summary_style}_diversity'
+    score_col = 'rank_scores'
+    reranked = False
+    print(summary_style)
+    df = pd.read_csv(f'/nlp/projects/faithsum/results/{experiment}/{output}.csv').dropna(subset=[summary_style])
 
-    rouges = [get_arr(x) for x in df[col].tolist()]
+    rouges = [get_arr(x) for x in df[rouge_col].tolist()]
+    try:
+        diversities = [float(x) for x in df[diversity_col]]
+    except:
+        print('This has been fixed in generate but lets deal with it here.')
+        diversities = []
+        for x in df[diversity_col]:
+            diversities.append(np.mean(json.loads(x)))
+    n = len(df)
+
+    rank_scores = None
+    if reranked:
+        rank_scores = [get_arr(x) for x in df[score_col].tolist()]
+
+    avg_rouges = []
+    max_rouges = []
+    max_rouges_by_beam = [[] for _ in range(len(rouges[0]))]
+    avg_rouges_by_beam = [[] for _ in range(len(rouges[0]))]
+
+    for i in range(n):
+        rouge_arr = rouges[i]
+        rouge_arr_sorted = rouge_arr
+        if rank_scores is not None:
+            scores = rank_scores[i]
+            priority = np.argsort(-np.array(scores))
+            rouge_arr_sorted = [rouge_arr[pidx] for pidx in priority]
+
+        avg_rouges.append(np.mean(rouge_arr))
+        max_rouges.append(max(rouge_arr))
+        for beam in range(len(avg_rouges_by_beam)):
+            cum_rouge = rouge_arr_sorted[:beam + 1]
+            avg_rouges_by_beam[beam].append(np.mean(cum_rouge))
+            max_rouges_by_beam[beam].append(max(cum_rouge))
+
+    print(f'Mean Avg inverse SELF-BLEU: {np.mean(diversities)}')
+    print(f'Mean Avg ROUGE-1 F1: {np.mean(avg_rouges)}')
+    print(f'Mean Max ROUGE-1 F1: {np.mean(max_rouges)}')
+
+    print('Mean Avg ROUGE-1 F1 by Beam...')
+    out = []
+    for beam in range(len(avg_rouges_by_beam)):
+        out.append(str(np.mean(avg_rouges_by_beam[beam])))
+    print('\t'.join(out))
+
+    print('Mean Max ROUGE-1 F1 by Beam...')
+    out = []
+    for beam in range(len(max_rouges_by_beam)):
+        out.append(str(np.mean(max_rouges_by_beam[beam])))
+    print('\t'.join(out))
+
+    exit(0)
 
     records = df.to_dict('records')
     num_in_extracts = []

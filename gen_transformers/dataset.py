@@ -104,14 +104,6 @@ class SummaryDataModule(pl.LightningDataModule):
 
         brio_candidates = None
         if self.args.add_brio_loss:
-            # if self.args.brio_experiment is None:
-            #     oracle_fn = os.path.join(self.args.data_dir, self.args.dataset, 'oracle', f'{split}_candidates_v2.json')
-            #     with open(oracle_fn, 'r') as fd:
-            #         brio_candidates = ujson.load(fd)
-            #         n = len(brio_candidates)
-            #         brio_candidates = {k: v for k, v in brio_candidates.items() if len(v) >= 2}
-            #         filt_n = len(brio_candidates)
-            #         print(f'{filt_n}/{n} have more than 1 candidate provided for {split} set')
             if self.args.is_word_brio:
                 if self.args.use_regular_candidates:
                     max_brio_candidates = 4
@@ -162,10 +154,6 @@ class SummaryDataModule(pl.LightningDataModule):
                     extract_idxs_ordered = [extract_idxs[i] for i in priority]
                     extract_rouges_ordered = [extract_rouges[i] for i in priority]
 
-                    if len(priority) < 2:
-                        print(f'Only {len(priority)} candidate provided for this example.')
-                        continue
-
                     # De-Duplicate
                     extract_idxs_uniq = [
                         extract_idx for i, extract_idx in enumerate(
@@ -178,6 +166,10 @@ class SummaryDataModule(pl.LightningDataModule):
                             extract_idxs_ordered
                         ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
                     ]
+
+                    if len(extract_rouges_uniq) < 2:
+                        print(f'Only {len(extract_rouges_uniq)} unique candidate provided for this example.')
+                        continue
 
                     brio_candidates[dataset_ids[record['dataset_idx']]] = [extract_idxs_uniq, extract_rouges_uniq]
             # Filter dataset to only include ones with BRIO candidates generated or 'oracled'
@@ -192,6 +184,16 @@ class SummaryDataModule(pl.LightningDataModule):
             idxs = list(np.sort(np.random.choice(np.arange(n), size=(max_examples, ), replace=False)))
             print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
             split_dataset = split_dataset.select(idxs)
+
+        if split == 'train' and self.args.oracle_drop_p > 0:
+            oracle_rouge_1 = split_dataset['oracle_rouge1']
+            oracle_rouge_2 = split_dataset['oracle_rouge2']
+            avg_rouge = [(a + b) / 2.0 for (a, b) in zip(oracle_rouge_1, oracle_rouge_2)]
+            priority = np.argsort(avg_rouge)
+            drop_n = round(len(split_dataset) * self.args.oracle_drop_p)
+            print(f'Filtering out {drop_n} training examples with lowest oracle score.')
+            keep_idxs = list(sorted(priority[drop_n:]))
+            split_dataset = split_dataset.select(keep_idxs)
 
         split_dataset_pl = SummarizationDataset(
             self.args, split_dataset, self.tokenizer, split, brio_candidates=brio_candidates

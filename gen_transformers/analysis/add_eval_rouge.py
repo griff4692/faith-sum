@@ -2,8 +2,6 @@ from collections import defaultdict
 
 import pandas as pd
 import argparse
-import os
-from scipy.stats import spearmanr
 from p_tqdm import p_uimap
 
 from eval.rouge_metric import RougeMetric
@@ -59,13 +57,12 @@ def process_example(args, record, rouge_metric):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('ADD PERL ROUGE Eval')
 
-    parser.add_argument('--gpu_device', default=0, type=int)
     parser.add_argument('--experiment', default='add_doc')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--fn', default=DEFAULT_FN)
     parser.add_argument('--split', default='validation')
     parser.add_argument('--columns', default='extract,from_extract_abstract', choices=[
-        'extract', 'extract,from_extract_abstract', 'abstract', 'abstract,implied_abstract'
+        'extract', 'extract,from_extract_abstract', 'abstract', 'abstract,implied_extract'
     ])
     parser.add_argument('--num_cpus', default=16, type=int)
 

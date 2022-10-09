@@ -17,8 +17,8 @@ from global_utils import get_free_gpus
 
 DATASET_KWARGS = {
     'cnn_dailymail': {
-        'abstract': { 'min_length': 56, 'max_length': 142, 'length_penalty': 2.0},
-        'extract': { 'min_length': 3, 'max_length': 10, 'length_penalty': 1.0},
+        'abstract': {'min_length': 56, 'max_length': 142, 'length_penalty': 2.0},
+        'extract': {'min_length': 3, 'max_length': 10, 'length_penalty': 1.0},
     }
 }
 
@@ -119,8 +119,7 @@ if __name__ == '__main__':
         args.lr = 1.0   # Needed to load
         tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
         model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model).to(gpu).eval()
-    elif args.hf_model == 'facebook/bart-large-cnn':
-        assert args.summary_style == 'abstract'
+    elif args.hf_model == 'facebook/bart-large-cnn' and args.summary_style == 'abstract':
         args.lr = 1.0   # Needed to load
         tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
         model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model).to(gpu).eval()

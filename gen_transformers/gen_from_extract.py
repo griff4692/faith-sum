@@ -93,7 +93,6 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
     )
     rouge1_f1s = [y['best_from_extract_rouge1_f1'] for y in cand_metrics]
     pred_rank = int(np.argmax(rouge1_f1s))
-    diversity = diversity_score(pred_str)
     return {
         'best_from_extract_rouge1_f1': best_metric['best_from_extract_rouge1_f1'],
         'best_from_extract_rouge2_f1': best_metric['best_from_extract_rouge2_f1'],
@@ -130,20 +129,17 @@ if __name__ == '__main__':
     parser.add_argument('--hf_model', default='facebook/bart-base')
     parser.add_argument('--max_examples', default=999999, type=int)
     parser.add_argument('--dataset', default='cnn_dailymail')
-    parser.add_argument('--extract_mode', default='sample', choices=['sample', 'beam'])
-    parser.add_argument('--sample_mode', default='diverse', choices=['diverse', 'beam'])
+    parser.add_argument('--decode_method', default='beam', choices=['diverse', 'beam', 'nucleus'])
+    parser.add_argument('--num_candidates', default=16, type=int)
     parser.add_argument('--top_k', default=None, type=int)
     parser.add_argument('--num_return_sequences', default=1, type=int)
-    parser.add_argument('--split', default='validation')
+    parser.add_argument('--split', default='test')
 
     args = parser.parse_args()
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
-    if args.extract_mode == 'beam':
-        extract_str = 'beam'
-    else:
-        extract_str = f'{args.extract_mode}_w_{args.sample_mode}'
-    in_fn = os.path.join(results_dir, f'{args.split}_{extract_str}_outputs.csv')
+    decode_suffix = args.decode_method + '_' + str(args.num_candidates)
+    in_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs_longer.csv')
     print(f'Reading in extracts from {in_fn}')
     outputs = pd.read_csv(in_fn)
     outputs.dropna(subset=['extract'], inplace=True)
@@ -176,7 +172,7 @@ if __name__ == '__main__':
     updated_records = []
     stats = []
     wins, losses, ties = 0, 0, 0
-    compare_col = 'best_extract_rouge1_f1' if args.extract_mode == 'sample' else 'extract_rouge1_f1'
+    compare_col = 'best_extract_rouge1_f1' if args.num_candidates > 1 else 'extract_rouge1_f1'
     for record in tqdm(records, total=len(records)):
         # sent_scores = np.array(list(map(float, record['sent_scores'].split(','))))
         source_annotated = all_source_annotated[record['dataset_idx']]
@@ -198,7 +194,7 @@ if __name__ == '__main__':
             'best_ensemble_rouge1_f1': best_ensemble_rouge1_f1,
         }
 
-        if args.extract_mode == 'sample':
+        if args.num_candidates > 1:
             more = {
                 'avg_extract_rouge1_f1': record['avg_extract_rouge1_f1'],
                 'avg_from_extract_rouge1_f1': gen_output['avg_from_extract_rouge1_f1'],
@@ -232,7 +228,7 @@ if __name__ == '__main__':
         top_k_str = '' if args.top_k is None else f'_{args.top_k}'
         out_fn = os.path.join(
             results_dir,
-            f'{args.split}_from_{extract_str}_extract{top_k_str}.csv'
+            f'{args.split}_from_{decode_suffix}_extract{top_k_str}_longer.csv'
         )
         print(f'Saving prompted abstracts to {out_fn}')
         updated_df.to_csv(out_fn, index=False)
