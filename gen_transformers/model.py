@@ -1158,5 +1158,5 @@ class TransformerSummarizer(pl.LightningModule):
             split_str = 'train' if is_train else 'validation'
             self.log(f'{split_str}/{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)
             # Backward compatibility
-            if is_train:
-                self.log(f'{split_str}_{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)
+            # if is_train:
+            #     self.log(f'{split_str}_{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)
