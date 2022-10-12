@@ -4,7 +4,6 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
 from datasets import load_from_disk
-import spacy
 import pandas as pd
 import torch
 import numpy as np
@@ -13,11 +12,8 @@ from transformers import AutoTokenizer
 
 from data_utils import get_path_from_exp
 from eval.rouge_metric import RougeMetric
-from preprocess.convert_abstractive_to_extractive import gain_selection
 from gen_transformers.model import TransformerSummarizer
 from gen_transformers.model_utils import sentence_indicators
-from preprocess.extract_oracles import convert_to_sents
-from eval.diversity import diversity_score
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 np.random.seed(1992)
@@ -65,7 +61,7 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
         'encoder_outputs': encoder_outputs,
         'attention_mask': attention_mask,
         'num_return_sequences': num_return_sequences,
-        'length_penalty': 2.0,  # previously was 4.0,
+        'length_penalty': 1.0,  # previously was 4.0, could try 1.0
         'max_length': 142,
         'min_length': 56,
         'no_repeat_ngram_size': 3,
@@ -122,7 +118,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--gpu_device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--wandb_name', default='extract_indicators')
+    parser.add_argument('--abstract_experiment', default='extract_indicators')
     parser.add_argument('--extract_experiment', default='add_doc')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-do_not_save', default=False, action='store_true')
@@ -134,12 +130,13 @@ if __name__ == '__main__':
     parser.add_argument('--top_k', default=None, type=int)
     parser.add_argument('--num_return_sequences', default=1, type=int)
     parser.add_argument('--split', default='test')
+    parser.add_argument('-verbose', default=False, action='store_true')
 
     args = parser.parse_args()
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
     decode_suffix = args.decode_method + '_' + str(args.num_candidates)
-    in_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs_longer.csv')
+    in_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs.csv')
     print(f'Reading in extracts from {in_fn}')
     outputs = pd.read_csv(in_fn)
     outputs.dropna(subset=['extract'], inplace=True)
@@ -155,8 +152,8 @@ if __name__ == '__main__':
 
     records = outputs.to_dict('records')
     weight_dir = os.path.join(args.data_dir, 'weights')
-    ckpt_path = get_path_from_exp(weight_dir, args.wandb_name)
-    tokenizer_dir = os.path.join(weight_dir, args.wandb_name, 'tokenizer')
+    ckpt_path = get_path_from_exp(weight_dir, args.abstract_experiment)
+    tokenizer_dir = os.path.join(weight_dir, args.abstract_experiment, 'tokenizer')
     print(f'Loading tokenizer from {tokenizer_dir}...')
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
 
@@ -216,7 +213,8 @@ if __name__ == '__main__':
         gen_output['best_ensemble_rouge1_f1'] = best_ensemble_rouge1_f1
         record.update(gen_output)
         updated_records.append(record)
-        print(f'Abstract Wins: {wins}. Losses: {losses}. Ties: {ties}')
+        if args.verbose:
+            print(f'Abstract Wins: {wins}. Losses: {losses}. Ties: {ties}')
     stats = pd.DataFrame(stats)
     avgs = {k: stats[k].mean() for k in stats.columns}
     print(avgs)
@@ -228,9 +226,10 @@ if __name__ == '__main__':
         top_k_str = '' if args.top_k is None else f'_{args.top_k}'
         out_fn = os.path.join(
             results_dir,
-            f'{args.split}_from_{decode_suffix}_extract{top_k_str}_longer.csv'
+            f'{args.split}_from_{decode_suffix}_extract{top_k_str}.csv'
         )
         print(f'Saving prompted abstracts to {out_fn}')
+        out_fn = 'debug.csv'
         updated_df.to_csv(out_fn, index=False)
 
     extract_tok_len = updated_df['extract'].apply(lambda x: len(

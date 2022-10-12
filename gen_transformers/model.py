@@ -166,7 +166,8 @@ class TransformerSummarizer(pl.LightningModule):
         }
 
     def training_step(self, batch, batch_idx):
-        batch['cls_mask'][:, 0] = True  # Document <s> Token gets passed to the sentence encoder
+        if self.hparams.summary_style == 'extract':
+            batch['cls_mask'][:, 0] = True  # Document <s> Token gets passed to the sentence encoder
         # source = self.parse_source_text_from_inputs(batch)
         shared_output = self.shared_step(batch, source=None, build_extracts=False)  # Don't generate extracts
         metrics, return_loss = shared_output['metrics'], shared_output['return_loss']
@@ -194,7 +195,8 @@ class TransformerSummarizer(pl.LightningModule):
         return losses, summaries
 
     def validation_step(self, batch, batch_idx):
-        batch['cls_mask'][:, 0] = True  # Document <s> Token gets passed to the sentence encoder
+        if self.hparams.summary_style == 'extract':
+            batch['cls_mask'][:, 0] = True  # Document <s> Token gets passed to the sentence encoder
         batch_size = len(batch['input_ids'])
 
         source = self.parse_source_text_from_inputs(batch)
@@ -1155,3 +1157,6 @@ class TransformerSummarizer(pl.LightningModule):
         for k, v in metrics.items():
             split_str = 'train' if is_train else 'validation'
             self.log(f'{split_str}/{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)
+            # Backward compatibility
+            if is_train:
+                self.log(f'{split_str}_{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)

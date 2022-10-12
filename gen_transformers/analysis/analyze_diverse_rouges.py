@@ -15,9 +15,9 @@ def get_arr(num_str):
 
 
 if __name__ == '__main__':
-    experiment = 'add_doc'
-    output = 'test_from_beam_16_extract'  # validation_from_sample_extract
-    summary_style = 'from_extract_abstract'  # from_extract
+    experiment = 'add_doc_bart_large_cnn'
+    output = 'test_from_diverse_16_extract'  # validation_from_sample_extract
+    summary_style = 'from_extract_abstract'
     if summary_style == 'abstract':
         rouge_col = f'eval_{summary_style}_rouge1_f1'
         diversity_col = 'diversity'

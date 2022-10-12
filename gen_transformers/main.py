@@ -67,7 +67,10 @@ def run(args):
         model.hparams.add_brio_loss = args.add_brio_loss
         model.hparams.extract_indicators = args.extract_indicators
         model.hparams.brio_margin = args.brio_margin
-        model.hparams.brio_loss_coef = args.brio_loss_coef
+        model.hparams.high_lr = args.high_lr
+        model.hparams.mle_weight = args.mle_weight
+        model.hparams.brio_weight = args.brio_weight
+        val_check_interval = 1.0 if args.debug or args.train_frac <= 0.2 else 0.25
 
     if args.add_brio_loss:
         val_check_interval = 0.1
