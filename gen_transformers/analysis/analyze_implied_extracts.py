@@ -8,8 +8,9 @@ from datasets import load_from_disk
 
 if __name__ == '__main__':
     data_dir = '/nlp/projects/faithsum'
-    experiment = 'gen_abstract_full'  # 'gen_abstract_full' gen_extract_full_ar_mask_red_feat
+    experiment = 'bart_large_cnn'  # 'gen_abstract_full' gen_extract_full_ar_mask_red_feat
     summary_type = 'abstract'
+    fn = 'test_diverse_16_outputs.csv'
 
     prefix = ''
     if summary_type == 'abstract':
@@ -17,7 +18,7 @@ if __name__ == '__main__':
     idx_col = prefix + 'extract_idx'
     score_col = prefix + 'extract_rouges'
 
-    df = pd.read_csv(os.path.join(data_dir, f'results/{experiment}/validation_sample_outputs.csv'))
+    df = pd.read_csv(os.path.join(data_dir, f'results/{experiment}/{fn}'))
     data_dir = os.path.join(data_dir, 'cnn_dailymail')
     dataset = load_from_disk(data_dir)
     beam_num_unique_plans = [[] for _ in range(16)]

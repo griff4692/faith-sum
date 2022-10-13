@@ -7,8 +7,7 @@ from p_tqdm import p_uimap
 from eval.rouge_metric import RougeMetric
 
 
-# DEFAULT_FN = '/nlp/projects/faithsum/results/add_doc/validation_from_sample_w_diverse_extract_4.csv'
-DEFAULT_FN = '/nlp/projects/faithsum/results/add_doc/validation_from_sample_w_diverse_extract.csv'
+DEFAULT_FN = '/nlp/projects/faithsum/results/add_doc_bart_large_cnn/test_from_beam_16_extract.csv'
 
 
 def get_arr(num_str):
@@ -57,14 +56,14 @@ def process_example(args, record, rouge_metric):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('ADD PERL ROUGE Eval')
 
-    parser.add_argument('--experiment', default='add_doc')
+    parser.add_argument('--experiment', default='add_doc_bart_large_cnn')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--fn', default=DEFAULT_FN)
     parser.add_argument('--split', default='validation')
     parser.add_argument('--columns', default='extract,from_extract_abstract', choices=[
         'extract', 'extract,from_extract_abstract', 'abstract', 'abstract,implied_extract'
     ])
-    parser.add_argument('--num_cpus', default=16, type=int)
+    parser.add_argument('--num_cpus', default=32, type=int)
 
     args = parser.parse_args()
     rouge_metric = RougeMetric()
@@ -82,3 +81,10 @@ if __name__ == '__main__':
 
     print(f'Saving with PERL eval ROUGE columns added back to {args.fn}')
     augmented_df.to_csv(args.fn, index=False)
+
+    for col in augmented_df.columns.tolist():
+        if 'rouge' in col and 'eval' in col:
+            try:
+                print(col, ': ', str(augmented_df[col].dropna().mean()))
+            except:
+                print(f'Array col: {col}')

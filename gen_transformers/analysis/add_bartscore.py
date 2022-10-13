@@ -1,5 +1,3 @@
-from collections import defaultdict
-
 import pandas as pd
 from tqdm import tqdm
 import argparse
@@ -7,7 +5,7 @@ import argparse
 from eval.bart_score import BARTScorer
 
 
-DEFAULT_FN = '/nlp/projects/faithsum/results/add_doc_bart_large_cnn/test_from_beam_1_extract.csv'
+DEFAULT_FN = '/nlp/projects/faithsum/results/add_doc_bart_large_cnn/test_from_diverse_16_extract.csv'
 
 
 def get_arr(num_str):
@@ -16,17 +14,6 @@ def get_arr(num_str):
     else:
         delim = ','
     return [float(y) for y in num_str.split(delim)]
-
-
-def evaluate_summary(rouge_metric, generated, gold, prefix=''):
-    outputs = rouge_metric.evaluate_batch([generated], [gold], aggregate=True)['rouge']
-    stats = {}
-    for rouge_type in ['1', '2', 'L']:
-        fscore = outputs[f'rouge_{rouge_type.lower()}_f_score']
-        stats[f'{prefix}rouge{rouge_type}_precision'] = outputs[f'rouge_{rouge_type.lower()}_precision']
-        stats[f'{prefix}rouge{rouge_type}_recall'] = outputs[f'rouge_{rouge_type.lower()}_recall']
-        stats[f'{prefix}rouge{rouge_type}_f1'] = fscore
-    return stats
 
 
 def process_example(args, record, bart_scorer):
