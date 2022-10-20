@@ -32,11 +32,6 @@ python gen_from_extract.py --extract_experiment $EXTRACT_EXPERIMENT --split $SPL
   --abstract_experiment $ABSTRACT_EXPERIMENT --hf_model $ABSTRACT_MODEL --decode_method beam --num_candidates 16 \
   --gpu_device $DEVICE -add_abstract_experiment
 
-echo "Abstracting from 16 beams with calibration"
-python gen_from_extract.py --extract_experiment $EXTRACT_EXPERIMENT --split $SPLIT --max_examples $MAX_EXAMPLES \
-  --abstract_experiment $ABSTRACT_EXPERIMENT --hf_model $ABSTRACT_MODEL --decode_method beam --num_candidates 16 \
-  --gpu_device $DEVICE -add_abstract_experiment -calibrate_indicators
-
 #echo "Abstracting from 16 diverse beams"
 #python gen_from_extract.py --extract_experiment $EXTRACT_EXPERIMENT --split $SPLIT --max_examples $MAX_EXAMPLES \
 #  --abstract_experiment $ABSTRACT_EXPERIMENT --hf_model $ABSTRACT_MODEL --decode_method diverse --num_candidates 16 \

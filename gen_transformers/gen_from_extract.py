@@ -14,6 +14,7 @@ from eval.rouge_metric import RougeMetric
 from gen_transformers.model import TransformerSummarizer
 from gen_transformers.model_utils import sentence_indicators
 
+
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 np.random.seed(1992)
 
@@ -54,33 +55,9 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
         ei = sentence_indicators(cls_mask[cand_idx].unsqueeze(0), extract_idx, attention_mask[cand_idx].unsqueeze(0))
         extract_indicators.append(ei)
     extract_indicators = torch.cat(extract_indicators, dim=0)
-
-    extract_indicators = extract_indicators.unsqueeze(1).repeat(1, num_return_sequences, 1).view(n * num_return_sequences, -1)
-    attention_mask = attention_mask.unsqueeze(1).repeat(1, num_return_sequences, 1).view(n * num_return_sequences, -1)
-    input_ids = input_ids.unsqueeze(1).repeat(1, num_return_sequences, 1).view(n * num_return_sequences, -1)
-    indicator_weights = [1.0, 0.75, 0.5, 0.25, 1.0, 0.75, 0.5, 0.25, 1.0, 0.75, 0.5, 0.25, 1.0, 0.75, 0.5, 0.25]
-    indicator_weights = torch.FloatTensor(indicator_weights).to(args.gpu_device).unsqueeze(1)
-    # set num_return_sequences = 1
-    num_return_sequences = 1
-
     encoder_outputs = model.model.model.encoder(**{
-        'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators, 'indicator_weights': indicator_weights
+        'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
     })
-
-    # if len(extract_indicators) > 1 and args.calibrate_indicators:
-    #     # TODO add weights for embeddings
-    #     indicator_weights = [
-    #         1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25
-    #     ]
-    #     indicator_weights = torch.FloatTensor(indicator_weights).to(args.gpu_device).unsqueeze(1)
-    #     encoder_outputs = model.model.model.encoder(**{
-    #         'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
-    #         'indicator_weights': indicator_weights,
-    #     })
-    # else:
-    #     encoder_outputs = model.model.model.encoder(**{
-    #         'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
-    #     })
 
     shared_kwargs = {
         'encoder_outputs': encoder_outputs,
@@ -157,7 +134,6 @@ if __name__ == '__main__':
     parser.add_argument('--split', default='test')
     parser.add_argument('-verbose', default=False, action='store_true')
     parser.add_argument('-add_abstract_experiment', default=False, action='store_true')
-    parser.add_argument('-calibrate_indicators', default=False, action='store_true')
 
     args = parser.parse_args()
 
@@ -198,7 +174,6 @@ if __name__ == '__main__':
     wins, losses, ties = 0, 0, 0
     compare_col = 'best_extract_rouge1_f1' if args.num_candidates > 1 else 'extract_rouge1_f1'
     for record in tqdm(records, total=len(records)):
-        # sent_scores = np.array(list(map(float, record['sent_scores'].split(','))))
         source_annotated = all_source_annotated[record['dataset_idx']]
         # Get source tokens
         reference = record['reference']
