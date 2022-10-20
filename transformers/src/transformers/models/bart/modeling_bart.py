@@ -739,6 +739,7 @@ class BartEncoder(BartPretrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         extract_indicators: Optional[torch.Tensor] = None,
+        indicator_weights: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         output_attentions: Optional[bool] = None,
@@ -807,6 +808,8 @@ class BartEncoder(BartPretrainedModel):
         # assert extract_indicators is None
         if extract_indicators is not None:
             extract_embeds = self.extract_indicator_embeddings(extract_indicators)
+            if indicator_weights is not None:
+                extract_embeds *= indicator_weights.unsqueeze(1).repeat(1, extract_embeds.size()[1], 1)
             hidden_states += extract_embeds
         hidden_states = self.layernorm_embedding(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)

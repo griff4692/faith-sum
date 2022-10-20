@@ -165,7 +165,7 @@ if __name__ == '__main__':
     parser.add_argument('--oracle_drop_p', default=0.0, type=float)
 
     # Hyper-Parameters
-    parser.add_argument('--lr', type=float, default=1e-5)  # used to be 2.2e-4
+    parser.add_argument('--lr', type=float, default=1e-5)  # used to be 3e-5
     parser.add_argument('--high_lr', type=float, default=1e-3)  # For newly initialized parameters
     parser.add_argument('--weight_decay', type=float, default=5e-5)
     # Gradient accumulation will adjust for the ratio between target_batch_size and per_device_train_bs

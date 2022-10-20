@@ -46,6 +46,7 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
         return_tensors='pt',
     )
     input_ids = inputs['input_ids'].to(args.gpu_device)
+    n = len(input_ids)
     attention_mask = inputs['attention_mask'].to(args.gpu_device)
     cls_mask = input_ids >= special_id_min
     extract_indicators = []
@@ -53,9 +54,34 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
         ei = sentence_indicators(cls_mask[cand_idx].unsqueeze(0), extract_idx, attention_mask[cand_idx].unsqueeze(0))
         extract_indicators.append(ei)
     extract_indicators = torch.cat(extract_indicators, dim=0)
+
+    extract_indicators = extract_indicators.unsqueeze(1).repeat(1, num_return_sequences, 1).view(n * num_return_sequences, -1)
+    attention_mask = attention_mask.unsqueeze(1).repeat(1, num_return_sequences, 1).view(n * num_return_sequences, -1)
+    input_ids = input_ids.unsqueeze(1).repeat(1, num_return_sequences, 1).view(n * num_return_sequences, -1)
+    indicator_weights = [1.0, 0.75, 0.5, 0.25, 1.0, 0.75, 0.5, 0.25, 1.0, 0.75, 0.5, 0.25, 1.0, 0.75, 0.5, 0.25]
+    indicator_weights = torch.FloatTensor(indicator_weights).to(args.gpu_device).unsqueeze(1)
+    # set num_return_sequences = 1
+    num_return_sequences = 1
+
     encoder_outputs = model.model.model.encoder(**{
-        'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
+        'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators, 'indicator_weights': indicator_weights
     })
+
+    # if len(extract_indicators) > 1 and args.calibrate_indicators:
+    #     # TODO add weights for embeddings
+    #     indicator_weights = [
+    #         1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25
+    #     ]
+    #     indicator_weights = torch.FloatTensor(indicator_weights).to(args.gpu_device).unsqueeze(1)
+    #     encoder_outputs = model.model.model.encoder(**{
+    #         'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
+    #         'indicator_weights': indicator_weights,
+    #     })
+    # else:
+    #     encoder_outputs = model.model.model.encoder(**{
+    #         'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
+    #     })
+
     shared_kwargs = {
         'encoder_outputs': encoder_outputs,
         'attention_mask': attention_mask,
@@ -130,6 +156,8 @@ if __name__ == '__main__':
     parser.add_argument('--num_return_sequences', default=1, type=int)
     parser.add_argument('--split', default='test')
     parser.add_argument('-verbose', default=False, action='store_true')
+    parser.add_argument('-add_abstract_experiment', default=False, action='store_true')
+    parser.add_argument('-calibrate_indicators', default=False, action='store_true')
 
     args = parser.parse_args()
 
@@ -223,12 +251,17 @@ if __name__ == '__main__':
     updated_df = pd.DataFrame(updated_records)
     if not args.do_not_save:
         top_k_str = '' if args.top_k is None else f'_{args.top_k}'
-        out_fn = os.path.join(
-            results_dir,
-            f'{args.split}_from_{decode_suffix}_extract{top_k_str}.csv'
-        )
+        if args.add_abstract_experiment:
+            out_fn = os.path.join(
+                results_dir,
+                f'{args.split}_from_{decode_suffix}_extract{top_k_str}_{args.abstract_experiment}.csv'
+            )
+        else:
+            out_fn = os.path.join(
+                results_dir,
+                f'{args.split}_from_{decode_suffix}_extract{top_k_str}.csv'
+            )
         print(f'Saving prompted abstracts to {out_fn}')
-        out_fn = 'debug.csv'
         updated_df.to_csv(out_fn, index=False)
 
     extract_tok_len = updated_df['extract'].apply(lambda x: len(

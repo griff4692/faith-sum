@@ -16,6 +16,7 @@ def get_arr(num_str):
 
 if __name__ == '__main__':
     experiment = 'add_doc_bart_large_cnn'
+    # output = 'test_from_beam_16_extract_guided_abstract_1_drop'
     output = 'test_from_beam_16_extract'
     summary_style = 'from_extract_abstract'
     if summary_style == 'abstract':
@@ -31,7 +32,6 @@ if __name__ == '__main__':
         rouge_col = f'eval_{summary_style}_rouge1_f1'
         diversity_col = f'{summary_style}_diversity'
     score_col = 'rank_scores'
-    bartscore_col = f'{summary_style}_bartscores'
     reranked = False
     print(summary_style)
     in_fn = f'/nlp/projects/faithsum/results/{experiment}/{output}.csv'
@@ -39,7 +39,9 @@ if __name__ == '__main__':
     df = pd.read_csv(in_fn).dropna(subset=[summary_style])
 
     rouges = [get_arr(x) for x in df[rouge_col].tolist()]
-    bartscores = [get_arr(x) for x in df[bartscore_col].tolist()]
+
+    # bartscore_col = f'{summary_style}_bartscores'
+    # bartscores = [get_arr(x) for x in df[bartscore_col].tolist()]
     try:
         diversities = [float(x) for x in df[diversity_col]]
     except:
@@ -55,36 +57,36 @@ if __name__ == '__main__':
 
     avg_rouges = []
     max_rouges = []
-    avg_bartscores = []
+    # avg_bartscores = []
     max_rouges_by_beam = [[] for _ in range(len(rouges[0]))]
     avg_rouges_by_beam = [[] for _ in range(len(rouges[0]))]
-    avg_bartscores_by_beam = [[] for _ in range(len(rouges[0]))]
+    # avg_bartscores_by_beam = [[] for _ in range(len(rouges[0]))]
 
     for i in range(n):
         rouge_arr = rouges[i]
-        bartscore_arr = bartscores[i]
+        # bartscore_arr = bartscores[i]
         rouge_arr_sorted = rouge_arr
-        bartscore_arr_sorted = bartscore_arr
+        # bartscore_arr_sorted = bartscore_arr
         if rank_scores is not None:
             scores = rank_scores[i]
             priority = np.argsort(-np.array(scores))
             rouge_arr_sorted = [rouge_arr[pidx] for pidx in priority]
-            bartscore_arr_sorted = [bartscore_arr[pidx] for pidx in priority]
+            # bartscore_arr_sorted = [bartscore_arr[pidx] for pidx in priority]
 
         avg_rouges.append(np.mean(rouge_arr))
-        avg_bartscores.append(np.mean(bartscore_arr_sorted))
+        # avg_bartscores.append(np.mean(bartscore_arr_sorted))
         max_rouges.append(max(rouge_arr))
         for beam in range(len(avg_rouges_by_beam)):
             cum_rouge = rouge_arr_sorted[:beam + 1]
-            cum_bartscore = bartscore_arr_sorted[:beam + 1]
             avg_rouges_by_beam[beam].append(np.mean(cum_rouge))
             max_rouges_by_beam[beam].append(max(cum_rouge))
-            avg_bartscores_by_beam[beam].append(np.mean(cum_bartscore))
+            # cum_bartscore = bartscore_arr_sorted[:beam + 1]
+            # avg_bartscores_by_beam[beam].append(np.mean(cum_bartscore))
 
     print(f'Mean Avg inverse SELF-BLEU: {np.mean(diversities)}')
     print(f'Mean Avg ROUGE-1 F1: {np.mean(avg_rouges)}')
     print(f'Mean Max ROUGE-1 F1: {np.mean(max_rouges)}')
-    print(f'Mean Avg BartScore: {np.mean(avg_bartscores)}')
+    # print(f'Mean Avg BartScore: {np.mean(avg_bartscores)}')
     print('Mean Avg ROUGE-1 F1 by Beam...')
     out = []
     for beam in range(len(avg_rouges_by_beam)):
@@ -97,94 +99,8 @@ if __name__ == '__main__':
         out.append(str(np.mean(max_rouges_by_beam[beam])))
     print('\t'.join(out))
 
-    print('Mean Cumulative BartScore by Beam...')
-    out = []
-    for beam in range(len(avg_rouges_by_beam)):
-        out.append(str(np.mean(avg_bartscores_by_beam[beam])))
-    print('\t'.join(out))
-
-    exit(0)
-
-    records = df.to_dict('records')
-    num_in_extracts = []
-    all_extract_rouges = []
-    all_from_extract_rouges = []
-    all_lengths = []
-    all_compressions = []
-
-    for record in records:
-        extracts = record['extract'].split('<cand>')
-        extract_idx = record['extract_idx'].split('<cand>')
-        num_in_extract = [len(x.split(',')) for x in extract_idx]
-        num_in_extracts += num_in_extract
-        from_extracts = record['from_extract_abstract'].split('<cand>')
-        extract_rouges = get_arr(record['extract_rouges'])
-        from_extract_rouges = get_arr(record['from_extract_rouges'])
-        all_from_extract_rouges += from_extract_rouges
-        all_extract_rouges += extract_rouges
-        extract_length = [len(x.split(' ')) for x in extracts]
-        from_extract_length = [len(x.split(' ')) for x in from_extracts]
-        for a, b in zip(extract_length, from_extract_length):
-            if a > 0 and b > 0:
-                all_compressions.append(b / a)
-        all_lengths += extract_length
-
-        beam = 1
-        print('Source: ', record['source'], '\n')
-        print('Reference: ', record['reference'], '\n')
-        for extract, from_extracts, er, fer in zip(extracts, from_extracts, extract_rouges, from_extract_rouges):
-            print('Beam ' + str(beam) + '\n')
-            print('Extract: ROUGE ', er)
-            print(extract)
-            print('From Extract: ROUGE ', fer)
-            print(from_extracts)
-            beam += 1
-            print('\n')
-        print('\n\n\n')
-
-    from scipy.stats import pearsonr
-
-    print(pearsonr(all_extract_rouges, num_in_extracts)[0])
-    print(pearsonr(all_from_extract_rouges, num_in_extracts)[0])
-    print(pearsonr(all_extract_rouges, all_lengths)[0])
-    print(pearsonr(all_from_extract_rouges, all_lengths)[0])
-    print(pearsonr(all_extract_rouges, all_from_extract_rouges)[0])
-    deltas = [b - a for (a, b) in zip(all_extract_rouges, all_from_extract_rouges)]
-    print(pearsonr(all_compressions, deltas)[0])
-    print(pearsonr(num_in_extracts, deltas)[0])
-
-    if 'extract_beam_scores' in df:
-        beam_scores = [get_arr(x) for x in df['extract_beam_scores'].tolist()]
-        corels = []
-        top_ranks = []
-        for bs, er in zip(beam_scores, rouges):
-            corel = spearmanr(bs, er)[0]
-            if np.isnan(corel):
-                continue
-            corels.append(corel)
-            top_ranks.append(int(np.argmax(er) + 1))
-        avg_corel = str(round(float(np.mean(corels)), 2))
-        print(f'Average Correlation Between Beam Score and ROUGE: {avg_corel}')
-    else:
-        top_ranks = []
-        for er in rouges:
-            top_ranks.append(int(np.argmax(er) + 1))
-    avg_rank = str(round(float(np.mean(top_ranks)), 2))
-    print(f'Average Beam Rank of Highest ROUGE summary: {avg_rank}')
-
-    n = len(df)
-    scores = [0 for _ in range(len(rouges[0]))]
-    for rouge_arr in rouges:
-        for i, s in enumerate(rouge_arr):
-            scores[i] += s
-    for beam, score in enumerate(scores):
-        # print(score / n)
-        print(f'Beam {beam + 1}: {score / n}')
-
-    nucleus = []
-    from scipy.special import softmax
-    # for rouge, beam in zip(extract_rouges, beam_scores):
-    #     print(beam[0], rouge[0] == max(rouge))
-        # dist = softmax(beam)
-        # cdf = np.cumsum(dist)
-        # print(cdf[:6])
+    # print('Mean Cumulative BartScore by Beam...')
+    # out = []
+    # for beam in range(len(avg_rouges_by_beam)):
+    #     out.append(str(np.mean(avg_bartscores_by_beam[beam])))
+    # print('\t'.join(out))

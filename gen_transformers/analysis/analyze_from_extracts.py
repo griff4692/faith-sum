@@ -88,7 +88,7 @@ def process(record, nlp, source_annotated):
 if __name__ == '__main__':
     data_dir = '/nlp/projects/faithsum'
     experiment = 'add_doc_bart_large_cnn'
-    output = 'test_from_beam_16_extract'  # validation_from_sample_extract
+    output = 'test_from_diverse_16_extract'  # validation_from_sample_extract
     summary_style = 'from_extract_abstract'
     df = pd.read_csv(f'{data_dir}/results/{experiment}/{output}.csv').dropna(subset=[summary_style])
 

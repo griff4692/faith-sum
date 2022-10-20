@@ -11,7 +11,6 @@ import torch.nn as nn
 from scipy.stats import spearmanr
 from tqdm import tqdm
 from datasets import load_from_disk
-from gen_transformers.dataset import get_sent_ngrams
 from transformers import AutoTokenizer, BartTokenizer
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
@@ -36,11 +35,16 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--gpu_device', default=1, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--wandb_name', default='from_extract_rerank_bart_large_cnn')
+    parser.add_argument('--candidate_experiment', default='add_doc_bart_large_cnn')
+    parser.add_argument('--candidate_fn', default='test_from_beam_16_extract_4_guided_abstract_1_drop.csv')
     parser.add_argument('--prediction_col', default='from_extract_abstract')
-    parser.add_argument('--rank_experiment', default='add_doc')
+    # parser.add_argument('--candidate_experiment', default='bart_large_cnn')
+    # parser.add_argument('--candidate_fn', default='test_beam_16_outputs.csv')
+    # parser.add_argument('--prediction_col', default='abstract')
     # How many processes to use when loading batches on CPU
     parser.add_argument('--split', default='test')
+    # parser.add_argument('--rank_experiment', default=os.path.expanduser('~/model_ranking.bin'))
+    parser.add_argument('--rank_experiment', default='from_extract_rerank_bart_large_cnn')
     parser.add_argument('--hf_model', default='facebook/bart-large-cnn')
     parser.add_argument('--max_examples', default=999999, type=int)
     parser.add_argument('--score_mode', default='likelihood')
@@ -54,24 +58,31 @@ if __name__ == '__main__':
 
     rouge_col = (
         'eval_from_extract_abstract_rouge1_f1'
-        if args.prediction_col == 'from_extract_abstract' else 'eval_rouge1_f1'
+        if args.prediction_col == 'from_extract_abstract' else 'eval_abstract_rouge1_f1'
     )
 
-    ckpt_path = get_path_from_exp(weight_dir, args.wandb_name)
-    tokenizer_dir = os.path.join(weight_dir, args.wandb_name, 'tokenizer')
-    print(f'Loading tokenizer from {tokenizer_dir}...')
-    try:
+    print(f'Using {rouge_col} as ROUGE col')
+
+    if 'model_ranking' in args.rank_experiment:
+        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path='facebook/bart-large-cnn')
+        args.lr = None
+        args.summary_style = 'abstract'
+        model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model='facebook/bart-large-cnn').eval().to(args.gpu_device)
+        state_dict = torch.load(args.rank_experiment, map_location=f'cuda:{args.gpu_device}')
+        # state_dict = {k: v for k, v in state_dict.items()}
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        ckpt_path = get_path_from_exp(weight_dir, args.rank_experiment)
+        tokenizer_dir = os.path.join(weight_dir, args.rank_experiment, 'tokenizer')
+        print(f'Loading tokenizer from {tokenizer_dir}...')
         tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
-    except:  # BRIO model doesn't load from AutoTokenizer
-        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
+        print(f'Loading model from {ckpt_path}...')
+        model = TransformerSummarizer.load_from_checkpoint(
+            checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False
+        ).to(args.gpu_device).eval()
 
-    print(f'Loading model from {ckpt_path}...')
-    model = TransformerSummarizer.load_from_checkpoint(
-        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False
-    ).to(args.gpu_device).eval()
-
-    results_dir = os.path.join(args.data_dir, 'results', args.rank_experiment)
-    rank_fn = os.path.join(results_dir, f'{args.split}_from_sample_w_diverse_extract_4.csv')
+    results_dir = os.path.join(args.data_dir, 'results', args.candidate_experiment)
+    rank_fn = os.path.join(results_dir, args.candidate_fn)
     print(f'Loading in predictions from {rank_fn}')
     outputs = pd.read_csv(rank_fn)
     outputs.dropna(subset=[args.prediction_col], inplace=True)
@@ -101,7 +112,7 @@ if __name__ == '__main__':
         reference = record['reference']
 
         rouges = get_arr(record[rouge_col])
-        candidates = record['from_extract_abstract'].split('<cand>')
+        candidates = record[args.prediction_col].split('<cand>')
 
         encoder_inputs = {
             'input_ids': torch.LongTensor(input_ids).to(args.gpu_device).unsqueeze(0)
@@ -110,7 +121,6 @@ if __name__ == '__main__':
             encoder_outputs = model.get_encoder_h(encoder_inputs)
         encoder_h = encoder_outputs.last_hidden_state
 
-        # from_extract_abstracts
         with tokenizer.as_target_tokenizer():
             brio_labels = np.array(tokenizer(
                 candidates, max_length=1024, truncation=True, padding='longest'
