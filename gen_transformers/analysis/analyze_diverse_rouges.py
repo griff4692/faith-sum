@@ -16,8 +16,8 @@ def get_arr(num_str):
 
 if __name__ == '__main__':
     experiment = 'add_doc_bart_large_cnn'
-    # output = 'test_from_beam_16_extract_guided_abstract_1_drop'
     output = 'test_from_beam_16_extract'
+    output = 'test_from_beam_16_extract_bart_large_cnn_from_extract_e3'
     summary_style = 'from_extract_abstract'
     if summary_style == 'abstract':
         rouge_col = f'eval_{summary_style}_rouge1_f1'

@@ -89,11 +89,10 @@ def run(args):
     mode = args.val_metric_mode
     checkpoint_callback = ModelCheckpoint(
         monitor=monitor_metric,
-        save_top_k=1,
-        save_last=False,
+        save_top_k=args.save_top_k,
+        save_last=args.save_top_k > 1,
         mode=mode
     )
-    # early_stopping = EarlyStopping(monitor_metric, patience=20, verbose=True)
     callbacks = [checkpoint_callback]
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')
@@ -179,6 +178,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--train_frac', type=float, default=1.0)
+    parser.add_argument('--save_top_k', type=int, default=1)
     parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning

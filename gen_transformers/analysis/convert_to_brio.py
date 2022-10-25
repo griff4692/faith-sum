@@ -46,6 +46,7 @@ if __name__ == '__main__':
     records = df.to_dict('records')
 
     out_dir = os.path.join(args.data_dir, args.extract_experiment, 'diverse', 'test')
+    print(f'Saving to {out_dir}')
     os.makedirs(out_dir, exist_ok=True)
     for idx, record in tqdm(enumerate(records), total=len(records)):
         dataset_idx = record['dataset_idx']
@@ -79,3 +80,5 @@ if __name__ == '__main__':
         out_fn = os.path.join(out_dir, f'{idx}.json')
         with open(out_fn, 'w') as fd:
             ujson.dump(obj, fd)
+
+    print(f'Saved BRIO outputs to {out_dir}')
