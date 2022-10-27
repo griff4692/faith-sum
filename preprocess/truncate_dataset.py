@@ -12,7 +12,9 @@ from preprocess.convert_abstractive_to_extractive import gain_selection
 
 
 def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, max_input_length=1024, max_output_length=256):
-    batch_source_sents = [convert_to_sents(inputs, nlp) for inputs in batch_data[input_col]]
+    batch_source_sents = [
+        convert_to_sents(inputs, nlp, is_dialogue=args.dataset == 'samsum') for inputs in batch_data[input_col]
+    ]
     source_annotated = [
         ''.join(
             [f'<s{i}> {s}' for i, s in enumerate(source_sents) if i < args.max_num_sents]
@@ -43,7 +45,7 @@ def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, max_input_l
     best_history = []
     for batch_idx in range(batch_size):
         target = batch_data[target_col][batch_idx]
-        target_sents = convert_to_sents(target, nlp)
+        target_sents = convert_to_sents(target, nlp, is_dialogue=args.dataset == 'samsum')
         source_sents = [sent for i, sent in enumerate(batch_source_sents[batch_idx]) if i < num_sents[batch_idx]]
         source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
         target_sents_tok = [[str(token.text) for token in sentence] for sentence in target_sents]
@@ -83,6 +85,7 @@ if __name__ == '__main__':
         'facebook/bart-base',
         'facebook/bart-large',
         'google/pegasus-large',
+        'lidiya/bart-large-xsum-samsum',
     ])
     parser.add_argument('--max_num_sents', default=200, type=int)
 
@@ -109,6 +112,7 @@ if __name__ == '__main__':
         print(f'Processing {len(dataset[split])} {split} examples')
         encoded = dataset[split].map(lambda examples: get_ids(
             args, nlp, tokenizer, examples, input_col, target_col
-        ), batched=True)
+        ), batched=True, num_proc=32)
+        encoded = encoded.filter(lambda example: len(example[input_col].strip()) > 0)
         dataset[split] = encoded
     dataset.save_to_disk(out_dir)

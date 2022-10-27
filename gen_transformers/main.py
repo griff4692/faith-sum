@@ -187,7 +187,9 @@ if __name__ == '__main__':
         'facebook/bart-large',
         'Yale-LILY/brio-cnndm-uncased',
         'google/pegasus-large',
-        'facebook/bart-large-cnn'
+        'facebook/bart-large-cnn',
+        'facebook/bart-large-xsum',
+        'lidiya/bart-large-xsum-samsum',
     ])
 
     # Task-specific / Project-specific parameters

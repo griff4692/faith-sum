@@ -15,10 +15,19 @@ from gen_transformers.model import TransformerSummarizer
 from global_utils import get_free_gpus
 
 
+# TODO: Grid-search (only necessary for extracts)
 DATASET_KWARGS = {
     'cnn_dailymail': {
         'abstract': {'min_length': 56, 'max_length': 142, 'length_penalty': 2.0},
         'extract': {'min_length': 3, 'max_length': 10, 'length_penalty': 1.0},
+    },
+    'xsum': {
+        'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
+        'abstract': {'min_length': 11, 'max_length': 62, 'length_penalty': 0.6}
+    },
+    'samsum': {
+        'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
+        'abstract': {'min_length': 5, 'length_penalty': 2.0}
     }
 }
 
@@ -43,7 +52,7 @@ NUCLEUS_KWARGS = {
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('BART/PEGASUS Generator & Evaluator.')
-    parser.add_argument('--wandb_name', required=True)
+    parser.add_argument('--wandb_name', default=None)
     parser.add_argument('--experiment', default=None)
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
@@ -82,6 +91,8 @@ if __name__ == '__main__':
         'facebook/bart-large',
         'facebook/bart-large-cnn',
         'Yale-LILY/brio-cnndm-uncased',
+        'lidiya/bart-large-xsum-samsum',
+        'facebook/bart-large-xsum',
     ])
     parser.add_argument('--split', default='validation')
     parser.add_argument('--train_frac', default=0.0, type=float)
@@ -101,8 +112,12 @@ if __name__ == '__main__':
     args.per_device_eval_bs = -1
     args.per_device_train_bs = -1
 
+    if args.wandb_name is None:
+        assert args.experiment is not None
+
     if args.experiment is None:
         args.experiment = args.wandb_name
+
     weight_dir = os.path.join(args.data_dir, 'weights')
     results_dir = os.path.join(args.data_dir, 'results', args.experiment)
     os.makedirs(results_dir, exist_ok=True)
@@ -114,12 +129,9 @@ if __name__ == '__main__':
         gpu = free_gpus[0] if args.gpu_device is None else args.gpu_device
 
     # Generating from this pre-trained model
-    if args.wandb_name == 'brio' and args.hf_model == 'Yale-LILY/brio-cnndm-uncased':
+    if args.wandb_name is None:
+        print('Warning! Loading in pre-trained weights. Specify --wandb_name if you want to load fine-tuned weights.')
         assert args.summary_style == 'abstract'
-        args.lr = 1.0   # Needed to load
-        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
-        model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model).to(gpu).eval()
-    elif args.hf_model == 'facebook/bart-large-cnn' and args.summary_style == 'abstract':
         args.lr = 1.0   # Needed to load
         tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
         model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model).to(gpu).eval()

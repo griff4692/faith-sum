@@ -10,17 +10,23 @@ from sum_constants import summarization_name_mapping
 from datasets import load_dataset
 
 
-def convert_to_sents(string, nlp):
+def convert_to_sents(string, nlp, is_dialogue=False):
+    if is_dialogue:
+        return dialogue_to_sents(string, nlp)
     return [x for x in list(nlp(string.strip()).sents) if len(x.text.strip()) > 0]
 
 
-def gen_oracle(args, example, nlp):
+def dialogue_to_sents(string, nlp):
+    return [nlp(x.strip()) for x in string.split('\r\n') if len(x.strip()) > 0]
+
+
+def gen_oracle(args, example, nlp, is_dialogue=False):
     input_col, target_col = summarization_name_mapping[args.dataset]
     inputs = example[input_col].strip()
     target = example[target_col].strip()
-    source_sents = convert_to_sents(inputs, nlp)
+    source_sents = convert_to_sents(inputs, nlp, is_dialogue=is_dialogue)
     source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
-    target_sents = convert_to_sents(target, nlp)
+    target_sents = convert_to_sents(target, nlp, is_dialogue=is_dialogue)
     target_sents_tok = [[str(token.text) for token in sentence] for sentence in target_sents]
     # Sort oracle order or not
     oracle_idxs, oracle_rouge, r1_hist, r2_hist, best_hist = gain_selection(

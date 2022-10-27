@@ -44,13 +44,9 @@ class SummaryDataModule(pl.LightningDataModule):
         super().__init__()
 
         self.args = args
-        if args.dataset == 'cnn_dailymail':
-            data_dir = os.path.join(args.data_dir, args.dataset)
-            self.dataset = load_from_disk(data_dir)
-        else:
-            self.dataset = load_dataset(args.dataset)
+        data_dir = os.path.join(args.data_dir, args.dataset)
+        self.dataset = load_from_disk(data_dir)
         self.tokenizer = tokenizer
-        # TODO change back
         self.num_workers = 0 if args.debug else 8
         self.nlp = spacy.load('en_core_web_sm')
 

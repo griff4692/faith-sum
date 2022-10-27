@@ -3,3 +3,4 @@ datasets
 spacy
 pyrouge
 pytorch-lightning
+py7zr

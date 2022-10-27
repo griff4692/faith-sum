@@ -1,3 +1,4 @@
+import os
 from collections import defaultdict
 
 import pandas as pd
@@ -56,8 +57,7 @@ def process_example(args, record, rouge_metric):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('ADD PERL ROUGE Eval')
 
-    parser.add_argument('--experiment', default='add_doc_bart_large_cnn')
-    parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
+    parser.add_argument('--data_dir', default='/nlp/projects/faithsum/results')
     parser.add_argument('--fn', default=DEFAULT_FN)
     parser.add_argument('--split', default='validation')
     parser.add_argument('--columns', default='extract,from_extract_abstract', choices=[
@@ -68,7 +68,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     rouge_metric = RougeMetric()
 
-    outputs = pd.read_csv(args.fn)
+    out_fn = os.path.join(args.data_dir, args.fn)
+    outputs = pd.read_csv(out_fn)
     records = outputs.to_dict('records')
 
     args = parser.parse_args()
@@ -80,7 +81,7 @@ if __name__ == '__main__':
     augmented_df = pd.DataFrame(augmented_records).sort_values(by='dataset_idx').reset_index(drop=True)
 
     print(f'Saving with PERL eval ROUGE columns added back to {args.fn}')
-    augmented_df.to_csv(args.fn, index=False)
+    augmented_df.to_csv(out_fn, index=False)
 
     for col in augmented_df.columns.tolist():
         if 'rouge' in col and 'eval' in col:

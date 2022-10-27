@@ -262,7 +262,8 @@ class TransformerSummarizer(pl.LightningModule):
         return return_loss
 
     def predict_step(self, batch, batch_idx=None, **gen_kwargs):
-        batch['cls_mask'][:, 0] = True  # Document <s> Token gets passed to the sentence encoder
+        if self.hparams.summary_style == 'extract':
+            batch['cls_mask'][:, 0] = True  # Document <s> Token gets passed to the sentence encoder
         source = self.parse_source_text_from_inputs(batch)
         use_hf_rouge = gen_kwargs.pop('use_hf_rouge')
         source_ngrams = batch.pop('source_ngrams')
@@ -870,27 +871,6 @@ class TransformerSummarizer(pl.LightningModule):
             for batch_idx in range(batch_size)
         ]
 
-    def ensure_extract(self, pred_str, source):
-        extractive = []
-        idxs = []
-        pred_sents = convert_to_sents(pred_str, self.nlp)
-        for sent in pred_sents:
-            sent_toks = [str(token.text).strip() for token in sent if len(str(token.text).strip()) > 0]
-            if len(sent_toks) <= 1:
-                continue
-            max_intersect = 0
-            closest_sent = ''
-            best_idx = -1
-            for source_idx in range(len(source['sents'])):
-                num_intersect = len(set(source['sent_toks'][source_idx]).intersection(set(sent_toks)))
-                if num_intersect >= max_intersect:
-                    closest_sent = source['sents'][source_idx]
-                    max_intersect = num_intersect
-                    best_idx = source_idx
-            idxs.append(best_idx)
-            extractive.append(str(closest_sent))
-        return {'summary': ' '.join(extractive), 'idxs': idxs}
-
     def get_summary_from_sent_idxs(self, source, extractive_idxs, sort=False):
         if sort:
             extractive_idxs = list(sorted(extractive_idxs))
@@ -915,7 +895,9 @@ class TransformerSummarizer(pl.LightningModule):
         implied_extracts = None
         if abstracts is not None:
             implied_extracts = []
-            abstract_sents = [convert_to_sents(x, self.nlp) for x in abstracts]
+            abstract_sents = [
+                convert_to_sents(x, self.nlp, is_dialogue=self.hparams.dataset == 'samsum') for x in abstracts
+            ]
             abstract_sents_tok = [[[
                 str(token.text) for token in sentence] for sentence in abstract_sent] for abstract_sent in
                 abstract_sents]
@@ -995,7 +977,7 @@ class TransformerSummarizer(pl.LightningModule):
                 pred_ids = self.model.generate(**default_kwargs)
                 pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
 
-                pred_sents = convert_to_sents(pred, self.nlp)
+                pred_sents = convert_to_sents(pred, self.nlp, is_dialogue=self.hparams.dataset == 'samsum')
                 from_rand_abstract_sents_tok = [[str(token.text) for token in sentence] for sentence in pred_sents]
 
                 source_toks = outputs['source'][batch_idx]['sent_toks']
@@ -1058,7 +1040,9 @@ class TransformerSummarizer(pl.LightningModule):
                 for doc in source_sents
             ]
         else:  # We have to sentence split ourselves
-            source_sents = [convert_to_sents(x, self.nlp) for x in source_no_special]
+            source_sents = [
+                convert_to_sents(x, self.nlp, is_dialogue=self.hparams.dataset == 'samsum') for x in source_no_special
+            ]
             source_sent_toks = [
                 [[str(t.text).strip() for t in sentence if len(str(t.text).strip()) > 0] for sentence in doc]
                 for doc in source_sents

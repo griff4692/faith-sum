@@ -19,6 +19,25 @@ os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 np.random.seed(1992)
 
 
+# TODO: Grid-search
+DATASET_KWARGS = {
+    'cnn_dailymail': {
+        'length_penalty': 1.0,  # previously was 4.0, could try 1.0
+        'max_length': 142,
+        'min_length': 56,
+    },
+    'samsum': {  # TODO idk
+        'min_length': 5,
+        'length_penalty': 2.0,
+    },
+    'xsum': {
+        'min_length': 11,
+        'max_length': 62,
+        'length_penalty': 0.6
+    }
+}
+
+
 def compute_rouge(generated, gold, rouge_metric, prefix=''):
     outputs = rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
     f1s = []
@@ -38,7 +57,7 @@ def get_idx(idx_str):
     return list(map(int, idxs))
 
 
-def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_min, num_return_sequences=1):
+def gen_from_guide(args, model, tokenizer, source_annotated, idx_to_keep, special_id_min, num_return_sequences=1):
     inputs = tokenizer(
         [source_annotated] * len(idx_to_keep),
         padding='longest',
@@ -63,9 +82,6 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
         'encoder_outputs': encoder_outputs,
         'attention_mask': attention_mask,
         'num_return_sequences': num_return_sequences,
-        'length_penalty': 1.0,  # previously was 4.0, could try 1.0
-        'max_length': 142,
-        'min_length': 56,
         'no_repeat_ngram_size': 3,
         'early_stopping': True,
     }
@@ -81,6 +97,7 @@ def gen_from_guide(model, tokenizer, source_annotated, idx_to_keep, special_id_m
         }
 
     shared_kwargs.update(gen_kwargs)
+    shared_kwargs.update(DATASET_KWARGS[args.dataset])
     model = model.half()
     with torch.no_grad(), torch.cuda.amp.autocast():
         pred_ids = model.model.generate(**shared_kwargs)
@@ -182,7 +199,7 @@ if __name__ == '__main__':
         if args.top_k is not None and args.top_k < len(extract_idx):
             extract_idx = extract_idx[:args.top_k]
         gen_output = gen_from_guide(
-            model, tokenizer, source_annotated, extract_idx, special_id_min,
+            args, model, tokenizer, source_annotated, extract_idx, special_id_min,
             num_return_sequences=args.num_return_sequences
         )
 
