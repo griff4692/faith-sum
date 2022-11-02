@@ -86,22 +86,25 @@ def process(record, nlp, source_annotated):
 
 
 if __name__ == '__main__':
+    dataset = 'cnn_dailymail'
     data_dir = '/nlp/projects/faithsum'
     experiment = 'add_doc_bart_large_cnn'
-    output = 'test_from_diverse_16_extract'  # validation_from_sample_extract
+    output = 'test_from_diverse_16_extract'
     summary_style = 'from_extract_abstract'
+
+
+
     df = pd.read_csv(f'{data_dir}/results/{experiment}/{output}.csv').dropna(subset=[summary_style])
 
     records = df.to_dict('records')
 
     nlp = spacy.load('en_core_web_sm')
-    orig_data_dir = os.path.join(data_dir, 'cnn_dailymail')
+    orig_data_dir = os.path.join(data_dir, dataset)
     print('Loading original data')
     dataset = load_from_disk(orig_data_dir)['test']
     source_annotated = dataset['source_annotated']
 
     stats = list(itertools.chain(*list(p_uimap(lambda record: process(record, nlp, source_annotated), records))))
-    # stats = list(itertools.chain(*list(map(lambda record: process(record, nlp, source_annotated), records))))
     stats = pd.DataFrame(stats)
     for col in stats.columns:
         print(col, stats[col].dropna().mean())

@@ -2,10 +2,12 @@ import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
+import regex as re
 from datasets import load_from_disk
 import pandas as pd
 import torch
 import numpy as np
+import spacy
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -13,6 +15,8 @@ from data_utils import get_path_from_exp
 from eval.rouge_metric import RougeMetric
 from gen_transformers.model import TransformerSummarizer
 from gen_transformers.model_utils import sentence_indicators
+from preprocess.extract_oracles import convert_to_sents
+from preprocess.convert_abstractive_to_extractive import gain_selection
 
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
@@ -38,6 +42,38 @@ DATASET_KWARGS = {
 }
 
 
+def compute_implied(args, nlp, pred_str, source_annotated):
+    implied_extracts = []
+
+    source_sents = re.split(r'<s\d*>', source_annotated)
+    source_sents = [x.strip() for x in source_sents if len(x.strip()) > 0]
+
+    source_sent_toks = [
+        [str(token.text) for token in nlp(sentence)] for sentence in source_sents
+    ]
+
+    pred_sents = [
+        convert_to_sents(x, nlp, is_dialogue=args.dataset == 'samsum')
+        for x in pred_str
+    ]
+    num_pred = len(pred_str)
+    pred_toks = [
+        [[str(token.text) for token in sentence] for sentence in pred_sent]
+        for pred_sent in pred_sents
+    ]
+
+    for idx in range(num_pred):
+        implied_oracle_idx = gain_selection(
+            source_sent_toks, pred_toks[idx], 5, lower=True, sort=True
+        )[0]
+        implied_oracle = ' '.join([str(source_sents[i]) for i in implied_oracle_idx])
+        implied_extracts.append({
+            'idxs': implied_oracle_idx,
+            'summary': implied_oracle,
+        })
+    return implied_extracts
+
+
 def compute_rouge(generated, gold, rouge_metric, prefix=''):
     outputs = rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
     f1s = []
@@ -57,21 +93,24 @@ def get_idx(idx_str):
     return list(map(int, idxs))
 
 
-def gen_from_guide(args, model, tokenizer, source_annotated, idx_to_keep, special_id_min, num_return_sequences=1):
+def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, special_id_min, num_return_sequences=1):
+    has_bos = 'pegasus' not in args.hf_model
+
     inputs = tokenizer(
         [source_annotated] * len(idx_to_keep),
         padding='longest',
         truncation=True,
-        max_length=1024,
+        max_length=512 if 'pegasus' in args.hf_model else 1024,
         return_tensors='pt',
     )
     input_ids = inputs['input_ids'].to(args.gpu_device)
-    n = len(input_ids)
     attention_mask = inputs['attention_mask'].to(args.gpu_device)
     cls_mask = input_ids >= special_id_min
     extract_indicators = []
     for cand_idx, extract_idx in enumerate(idx_to_keep):
-        ei = sentence_indicators(cls_mask[cand_idx].unsqueeze(0), extract_idx, attention_mask[cand_idx].unsqueeze(0))
+        ei = sentence_indicators(
+            cls_mask[cand_idx].unsqueeze(0), extract_idx, attention_mask[cand_idx].unsqueeze(0), has_bos=has_bos
+        )
         extract_indicators.append(ei)
     extract_indicators = torch.cat(extract_indicators, dim=0)
     encoder_outputs = model.model.model.encoder(**{
@@ -87,7 +126,7 @@ def gen_from_guide(args, model, tokenizer, source_annotated, idx_to_keep, specia
     }
     if num_return_sequences == 1:
         gen_kwargs = {
-            'num_beams': 4,
+            'num_beams': 4 if args.dataset == 'cnn_dailymail' else 8,
         }
     else:
         gen_kwargs = {
@@ -98,10 +137,27 @@ def gen_from_guide(args, model, tokenizer, source_annotated, idx_to_keep, specia
 
     shared_kwargs.update(gen_kwargs)
     shared_kwargs.update(DATASET_KWARGS[args.dataset])
-    model = model.half()
     with torch.no_grad(), torch.cuda.amp.autocast():
         pred_ids = model.model.generate(**shared_kwargs)
     pred_str = tokenizer.batch_decode(pred_ids.tolist(), skip_special_tokens=True)
+
+    implied_extracts = compute_implied(args, nlp, pred_str, source_annotated)
+
+    ps, rs, f1s = [], [], []
+    for extract_idx, implied in zip(idx_to_keep, implied_extracts):
+        implied_idx = implied['idxs']
+        agreement = set(extract_idx).intersection(implied_idx)
+        n = len(agreement)
+        r = n / len(extract_idx)
+        p = n / len(implied_idx)
+        f1 = 0 if min(r, p) == 0 else (2 * p * r) / (p + r)
+        ps.append(p)
+        rs.append(r)
+        f1s.append(f1)
+
+    mean_p = np.mean(ps)
+    mean_r = np.mean(rs)
+    mean_f1 = np.mean(f1s)
 
     cand_metrics, best_metric, avg_r1_f1, diversity = model.score_candidates(
         [reference], pred_str, prefix='from_extract', eval=True,
@@ -118,6 +174,9 @@ def gen_from_guide(args, model, tokenizer, source_annotated, idx_to_keep, specia
         'from_extract_rouges': '<cand>'.join(map(str, rouge1_f1s)),
         'pred_rank': pred_rank,
         'diversity': diversity,
+        'plan_precision': mean_p,
+        'plan_recall': mean_r,
+        'plan_f1': mean_f1,
     }
 
 
@@ -184,12 +243,18 @@ if __name__ == '__main__':
     model = TransformerSummarizer.load_from_checkpoint(
         checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(args.gpu_device).eval()
 
+    if 'pegasus' not in args.hf_model:
+        model = model.half()
+
     rouge_metric = RougeMetric()
     df = []
     updated_records = []
     stats = []
     wins, losses, ties = 0, 0, 0
     compare_col = 'best_extract_rouge1_f1' if args.num_candidates > 1 else 'extract_rouge1_f1'
+
+    nlp = spacy.load('en_core_web_sm')
+
     for record in tqdm(records, total=len(records)):
         source_annotated = all_source_annotated[record['dataset_idx']]
         # Get source tokens
@@ -199,7 +264,7 @@ if __name__ == '__main__':
         if args.top_k is not None and args.top_k < len(extract_idx):
             extract_idx = extract_idx[:args.top_k]
         gen_output = gen_from_guide(
-            args, model, tokenizer, source_annotated, extract_idx, special_id_min,
+            args, nlp, model, tokenizer, source_annotated, extract_idx, special_id_min,
             num_return_sequences=args.num_return_sequences
         )
 
@@ -207,7 +272,7 @@ if __name__ == '__main__':
         stat_row = {
             compare_col: record[compare_col],
             'best_from_extract_rouge1_f1': gen_output['best_from_extract_rouge1_f1'],
-            'best_ensemble_rouge1_f1': best_ensemble_rouge1_f1,
+            'best_ensemble_rouge1_f1': best_ensemble_rouge1_f1, 'plan_f1': gen_output['plan_f1']
         }
 
         if args.num_candidates > 1:

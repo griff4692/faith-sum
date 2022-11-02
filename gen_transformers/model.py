@@ -76,7 +76,8 @@ class TransformerSummarizer(pl.LightningModule):
 
         encoder_inputs = {'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask']}
         if self.hparams.extract_indicators:
-            encoder_inputs['extract_indicators'] = implement_oracle_indicators(batch)
+            has_bos = 'pegasus' not in self.hparams.hf_model
+            encoder_inputs['extract_indicators'] = implement_oracle_indicators(batch, has_bos=has_bos)
         encoder_outputs = self.get_encoder_h(encoder_inputs)
         encoder_h = encoder_outputs.last_hidden_state
         sent_decoder_h = None
@@ -853,7 +854,8 @@ class TransformerSummarizer(pl.LightningModule):
 
         if self.hparams.extract_indicators:
             # Change this from oracle if you want something else
-            fixed_kwargs['extract_indicators'] = implement_oracle_indicators(batch)
+            has_bos = 'pegasus' not in self.hparams.hf_model
+            fixed_kwargs['extract_indicators'] = implement_oracle_indicators(batch, has_bos=has_bos)
 
         # Update them with user-specific kwargs
         fixed_kwargs.update(gen_kwargs)
@@ -1118,7 +1120,6 @@ class TransformerSummarizer(pl.LightningModule):
             return optimizer
 
         # 6% is somewhat standard for fine-tuning Transformers (can be a tunable hyper-parameter as well)
-        # nonzero warmup helps mitigate risk of catastrophic forgetting from pre-training (big risk bc/ of new domain)
         scheduler = get_linear_schedule_with_warmup(
             optimizer, num_warmup_steps=self.hparams.warmup_steps, num_training_steps=self.hparams.max_steps
         )

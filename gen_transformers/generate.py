@@ -93,6 +93,7 @@ if __name__ == '__main__':
         'Yale-LILY/brio-cnndm-uncased',
         'lidiya/bart-large-xsum-samsum',
         'facebook/bart-large-xsum',
+        'google/pegasus-xsum'
     ])
     parser.add_argument('--split', default='validation')
     parser.add_argument('--train_frac', default=0.0, type=float)

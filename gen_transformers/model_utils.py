@@ -1,7 +1,7 @@
 import torch
 
 
-def implement_oracle_indicators(batch):
+def implement_oracle_indicators(batch, has_bos=True):
     ids = []
     batch_size = len(batch['oracle_labels'])
     for batch_idx in range(batch_size):
@@ -10,12 +10,12 @@ def implement_oracle_indicators(batch):
         cls_locations = batch['cls_mask'][batch_idx].unsqueeze(0)
         prev_mask = batch['attention_mask'][batch_idx].unsqueeze(0)
         idx_to_keep = batch['oracle_labels'][batch_idx]
-        updated_mask = sentence_indicators(cls_locations, idx_to_keep, prev_mask)
+        updated_mask = sentence_indicators(cls_locations, idx_to_keep, prev_mask, has_bos=has_bos)
         ids.append(updated_mask)
     return torch.cat(ids)
 
 
-def sentence_indicators(cls_mask, sent_idx_to_mask, prev_mask):
+def sentence_indicators(cls_mask, sent_idx_to_mask, prev_mask, has_bos=True):
     """
     :param cls_mask: indications of where sentences tokens are
     :param sent_idx_to_mask: which sentences to mask (the sentence order, not location in cls_mask)
@@ -33,7 +33,8 @@ def sentence_indicators(cls_mask, sent_idx_to_mask, prev_mask):
             sent_mask[0, sent_loc:end_loc] = 2
         else:
             sent_mask[0, sent_loc:end_loc] = 1
-    sent_mask[:, 0] = 2  # Always focus on the BOS token
+    if has_bos:
+        sent_mask[:, 0] = 2  # Always focus on the BOS token
     sent_mask.masked_fill_(prev_mask == 0, 0)
     return sent_mask
 

@@ -3,12 +3,12 @@ import regex as re
 
 import argparse
 import spacy
-
-from sum_constants import summarization_name_mapping
 from datasets import load_dataset
 from transformers import AutoTokenizer
+
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
+from sum_constants import summarization_name_mapping
 
 
 def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, max_input_length=1024, max_output_length=256):
@@ -16,8 +16,11 @@ def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, max_input_l
         convert_to_sents(inputs, nlp, is_dialogue=args.dataset == 'samsum') for inputs in batch_data[input_col]
     ]
     source_annotated = [
+        # TODO test this
+        # WARNING!  When running CNN/DM, s.text.strip() was just s
+        # Might be different pre-processing results
         ''.join(
-            [f'<s{i}> {s}' for i, s in enumerate(source_sents) if i < args.max_num_sents]
+            [f'<s{i}> {s.text.strip()}' for i, s in enumerate(source_sents) if i < args.max_num_sents]
         ) for source_sents in batch_source_sents
     ]
 
@@ -84,15 +87,25 @@ if __name__ == '__main__':
     parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
         'facebook/bart-base',
         'facebook/bart-large',
-        'google/pegasus-large',
+        'facebook/bart-large-cnn',
+        'facebook/bart-large-xsum',
+        'google/pegasus-xsum',
         'lidiya/bart-large-xsum-samsum',
     ])
+    parser.add_argument('--num_proc', default=32, type=int)
     parser.add_argument('--max_num_sents', default=200, type=int)
 
     args = parser.parse_args()
     nlp = spacy.load('en_core_web_sm')
     input_col, target_col = summarization_name_mapping[args.dataset]
-    out_dir = os.path.join(args.data_dir, args.dataset)
+    if 'pegasus' in args.hf_model:
+        out_dir = os.path.join(args.data_dir, args.dataset + '_pegasus')
+        max_input_length = 512
+        max_output_length = 64
+    else:
+        out_dir = os.path.join(args.data_dir, args.dataset)
+        max_input_length = 1024
+        max_output_length = 256
 
     print(f'Loading {args.dataset}...')
     if args.dataset == 'cnn_dailymail':
@@ -111,8 +124,9 @@ if __name__ == '__main__':
     for split in args.splits.split(','):
         print(f'Processing {len(dataset[split])} {split} examples')
         encoded = dataset[split].map(lambda examples: get_ids(
-            args, nlp, tokenizer, examples, input_col, target_col
-        ), batched=True, num_proc=32)
+            args, nlp, tokenizer, examples, input_col, target_col, max_input_length=max_input_length,
+            max_output_length=max_output_length
+        ), batched=True, num_proc=args.num_proc)
         encoded = encoded.filter(lambda example: len(example[input_col].strip()) > 0)
         dataset[split] = encoded
     dataset.save_to_disk(out_dir)

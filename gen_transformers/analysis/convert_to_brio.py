@@ -38,11 +38,10 @@ def get_arr(num_str):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Convert fn to BRIO')
+    parser = argparse.ArgumentParser('Convert fn to BRIO directory format')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--experiment', default='add_doc_bart_large_cnn')
     parser.add_argument('--fn', default='test_from_beam_16_extract.csv')
-    parser.add_argument('--prediction_col', default='from_extract_abstract')
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--split', default='test')
 
@@ -55,7 +54,6 @@ if __name__ == '__main__':
     dataset = load_from_disk(os.path.join(args.data_dir, args.dataset))[args.split]
     input_col, target_col = summarization_name_mapping[args.dataset]
     articles = dataset[input_col]
-    # highlights = dataset['highlights']
     records = df.to_dict('records')
 
     out_dir = os.path.join(args.data_dir, args.experiment, 'diverse', args.split)
@@ -63,11 +61,12 @@ if __name__ == '__main__':
     os.makedirs(out_dir, exist_ok=True)
     for idx, record in tqdm(enumerate(records), total=len(records)):
         dataset_idx = record['dataset_idx']
-        candidates = record[args.prediction_col].split('<cand>')
+        prediction_col = 'from_extract_abstract' if 'from_extract_abstract' in record else 'abstract'
+        candidates = record[prediction_col].split('<cand>')
 
         article_untok = articles[dataset_idx]
         reference_untok = record['reference']
-        if args.prediction_col == 'from_extract_abstract':
+        if prediction_col == 'from_extract_abstract':
             rouges = get_arr(record['eval_from_extract_abstract_rouge1_f1'])
         else:
             rouges = get_arr(record['eval_abstract_rouge1_f1'])

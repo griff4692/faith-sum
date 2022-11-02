@@ -59,7 +59,6 @@ if __name__ == '__main__':
 
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum/results')
     parser.add_argument('--fn', default=DEFAULT_FN)
-    parser.add_argument('--split', default='validation')
     parser.add_argument('--columns', default='extract,from_extract_abstract', choices=[
         'extract', 'extract,from_extract_abstract', 'abstract', 'abstract,implied_extract'
     ])

@@ -31,6 +31,9 @@ def run(args):
     args.num_gpus = None if gpus is None else len(gpus)
     print('Num GPUs --> {}'.format(args.num_gpus))
     precision = 16 if args.num_gpus is not None else 32
+    if 'pegasus' in args.hf_model:
+        print('Using full precision for PEGASUS.')
+        precision = 32
     experiment_dir = os.path.join(args.weight_dir, args.experiment)
     os.makedirs(os.path.join(experiment_dir, 'wandb'), exist_ok=True)  # Only way to make sure it's writable
     if 'brio' in args.hf_model:
@@ -186,6 +189,7 @@ if __name__ == '__main__':
         'facebook/bart-base',
         'facebook/bart-large',
         'Yale-LILY/brio-cnndm-uncased',
+        'google/pegasus-xsum',
         'google/pegasus-large',
         'facebook/bart-large-cnn',
         'facebook/bart-large-xsum',
@@ -211,8 +215,8 @@ if __name__ == '__main__':
     # Won't held yet for multi-gpu
     args.grad_accum = args.target_batch_size // args.per_device_train_bs
 
-    if args.debug:  # Use small data and tiny BART model
-        args.hf_model = 'sshleifer/bart-tiny-random'
+    # if args.debug:  # Use small data and tiny BART model
+    #     args.hf_model = 'sshleifer/bart-tiny-random'
 
     # Override: If we are generating an extract, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style or args.extract_indicators

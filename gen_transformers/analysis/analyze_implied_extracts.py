@@ -7,8 +7,9 @@ from datasets import load_from_disk
 
 
 if __name__ == '__main__':
+    dataset = 'cnn_dailymail'
     data_dir = '/nlp/projects/faithsum'
-    experiment = 'bart_large_cnn'  # 'gen_abstract_full' gen_extract_full_ar_mask_red_feat
+    experiment = 'bart_large_cnn'
     summary_type = 'abstract'
     fn = 'test_diverse_16_outputs.csv'
 
@@ -19,7 +20,7 @@ if __name__ == '__main__':
     score_col = prefix + 'extract_rouges'
 
     df = pd.read_csv(os.path.join(data_dir, f'results/{experiment}/{fn}'))
-    data_dir = os.path.join(data_dir, 'cnn_dailymail')
+    data_dir = os.path.join(data_dir, dataset)
     dataset = load_from_disk(data_dir)
     beam_num_unique_plans = [[] for _ in range(16)]
     beam_num_unique_extracts = [[] for _ in range(16)]

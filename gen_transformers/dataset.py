@@ -13,7 +13,7 @@ import spacy
 STOPWORDS = set(stopwords.words('english'))
 from tqdm import tqdm
 
-from datasets import load_dataset, load_from_disk
+from datasets import load_from_disk
 from gen_transformers.data_utils import Seq2SeqCollate
 from preprocess.helpers import _get_ngrams
 from sum_constants import summarization_name_mapping
@@ -44,7 +44,11 @@ class SummaryDataModule(pl.LightningDataModule):
         super().__init__()
 
         self.args = args
-        data_dir = os.path.join(args.data_dir, args.dataset)
+        if 'pegasus' in args.hf_model:
+            data_dir = os.path.join(args.data_dir, args.dataset + '_pegasus')
+        else:
+            data_dir = os.path.join(args.data_dir, args.dataset)
+        print(f'Loading data from {data_dir}')
         self.dataset = load_from_disk(data_dir)
         self.tokenizer = tokenizer
         self.num_workers = 0 if args.debug else 8
@@ -248,7 +252,10 @@ class SummarizationDataset(Dataset):
         input_ids = example['input_ids']
         if not self.args.add_sent_toks:
             # Use tokenizer min
-            min_sent_id = input_ids[1]
+            first_sent_idx = 0 if 'pegasus' in self.args.hf_model else 1
+            if 'pegasus' in self.args.hf_model:  # Can remove once this clears.
+                assert example['input_ids'][0] == 96103
+            min_sent_id = input_ids[first_sent_idx]
             input_ids = [x for x in input_ids if x < min_sent_id]
 
         row = {
@@ -279,16 +286,6 @@ class SummarizationDataset(Dataset):
                 # Add Gold Label as the 'most positive'
                 candidates.insert(0, list(oracle_labels))
                 norm_scores.insert(0, 1)
-
-            # tps = re.split(r'(<s\d+>)', source_annotated)
-            # source_sents = []
-            # for tp_idx, tp in enumerate(tps):
-            #     if re.match(r'(<s\d+>)', tp) is not None:
-            #         source_sents.append(tps[tp_idx + 1].strip())
-            #
-            # brio_extracts = []
-            # for cand_idx in candidates:
-            #     brio_extracts.append(' '.join([source_sents[i] for i in cand_idx]))
 
             if self.args.is_word_brio:
                 with self.tokenizer.as_target_tokenizer():
