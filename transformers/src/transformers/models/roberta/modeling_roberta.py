@@ -76,9 +76,9 @@ class RobertaEmbeddings(nn.Module):
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
 
-        self.extract_indicator_embeddings = None
-        if config.extract_indicators:
-            self.extract_indicator_embeddings = nn.Embedding(2, config.hidden_size, padding_idx=0)
+        # self.extract_indicator_embeddings = None
+        # if hasattr(config, 'extract_indicators') and config.extract_indicators:
+        #     self.extract_indicator_embeddings = nn.Embedding(2, config.hidden_size, padding_idx=0)
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
@@ -138,9 +138,9 @@ class RobertaEmbeddings(nn.Module):
             position_embeddings = self.position_embeddings(position_ids)
             embeddings += position_embeddings
 
-        if extract_indicators is not None and self.extract_indicator_embeddings is not None:
-            extract_embeds = self.extract_indicator_embeddings(extract_indicators)
-            embeddings += extract_embeds
+        # if extract_indicators is not None and self.extract_indicator_embeddings is not None:
+        #     extract_embeds = self.extract_indicator_embeddings(extract_indicators)
+        #     embeddings += extract_embeds
 
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
@@ -852,7 +852,7 @@ class RobertaModel(RobertaPreTrainedModel):
             input_ids=input_ids,
             position_ids=position_ids,
             token_type_ids=token_type_ids,
-            extract_indicators=extract_indicators,
+            # extract_indicators=extract_indicators,
             inputs_embeds=inputs_embeds,
             past_key_values_length=past_key_values_length,
         )
@@ -1199,7 +1199,7 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
         attention_mask: Optional[torch.FloatTensor] = None,
         token_type_ids: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        extract_indicators: Optional[torch.LongTensor] = None,
+        # extract_indicators: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -1221,7 +1221,7 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
-            extract_indicators=extract_indicators,
+            # extract_indicators=extract_indicators,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,

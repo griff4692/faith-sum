@@ -15,9 +15,9 @@ def get_arr(num_str):
 
 
 if __name__ == '__main__':
-    experiment = 'xsum_extract_generator'
-    output = 'test_from_beam_16_extract_pegasus_xsum_indicator_drop_33'
-    summary_style = 'from_extract_abstract'
+    experiment = 'bart_large_samsum'
+    output = 'test_diverse_16_outputs'
+    summary_style = 'abstract'  # from_extract_abstract
     if summary_style == 'abstract':
         rouge_col = f'eval_{summary_style}_rouge1_f1'
         diversity_col = 'diversity'

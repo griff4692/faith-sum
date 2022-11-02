@@ -218,8 +218,11 @@ if __name__ == '__main__':
     in_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs.csv')
     print(f'Reading in extracts from {in_fn}')
     outputs = pd.read_csv(in_fn)
+    prev_n = len(outputs)
     outputs.dropna(subset=['extract'], inplace=True)
     n = len(outputs)
+    if prev_n > n:
+        print(f'Filtered out {prev_n - n} null extracts.')
     if n > args.max_examples:
         outputs = outputs.sample(n=args.max_examples, replace=False, random_state=111)
         n = len(outputs)

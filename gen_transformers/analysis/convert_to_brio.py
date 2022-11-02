@@ -43,61 +43,66 @@ if __name__ == '__main__':
     parser.add_argument('--experiment', default='add_doc_bart_large_cnn')
     parser.add_argument('--fn', default='test_from_beam_16_extract.csv')
     parser.add_argument('--dataset', default='cnn_dailymail')
-    parser.add_argument('--split', default='test')
+    parser.add_argument('--splits', default='test')
 
     args = parser.parse_args()
 
     nlp = spacy.load('en_core_web_sm')
-
-    fn = os.path.join(args.data_dir, 'results', args.experiment, args.fn)
-    df = pd.read_csv(fn)
-    dataset = load_from_disk(os.path.join(args.data_dir, args.dataset))[args.split]
+    data_fn = os.path.join(args.data_dir, args.dataset)
+    dataset = load_from_disk(data_fn)
     input_col, target_col = summarization_name_mapping[args.dataset]
-    articles = dataset[input_col]
-    records = df.to_dict('records')
-
-    out_dir = os.path.join(args.data_dir, args.experiment, 'diverse', args.split)
-    print(f'Saving to {out_dir}')
-    os.makedirs(out_dir, exist_ok=True)
-    for idx, record in tqdm(enumerate(records), total=len(records)):
-        dataset_idx = record['dataset_idx']
-        prediction_col = 'from_extract_abstract' if 'from_extract_abstract' in record else 'abstract'
-        candidates = record[prediction_col].split('<cand>')
-
-        article_untok = articles[dataset_idx]
-        reference_untok = record['reference']
-        if prediction_col == 'from_extract_abstract':
-            rouges = get_arr(record['eval_from_extract_abstract_rouge1_f1'])
+    for split in args.splits.split(','):
+        if '{}' in args.fn:
+            fn = os.path.join(args.data_dir, 'results', args.experiment, args.fn.format(split))
         else:
-            rouges = get_arr(record['eval_abstract_rouge1_f1'])
+            fn = os.path.join(args.data_dir, 'results', args.experiment, args.fn)
+        print(f'Reading data from {fn}')
+        df = pd.read_csv(fn)
+        split_dataset = dataset[split]
+        articles = split_dataset[input_col]
+        records = df.to_dict('records')
+        out_dir = os.path.join(args.data_dir, 'results', args.experiment, 'diverse', split)
+        print(f'Will save outputs to {out_dir}')
+        os.makedirs(out_dir, exist_ok=True)
+        for idx, record in tqdm(enumerate(records), total=len(records)):
+            dataset_idx = record['dataset_idx']
+            prediction_col = 'from_extract_abstract' if 'from_extract_abstract' in record else 'abstract'
+            candidates = record[prediction_col].split('<cand>')
 
-        if args.dataset == 'samsum':
-            article_untok, article_tok = brio_samsum_tokenize(article_untok, nlp)
-            reference_untok, reference_tok = brio_samsum_tokenize(reference_untok, nlp)
-        else:
-            article_untok, article_tok = brio_tokenize(article_untok, nlp)
-            reference_untok, reference_tok = brio_tokenize(reference_untok, nlp)
+            article_untok = articles[dataset_idx]
+            reference_untok = record['reference']
+            if prediction_col == 'from_extract_abstract':
+                rouges = get_arr(record['eval_from_extract_abstract_rouge1_f1'])
+            else:
+                rouges = get_arr(record['eval_abstract_rouge1_f1'])
 
-        # Tokenize reference
-        candidates_untok = []
-        candidates_tok = []
-        for cand_idx, cand_untok in enumerate(candidates):
-            cand_untok, cand_tok = brio_tokenize(cand_untok, nlp)
-            rouge = rouges[cand_idx]
-            candidates_untok.append([cand_untok, rouge])
-            candidates_tok.append([cand_tok, rouge])
+            if args.dataset == 'samsum':
+                article_untok, article_tok = brio_samsum_tokenize(article_untok, nlp)
+                reference_untok, reference_tok = brio_samsum_tokenize(reference_untok, nlp)
+            else:
+                article_untok, article_tok = brio_tokenize(article_untok, nlp)
+                reference_untok, reference_tok = brio_tokenize(reference_untok, nlp)
 
-        obj = {
-            'article': article_tok,
-            'article_untok': article_untok,
-            'abstract': reference_tok,
-            'abstract_untok': reference_untok,
-            'candidates': candidates_tok,
-            'candidates_untok': candidates_untok,
-        }
+            # Tokenize reference
+            candidates_untok = []
+            candidates_tok = []
+            for cand_idx, cand_untok in enumerate(candidates):
+                cand_untok, cand_tok = brio_tokenize(cand_untok, nlp)
+                rouge = rouges[cand_idx]
+                candidates_untok.append([cand_untok, rouge])
+                candidates_tok.append([cand_tok, rouge])
 
-        out_fn = os.path.join(out_dir, f'{idx}.json')
-        with open(out_fn, 'w') as fd:
-            ujson.dump(obj, fd)
+            obj = {
+                'article': article_tok,
+                'article_untok': article_untok,
+                'abstract': reference_tok,
+                'abstract_untok': reference_untok,
+                'candidates': candidates_tok,
+                'candidates_untok': candidates_untok,
+            }
 
-    print(f'Saved BRIO outputs to {out_dir}')
+            out_fn = os.path.join(out_dir, f'{idx}.json')
+            with open(out_fn, 'w') as fd:
+                ujson.dump(obj, fd)
+
+        print(f'Saved BRIO outputs to {out_dir}')

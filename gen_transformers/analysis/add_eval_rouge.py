@@ -68,6 +68,7 @@ if __name__ == '__main__':
     rouge_metric = RougeMetric()
 
     out_fn = os.path.join(args.data_dir, args.fn)
+    print(f'Reading predictions from {out_fn}')
     outputs = pd.read_csv(out_fn)
     records = outputs.to_dict('records')
 
