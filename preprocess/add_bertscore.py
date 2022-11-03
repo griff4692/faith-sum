@@ -9,11 +9,12 @@ from bert_score.scorer import BERTScorer
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Extract Oracles for dataset')
 
-    parser.add_argument('--dataset', default='xsum_pegasus')
+    parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--num_proc', default=1, type=int)
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--device', default=0, type=int)
+    parser.add_argument('--splits', default='train,validation,test', type=str)
 
     args = parser.parse_args()
     in_dir = os.path.join(args.data_dir, args.dataset)
@@ -47,7 +48,7 @@ if __name__ == '__main__':
         source_str = [' '.join(x) for x in source_sents]
         oracle_str = [' '.join(x) for x in oracle]
         non_oracle_str = [' '.join(x) for x in non_oracle]
-        ref_str = batch['summary']
+        ref_str = batch.get('summary', batch.get('highlights'))
 
         # BertScore on the oracle <-> reference
         # BertScore on the non-oracle <-> reference
@@ -73,13 +74,15 @@ if __name__ == '__main__':
         return bs_stats
 
 
-    dataset = dataset.map(
-        add_bert_score,
-        batched=True,
-        batch_size=args.batch_size,
-        num_proc=args.num_proc,
-        desc="Adding BertScore",
-    )
+    for split in args.splits.split(','):
+        dataset[split] = dataset[split].map(
+            add_bert_score,
+            batched=True,
+            batch_size=args.batch_size,
+            num_proc=args.num_proc,
+            desc=f"Adding BertScore for {split} set",
+        )
 
-    print(f'Saving back to {in_dir}')
-    dataset.save_to_disk(in_dir)
+    out_dir = os.path.join(args.data_dir, args.dataset + 'with_bs')
+    print(f'Saving back to {out_dir}')
+    dataset.save_to_disk(out_dir)

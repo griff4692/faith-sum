@@ -11,7 +11,10 @@ def postprocess_text(texts):
 
 
 class Seq2SeqCollate:
-    def __init__(self, tokenizer, max_input_length=8192, max_output_length=512, split=None, verbose=False):
+    def __init__(
+            self, tokenizer, max_input_length=8192, max_output_length=512, split=None, verbose=False,
+            add_control_code=False
+    ):
         self.tokenizer = tokenizer
         self.max_input_length = max_input_length
         assert self.max_input_length <= tokenizer.model_max_length
@@ -23,10 +26,9 @@ class Seq2SeqCollate:
         additional_ids = self.tokenizer.additional_special_tokens_ids
         self.special_id_min = 999999 if len(additional_ids) == 0 else min(self.tokenizer.additional_special_tokens_ids)
         self.verbose = verbose
+        self.add_control_code = add_control_code
 
     def __call__(self, batch_list):
-        batch = {}
-
         # Pad input_ids
         input_ids = [x['input_ids'] for x in batch_list]
         labels = [x['labels'] for x in batch_list]
@@ -60,6 +62,9 @@ class Seq2SeqCollate:
             'oracle_labels': oracle_labels,
             'references': references,
         }
+
+        if self.add_control_code:
+            row['cls_mask'][:, 0] = False
 
         if 'brio_word_labels' in batch_list[0]:
             row['brio_word_labels'] = [torch.from_numpy(x['brio_word_labels']) for x in batch_list]

@@ -96,8 +96,13 @@ def get_idx(idx_str):
 def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, special_id_min, num_return_sequences=1):
     has_bos = 'pegasus' not in args.hf_model
 
+    if args.control_code is None:
+        source_annotated_rep = [source_annotated for _ in range(len(idx_to_keep))]
+    else:
+        source_annotated_rep = [args.control_code + source_annotated for _ in range(len(idx_to_keep))]
+
     inputs = tokenizer(
-        [source_annotated] * len(idx_to_keep),
+        source_annotated_rep,
         padding='longest',
         truncation=True,
         max_length=512 if 'pegasus' in args.hf_model else 1024,
@@ -106,6 +111,10 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
     input_ids = inputs['input_ids'].to(args.gpu_device)
     attention_mask = inputs['attention_mask'].to(args.gpu_device)
     cls_mask = input_ids >= special_id_min
+
+    if args.control_code is not None:
+        cls_mask[0] = False
+
     extract_indicators = []
     for cand_idx, extract_idx in enumerate(idx_to_keep):
         ei = sentence_indicators(
@@ -210,6 +219,7 @@ if __name__ == '__main__':
     parser.add_argument('--split', default='test')
     parser.add_argument('-verbose', default=False, action='store_true')
     parser.add_argument('-add_abstract_experiment', default=False, action='store_true')
+    parser.add_argument('--control_code', default=None)
 
     args = parser.parse_args()
 

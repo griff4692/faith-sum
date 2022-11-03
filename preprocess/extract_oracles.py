@@ -17,7 +17,10 @@ def convert_to_sents(string, nlp, is_dialogue=False):
 
 
 def dialogue_to_sents(string, nlp):
-    return [nlp(x.strip()) for x in string.split('\r\n') if len(x.strip()) > 0]
+    if '\r' in string:  # ~ 10% of dialogues are split with \n (not \r\n)
+        return [nlp(x.strip()) for x in string.split('\r\n') if len(x.strip()) > 0]
+    # print('NO carriage')
+    return [nlp(x.strip()) for x in string.split('\n') if len(x.strip()) > 0]
 
 
 def gen_oracle(args, example, nlp, is_dialogue=False):

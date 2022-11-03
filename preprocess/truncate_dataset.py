@@ -100,7 +100,6 @@ if __name__ == '__main__':
     input_col, target_col = summarization_name_mapping[args.dataset]
     if 'pegasus' in args.hf_model:
         out_dir = os.path.join(args.data_dir, args.dataset + '_pegasus')
-
     else:
         out_dir = os.path.join(args.data_dir, args.dataset)
 

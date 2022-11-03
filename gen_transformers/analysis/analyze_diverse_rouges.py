@@ -16,7 +16,7 @@ def get_arr(num_str):
 
 if __name__ == '__main__':
     experiment = 'bart_large_samsum'
-    output = 'test_diverse_16_outputs'
+    output = 'test_beam_16_outputs'
     summary_style = 'abstract'  # from_extract_abstract
     if summary_style == 'abstract':
         rouge_col = f'eval_{summary_style}_rouge1_f1'
