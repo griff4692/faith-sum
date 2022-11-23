@@ -5,13 +5,18 @@ import argparse
 import spacy
 from datasets import load_dataset
 from transformers import AutoTokenizer
+from bert_score.scorer import BERTScorer
 
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from sum_constants import summarization_name_mapping
 
 
-def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, max_input_length=1024, max_output_length=256):
+def select_bert_sents(bs, source_sents, target_sents):
+    pass
+
+
+def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, bs, max_input_length=1024, max_output_length=256):
     batch_source_sents = [
         convert_to_sents(inputs, nlp, is_dialogue=args.dataset == 'samsum') for inputs in batch_data[input_col]
     ]
@@ -56,6 +61,8 @@ def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, max_input_l
         idxs, rouge, r1_hist, r2_hist, best_hist = gain_selection(
             source_sents_tok, target_sents_tok, 5, lower=True, sort=False)
 
+        bert_idxs = select_bert_sents(bs, source_sents, target_sents)
+
         rouge1_history.append(r1_hist)
         rouge2_history.append(r2_hist)
         best_history.append(best_hist)
@@ -97,6 +104,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     nlp = spacy.load('en_core_web_sm')
+    bs = BERTScorer(lang='en', idf=True)
     input_col, target_col = summarization_name_mapping[args.dataset]
     if 'pegasus' in args.hf_model:
         out_dir = os.path.join(args.data_dir, args.dataset + '_pegasus')
@@ -127,7 +135,7 @@ if __name__ == '__main__':
     for split in args.splits.split(','):
         print(f'Processing {len(dataset[split])} {split} examples')
         encoded = dataset[split].map(lambda examples: get_ids(
-            args, nlp, tokenizer, examples, input_col, target_col, max_input_length=max_input_length,
+            args, nlp, tokenizer, examples, input_col, target_col, bs, max_input_length=max_input_length,
             max_output_length=max_output_length
         ), batched=True, num_proc=args.num_proc)
         encoded = encoded.filter(lambda example: len(example[input_col].strip()) > 0)

@@ -59,3 +59,8 @@ if __name__ == '__main__':
     for idx in high_focus:
         row = dataset.select([idx])[0]
         render(row)
+
+    print('RANDOM\n')
+    for idx in np.random.randint(0, len(dataset), size=(10, )):
+        row = dataset.select([idx])[0]
+        render(row)

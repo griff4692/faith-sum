@@ -3,10 +3,12 @@ import pandas as pd
 import ujson
 from tqdm import tqdm
 import numpy as np
+import regex as re
 
 import argparse
 from datasets import load_from_disk
 import spacy
+from nltk import sent_tokenize
 
 from sum_constants import summarization_name_mapping
 from preprocess.extract_oracles import dialogue_to_sents
@@ -37,6 +39,10 @@ def get_arr(num_str):
     return np.array([float(y) for y in num_str.split(delim)])
 
 
+def ptb_prepare(text):
+    return re.sub('\s+', ' ', re.sub(r'\n', ' ', text)).lower()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Convert fn to BRIO directory format')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
@@ -44,6 +50,7 @@ if __name__ == '__main__':
     parser.add_argument('--fn', default='test_from_beam_16_extract.csv')
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--splits', default='test')
+    parser.add_argument('--num_candidates', default=16, type=int)
 
     args = parser.parse_args()
 
@@ -64,10 +71,37 @@ if __name__ == '__main__':
         out_dir = os.path.join(args.data_dir, 'results', args.experiment, 'diverse', split)
         print(f'Will save outputs to {out_dir}')
         os.makedirs(out_dir, exist_ok=True)
+
+        ptb_results = None
+        ptb_fn = os.path.join(args.data_dir, 'results', args.experiment, 'diverse', split + '.tokenized')
+        if os.path.exists(ptb_fn):
+            print(f'Loading PTB tokenized results from {ptb_fn}')
+            ptb_results = []
+            with open(ptb_fn, 'r') as fd:
+                lines = fd.readlines()
+                chunksize = args.num_candidates + 1
+                for start in range(0, len(lines), chunksize):
+                    ref_tok = lines[start].strip()
+                    cand_tok = [x.strip() for x in lines[start + 1:start + 1 + args.num_candidates]]
+                    assert len(cand_tok) == args.num_candidates
+                    ptb_results.append({'ref': ref_tok, 'cand': cand_tok})
+
+            assert len(ptb_results) == len(records)
+
+        for_ptb = []
+        num_cand = -1
         for idx, record in tqdm(enumerate(records), total=len(records)):
             dataset_idx = record['dataset_idx']
             prediction_col = 'from_extract_abstract' if 'from_extract_abstract' in record else 'abstract'
             candidates = record[prediction_col].split('<cand>')
+
+            if num_cand == -1:
+                num_cand = len(candidates)
+            assert num_cand == len(candidates) == args.num_candidates
+
+            candidates_no_new_lower = [ptb_prepare(c) for c in candidates]
+            ref_no_new_lower = ptb_prepare(record['reference'])
+            for_ptb += [ref_no_new_lower] + candidates_no_new_lower
 
             article_untok = articles[dataset_idx]
             reference_untok = record['reference']
@@ -95,14 +129,32 @@ if __name__ == '__main__':
             obj = {
                 'article': article_tok,
                 'article_untok': article_untok,
-                'abstract': reference_tok,
                 'abstract_untok': reference_untok,
-                'candidates': candidates_tok,
                 'candidates_untok': candidates_untok,
             }
+
+            if ptb_results is None:
+                toks = {
+                    'abstract': reference_tok,
+                    'candidates': candidates_tok,
+                }
+            else:
+                ptb_ref = sent_tokenize(ptb_results[idx]['ref'])
+                ptb_cands = list(map(sent_tokenize, ptb_results[idx]['cand']))
+                ptb_cands_w_rouges = [[c, r] for c, r in zip(ptb_cands, rouges)]
+                toks = {
+                    'abstract': ptb_ref,
+                    'candidates': ptb_cands_w_rouges,
+                }
+
+            obj.update(toks)
 
             out_fn = os.path.join(out_dir, f'{idx}.json')
             with open(out_fn, 'w') as fd:
                 ujson.dump(obj, fd)
 
         print(f'Saved BRIO outputs to {out_dir}')
+        to_ptb_fn = os.path.join(args.data_dir, 'results', args.experiment, 'diverse', split + '.txt')
+        if not os.path.exists(to_ptb_fn):
+            with open(to_ptb_fn, 'w') as fd:
+                fd.write('\n'.join(for_ptb))

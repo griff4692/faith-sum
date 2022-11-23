@@ -116,6 +116,11 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
         cls_mask[0] = False
 
     extract_indicators = []
+
+    # No highlights on last beam
+    if args.convert_last_to_unprompted:
+        idx_to_keep[-1] = []
+
     for cand_idx, extract_idx in enumerate(idx_to_keep):
         ei = sentence_indicators(
             cls_mask[cand_idx].unsqueeze(0), extract_idx, attention_mask[cand_idx].unsqueeze(0), has_bos=has_bos
@@ -154,6 +159,10 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
 
     ps, rs, f1s = [], [], []
     for extract_idx, implied in zip(idx_to_keep, implied_extracts):
+        if len(extract_idx) == 0:
+            assert args.convert_last_to_unprompted
+            continue
+
         implied_idx = implied['idxs']
         agreement = set(extract_idx).intersection(implied_idx)
         n = len(agreement)
@@ -220,12 +229,16 @@ if __name__ == '__main__':
     parser.add_argument('-verbose', default=False, action='store_true')
     parser.add_argument('-add_abstract_experiment', default=False, action='store_true')
     parser.add_argument('--control_code', default=None)
+    parser.add_argument('-convert_last_to_unprompted', default=False, action='store_true')
+    parser.add_argument('--chunk', default=None)
 
     args = parser.parse_args()
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
     decode_suffix = args.decode_method + '_' + str(args.num_candidates)
-    in_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs.csv')
+    chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'
+    in_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs{chunk_suffix}.csv')
+
     print(f'Reading in extracts from {in_fn}')
     outputs = pd.read_csv(in_fn)
     prev_n = len(outputs)
@@ -321,15 +334,16 @@ if __name__ == '__main__':
     updated_df = pd.DataFrame(updated_records)
     if not args.do_not_save:
         top_k_str = '' if args.top_k is None else f'_{args.top_k}'
+        chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'
         if args.add_abstract_experiment:
             out_fn = os.path.join(
                 results_dir,
-                f'{args.split}_from_{decode_suffix}_extract{top_k_str}_{args.abstract_experiment}.csv'
+                f'{args.split}_from_{decode_suffix}_extract{top_k_str}_{args.abstract_experiment}{chunk_suffix}.csv'
             )
         else:
             out_fn = os.path.join(
                 results_dir,
-                f'{args.split}_from_{decode_suffix}_extract{top_k_str}.csv'
+                f'{args.split}_from_{decode_suffix}_extract{top_k_str}{chunk_suffix}.csv'
             )
         print(f'Saving prompted abstracts to {out_fn}')
         updated_df.to_csv(out_fn, index=False)

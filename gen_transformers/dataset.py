@@ -60,41 +60,30 @@ class SummaryDataModule(pl.LightningDataModule):
             with open(candidates_fn, 'r') as fd:
                 self.brio_candidates = ujson.load(fd)
 
-    def get_inverse_train_split(self, split, train_frac, max_examples=None, **dataloader_kwargs):
-        split_dataset = self.dataset[split]
+    def get_train_chunk(self, chunk, num_chunks, **dataloader_kwargs):
+        split_dataset = self.dataset['train']
         n = len(split_dataset)
-        if train_frac > 0:
-            train_num = round(train_frac * len(split_dataset))
-            trained_idxs = set(list(np.sort(np.random.choice(np.arange(n), size=(train_num, ), replace=False))))
-            idxs = list(sorted(set(range(n)) - trained_idxs))
-        else:
-            idxs = list(range(n))
 
-        if max_examples is not None and max_examples < len(idxs):
-            print(f'Subsampling for maximum of {max_examples}')
-            idxs = list(np.sort((np.random.choice(idxs, size=(max_examples,), replace=False))))
+        all_idxs = list(range(n))
+        chunk_idxs = np.array_split(all_idxs, num_chunks)[chunk]
+        print(f'Using {len(chunk_idxs)} training examples set for chunk {chunk}/{num_chunks}')
+        print(f'First {min(3, len(chunk_idxs))} idxs: {chunk_idxs[:min(3, len(chunk_idxs))]}')
+        split_dataset = split_dataset.select(chunk_idxs)
 
-        print(f'Using {len(idxs)} training examples set aside for re-ranking')
-        print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
-        split_dataset = split_dataset.select(idxs)
-
-        split_dataset_pl = SummarizationDataset(self.args, split_dataset, self.tokenizer, split)
+        split_dataset_pl = SummarizationDataset(self.args, split_dataset, self.tokenizer, 'train')
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
             max_output_length=self.args.max_output_length,
-            split=split,
-            add_control_code=self.args.add_control_code
+            split='train',
+            add_control_code=False,
         )
-        batch_size = self.args.per_device_train_bs if split == 'train' else self.args.per_device_eval_bs
         kwargs = {
-            'batch_size': batch_size,
-            'shuffle': split == 'train',
             'num_workers': self.num_workers,
             'collate_fn': collate_fn
         }
         kwargs.update(**dataloader_kwargs)
-        return DataLoader(split_dataset_pl, **kwargs), idxs
+        return DataLoader(split_dataset_pl, **kwargs), chunk_idxs
 
     def get_split(self, split, max_examples=None, **dataloader_kwargs):
         split_dataset = self.dataset[split]

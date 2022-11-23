@@ -98,6 +98,8 @@ if __name__ == '__main__':
     ])
     parser.add_argument('--split', default='validation')
     parser.add_argument('--train_frac', default=0.0, type=float)
+    parser.add_argument('--chunk', default=None, type=int)
+    parser.add_argument('--num_chunks', default=8, type=int)
 
     # Decoding Parameters
     parser.add_argument('--decode_method', default='diverse', choices=['beam', 'diverse', 'nucleus'])
@@ -162,8 +164,8 @@ if __name__ == '__main__':
         dataloader_kwargs = {'shuffle': False, 'batch_size': args.batch_size}
 
         if args.split == 'train':
-            dataloader, dataset_idxs = datamodule.get_inverse_train_split(
-                'train', args.train_frac, args.max_examples, **dataloader_kwargs
+            dataloader, dataset_idxs = datamodule.get_train_chunk(
+                args.chunk, args.num_chunks, **dataloader_kwargs
             )
         else:
             dataloader, dataset_idxs = datamodule.get_split(
@@ -213,7 +215,9 @@ if __name__ == '__main__':
 
         outputs = pd.DataFrame(outputs)
         decode_suffix = args.decode_method + '_' + str(args.num_return_sequences)
-        out_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs.csv')
+        chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'
+        out_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs{chunk_suffix}.csv')
+
         if not args.do_not_save:
             print(f'Saving {len(outputs)} ROUGE scores and predictions to {out_fn}')
             outputs.to_csv(out_fn, index=False)
@@ -258,7 +262,7 @@ if __name__ == '__main__':
 
         exp_results.append(exp_row)
     exp_results = pd.DataFrame(exp_results)
-    out_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_ranges.csv')
+    out_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}{chunk_suffix}_ranges.csv')
     if not args.do_not_save:
         print(out_fn)
         exp_results.to_csv(out_fn, index=False)
