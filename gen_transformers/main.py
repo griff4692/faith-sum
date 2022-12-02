@@ -167,6 +167,7 @@ if __name__ == '__main__':
     parser.add_argument('--val_monitor_metric', default='combined')
     parser.add_argument('--val_metric_mode', default='min')
     parser.add_argument('--oracle_drop_p', default=0.0, type=float)
+    parser.add_argument('--oracle_column', default='oracle_idxs', choices=['oracle_idxs', 'oracle_idxs_bert'])
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 3e-5

@@ -237,7 +237,7 @@ class SummarizationDataset(Dataset):
         # Empirically, better performance from generating extracts in order in which they appear in source
         # Rather than by "relevance" as defined by ROUGE, for instance
         # Sort oracle order or not
-        oracle_labels = np.sort(example['oracle_idxs'])
+        oracle_labels = np.sort(example[self.args.oracle_column])
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
         source_annotated = example['source_annotated']
         input_ids = example['input_ids']

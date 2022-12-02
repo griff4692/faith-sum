@@ -1,0 +1,672 @@
+BEGIN_EXAMPLE
+ID: 13727903
+DIALOGUE:
+<s0> Poppy: I literally cannot think any more today!
+<s1> Alice: Yeah, I'm in the same shape. What a long day!
+<s2> Poppy: Lunch went by in a flash because I had errands, which makes the day so slow!
+<s3> Alice: I didn't get lunch, so that's even worse!
+<s4> Poppy: Oh, poor you! Aren't you starving?
+<s5> Alice: I'll live. Only three more hours!
+<s6> Poppy: LOL! Not that you're counting...
+<s7> Alice: Damn straight I'm counting! LOL!
+<s8> Poppy: Well, I'm def going for drinks after work. Want to join?
+<s9> Alice: Who else is there?
+<s10> Poppy: Nobody yet but I was going to put the word out.
+<s11> Alice: Sure, sounds fun. I'll invite some people up here if that's okay?
+<s12> Poppy: Oh, got your eye on anyone?
+<s13> Alice: Fred!
+<s14> Poppy: Fred? Really?
+<s15> Alice: Sure, why not? He's single, my age and not bad looking.
+<s16> Poppy: He's a dork!
+<s17> Alice: But a cute one!
+<s18> Poppy: If you say so. Not my type!
+<s19> Alice: That's a relief!
+<s20> Poppy: He's all yours!
+<s21> Alice: Good. So I'll invite him and a bunch of others. See you at Nick's?
+<s22> Poppy: Perfect. About 5:30.
+<s23> Alice: Great!
+<s24> Poppy: Can't wait! So ready for a beer!
+<s25> Alice: GnT for me!
+SUMMARY:
+Poppy and Alice are meeting for drinks after work at Nick's at 5:30. Alice fancies Fred, she will invite him and a bunch of other coworkers.
+ANNOTATION 1: 8,13,21
+ANNOTATION 2: 8,13,21,22
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13862936
+DIALOGUE:
+<s0> Ivan: Ann, I'm so sorry that I haven't been at you party
+<s1> Ann: Ivan, you couldn't come
+<s2> Ann: that's ok, you'll come next time
+<s3> Ivan: I've bought you something for you birthday!
+<s4> Ann: You shouldn't have...
+<s5> Ivan: when are we meeting?
+<s6> Ann: next week?
+<s7> Ivan: ok
+SUMMARY:
+Ivan and Ann will meet next week.
+ANNOTATION 1: 5,6,7
+ANNOTATION 2: 5,6,7
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13682336
+DIALOGUE:
+<s0> Franklin: Mum, our child is crying
+<s1> Faye: Yes, my dear, it's often like that
+<s2> Franklin: But why is he crying?
+<s3> Faye: You know, it is the only way he can tell you what's going on with him, maybe he's hungry, maybe he wants to be changed, maybe he's having pain, stomach ache, toothache?
+<s4> Franklin: But what should I do?
+<s5> Faye: Try to give him a bottle, if he doesn't want, change his diapers, if not, take him in your arms, it often works
+<s6> Franklin: Thanks, mum, I will try. Goodnight
+SUMMARY:
+Franklin's and Faye's child is crying. Franklin doesn't know what to do, so he will follow Faye's advice.
+ANNOTATION 1: 0,4,6
+ANNOTATION 2: 0,4,6
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13730727
+DIALOGUE:
+<s0> Veki: Are they finished their job?
+<s1> Meki: No, they are playing right now.
+<s2> Veki: Who is the better?
+<s3> Meki: Rada is the best, then Radmila and at the end is Gorjana.
+<s4> Veki: which game they are playing?
+<s5> Meki: Canasta game.
+<s6> Veki: do you know to play a Canasta?
+<s7> Meki: No, I do not like to play cards.
+<s8> Veki: Why?
+<s9> Meki: For me, playing a cards is rather losing i nice time.
+<s10> Veki: Hm.
+<s11> Meki: It is better to read something actual rom news papers or from some Internet blogs.
+<s12> Veki: You are right.
+<s13> Meki: Good bye, I love you.
+<s14> Veki: I love you too. Good bye.
+SUMMARY:
+Meki is watching Rada, Radmila, and Gorjana play Canasta. Meki prefers reading to playing cards.
+ANNOTATION 1: 3,5,7,11
+ANNOTATION 2: 3,5,11
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13715785
+DIALOGUE:
+<s0> Marianne: <file_photo>
+<s1> Marianne: what do you girls think about this dress? is it ok for the wedding?
+<s2> Cassandre: wow, it's gorgeous!
+<s3> Eveline: it's really nice, how much is it? Cause I don't see any price
+<s4> Marianne: 100$
+<s5> Cassandre: hm....I guess that's a rather regular price for such an occasion
+<s6> Eveline: 100$? really? it's really pretty, but I don't think it's worth its price
+<s7> Marianne: that's why I'm asking you cause I have a dillema
+<s8> Cassandre: any other suggestions?
+<s9> Marianne: I have 3 options, but this is my favourite and I can easily afford it
+<s10> Eveline: well, I guess the decision has already been made, buy it then
+<s11> Cassandre: yeah, I think the same
+SUMMARY:
+Marianne wants to buy a dress for the wedding for 100$. Cassandre thinks it's a regular price but Eveline disagrees. Marianne has 3 options but she wants the one for 100$ as she likes it and can afford it.
+ANNOTATION 1: 1,4,5,6,9
+ANNOTATION 2: 1,5,6,9
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13682363
+DIALOGUE:
+<s0> Rob: have you seen last game of Suns?
+<s1> Rob: Marcin Gortat was amazing!
+<s2> Matt: yeah I know
+<s3> Matt: this guy is really the future of our club
+<s4> Matt: but I have heard that he thinks about returning to Poland
+<s5> Rob: oh no!
+<s6> Rob: but wait, what can he do there?
+<s7> Matt: he said he wants to spend some time with family
+<s8> Matt: and build his own family
+<s9> Matt: have a baby or so
+<s10> Rob: can't he do it later? XD
+<s11> Rob: we have to win whole league
+<s12> Matt: don't worry, it's just a plan for future
+<s13> Matt: maybe next year or so
+SUMMARY:
+Rob and Matt are talking about Marcin Gortat.
+ANNOTATION 1: 1,2
+ANNOTATION 2: 1,2
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13729596
+DIALOGUE:
+<s0> Vic: Don't like such games.
+<s1> Natty: Y?
+<s2> Vic: What's the fun in flying a plane?
+<s3> Natty: And doing different missions! Like there's one where u have to defend England!
+<s4> Vic: Still, all the same. U just fly and shoot. Boring.
+<s5> Natty: Bt then u get to update ur plan, get better gear and deal more damage! Yeah!
+<s6> Vic: The same with racing games. All u do is drive. Where's the fun in that?
+<s7> Natty: Racing with other ppl? Getting up in the ranks?
+<s8> Vic: Nah. Prefer games where u actually have to do something.
+<s9> Natty: Like what?
+<s10> Vic: For example - Assassin's Creed Rebellion. :)
+<s11> Natty: And what do u do there?
+<s12> Vic: Tons of stuff! U can build ur castle, develop it, battle Templars and get unique characters :)
+<s13> Natty: Doesn't sound like something 4 me.
+<s14> Vic: Y?
+<s15> Natty: Well, I don't like RPGs.
+<s16> Vic:  Bt they're a lot of fun!
+<s17> Natty: Maybe 4 u.
+SUMMARY:
+Natty doesn't like RPGs but Vic thinks they are fun.
+ANNOTATION 1: 15,16
+ANNOTATION 2: 15,16
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13682086
+DIALOGUE:
+<s0> Abdul: so did you call your grandparents or not?
+<s1> Andreas: i did yesterday
+<s2> Abdul: about time... and what did they say?
+<s3> Andreas: we can't really go to the lake house this weekend :( they have some friends and family visiting and it will be occupied :/
+<s4> Abdul: oh man... seriously?! I already invited the girls!
+<s5> Andreas: I know bro, I am so sorry, I was really looking forward to it as well
+<s6> Abdul: that sucks big time
+<s7> Andreas: i know sorry bro
+<s8> Abdul: what do you propose we do now? We can't cancel the trip, it will be a disaster :/
+<s9> Andreas: how about we book something nearby? We could chip in together for some decent place...
+<s10> Abdul: are you mad?! You know I am broke :/ and the guys too
+<s11> Andreas: maybe we should ask Chris? His folks got a lake house just 30 km away
+<s12> Abdul: do you think he will go for it?
+<s13> Andreas: HE HAS TO :D
+SUMMARY:
+Andreas and Abdul have invited some friends to a lake house this weekend but the plan has to be cancelled. Andreas and Abdul will ask Chris if the party can move to a lake house owned by his family.
+ANNOTATION 1: 3,4,11
+ANNOTATION 2: 3,4,11
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13730673
+DIALOGUE:
+<s0> Sam: its her birthday ..
+<s1> Tom: wat
+<s2> Sam: in 2 days.. its her birthday :3
+<s3> Tom: dude dont
+<s4> Sam: what do you mean
+<s5> Tom: u know exactly what i mean
+<s6> Sam: dude im just saying..
+<s7> Tom: NO :/
+<s8> Sam: WHAT
+<s9> Tom: u guys havent talked in weeks
+<s10> Sam: so
+<s11> Tom: okay do whatever u want
+<s12> Sam: i am gonna :P
+<s13> Tom: yeah, i cant stop u ._.
+SUMMARY:
+Sam remembers it's her birthday in 2 days.They haven't speak for weeks. Tom is against.
+ANNOTATION 1: 2,3,9
+ANNOTATION 2: 2,7,9
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13717028
+DIALOGUE:
+<s0> Lisa: girls what running shoes would you recommend?
+<s1> Maria: I love my Nike's, i wouldn't change them for anything else
+<s2> Maria: I have them for 3 years already and they look like new
+<s3> Marissa: I second that
+<s4> Marissa: my nike's were the best purchase i made last year
+<s5> Lisa: okay :D  my problem was solved quicker than i expected hahaha
+SUMMARY:
+Lisa will buy a pair of Nike's running shoes.
+ANNOTATION 1: 0,4,5
+ANNOTATION 2: 4,5
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13680952
+DIALOGUE:
+<s0> Henry: ur laaaaaaate!
+<s1> Jess: I know, b there in 5!!
+<s2> Henry: douchebag!
+SUMMARY:
+Jess is 5 minutes late.
+ANNOTATION 1: 0,1
+ANNOTATION 2: 0,1
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13865382
+DIALOGUE:
+<s0> Ella: girls, do you think I should buy the dress?
+<s1> Nina: definitely
+<s2> Lila: I agree!
+SUMMARY:
+Nina and Lila agree that Ella should buy the dress.
+ANNOTATION 1: 0,1,2
+ANNOTATION 2: 0,1,2
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13729181
+DIALOGUE:
+<s0> Martha: Hi Grace
+<s1> Grace: Hi! I was just thinking of you
+<s2> Martha: Really?
+<s3> Martha: What were you thinking? ☺
+<s4> Grace: That you owe me 100 quid
+<s5> Martha: ☹
+<s6> Martha: I know… Next week I’m getting paid, I’ll give it back to you.
+SUMMARY:
+Martha owes Grace 100 quid and next week Martha will give her money back.
+ANNOTATION 1: 4,6
+ANNOTATION 2: 4,6
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13717140
+DIALOGUE:
+<s0> Joanne: girls i am taking a few days off next week
+<s1> Elisabeth: oh you lucky girl!! are you travelling somewhere?:*
+<s2> Monica: next week? are you sure? :(
+<s3> Joanne: what's wrong?
+<s4> Elisabeth: yeah Monica, is something not okay?
+<s5> Joanne: i am going to spain with my fiancee
+<s6> Monica: well we have this two big presentations with clients next week...
+<s7> Joanne: you will do perfect without me Monica, don't worry :)
+<s8> Elisabeth: exactly, we can handle that honey
+<s9> Monica: i am not sure... the 3 of us worked on this project, this won't look too good if you are absent
+<s10> Elisabeth: you worry too much
+<s11> Monica: maybe, but i think Rachel will feel the same way
+<s12> Joanne: well i am not cancelling my trip
+<s13> Monica: i know, i wouldn't dare to ask you, i am just a little worried...
+<s14> Elisabeth: everything will be fine :*
+<s15> Joanne: yeah, and if you need anything last minute you can always call me
+SUMMARY:
+Joanne is going to Spain with her fiancee next week. She will be absent during the presentation she had prepared with Elisabeth and Monica. Monica is worried and wants her to be there. Joanne offers her help via phone.
+ANNOTATION 1: 0,5,6,13,15
+ANNOTATION 2: 0,5,6,7,9,15
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13728412
+DIALOGUE:
+<s0> Maggie: hey david, what's up?
+<s1> David: nothing much, you?
+<s2> Maggie: same. hey, i just got a text from nick asking if we wanted to go to comic con with him
+<s3> David: oh no... it's that time of the year again
+<s4> Maggie: be honest though, don't you think it would be kind of fun to go?
+<s5> David: NO! lol i would never go
+<s6> Maggie: well, i'm thinking of going...
+<s7> David: REALLY?!?!?!
+<s8> Maggie: yeah, i think it would be kind of fun
+<s9> David: i'd never imagine you're into that stuff
+<s10> Maggie: i'm not into it, but i thought it would be fun to go this year
+<s11> David: are you planning on dressing up?
+<s12> Maggie: yup
+<s13> David: REALLY?!?!?
+<s14> Maggie: yup, i'll be wonder woman
+<s15> David: oh man, i kinda wanna go now
+<s16> Maggie: see? it'll be fun
+<s17> David: I'm not dressing up, though
+<s18> Maggie: not even as superman?
+<s19> David: mmm, that doesn't sound bad
+<s20> Maggie: i'll call nick to get all the details
+SUMMARY:
+Maggie and David will join Nick for the comic con this year. Maggie will dress up as Wonder Woman and David might dress up as Superman. Maggie will call Nick for details.
+ANNOTATION 1: 2,6,14,15,18,20
+ANNOTATION 2: 2,6,14,15,18,19,20
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13811517-1
+DIALOGUE:
+<s0> Andrea: ok, so tell me what's the plan?
+<s1> Andrea: what shall I bring with me?
+<s2> Brian: have you got a tent?
+<s3> Andrea: yes, but for 2 ppl max.
+<s4> Brian: ok, so take it.
+<s5> Brian: Mine is for 3, but it's relatively small so it's better to have one extra.
+<s6> Andrea: what else do I need?
+<s7> Brian: nothing special, just regular camping stuff: sleeping bag, pad, food, water
+<s8> Brian: and sth warm coz it can be cold at night..
+<s9> Andrea: ok, so I don't need any climbing stuff?
+<s10> Andrea: Nope, no climbing this time, just relax:D
+SUMMARY:
+Andrea will take a tent for 2 people and some camping stuff: sleeping bag, pad, water. Brian's tent is for 3 people, but it's relatively small. Brian and Andrea won't need any climbing stuff as they won't be climbing this time.
+ANNOTATION 1: 2,3,5,7,9,10
+ANNOTATION 2: 2,3,5,7,9,10
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13814113
+DIALOGUE:
+<s0> Paul: Hi
+<s1> Barry: :) Hi, wow so fast :P my friends asked me to ask in the BRRN to find someone who could help us...  We would need a linker team and I guess 2-5 cleaner teams...  I'll put in contact with the organisers
+<s2> Paul: Ok.  And i Have already Polish rep for you.  Not brrn but trusted
+SUMMARY:
+Barry needs a linker team and 2-5 cleaning teams. Paul has a Polish rep for him.
+ANNOTATION 1: 1,2
+ANNOTATION 2: 1,2
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13828212
+DIALOGUE:
+<s0> Chris: do u think Tim will come with us to the concert?
+<s1> Ben: don't know? Why don't u ask him?
+<s2> Chris: he doesn't want to speak to me!!
+<s3> Ben: why?
+<s4> Chris: that's an old story.. from last year
+<s5> Ben: you'd better solve that soon. Go and talk to him!
+<s6> Chris: are u sure?
+<s7> Ben: of course! and if he doesn't, just send him a mail with your apologies
+<s8> Chris: I have to think about it. So who's coming tonight?
+<s9> Ben: I and Simon. May be Tim
+<s10> Chris: ok see u
+SUMMARY:
+Tim doesn't speak to Chris. Ben, Simon, Chris, and probably Tom, are going to the concert tonight.
+ANNOTATION 1: 2,9
+ANNOTATION 2: 2,9
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13682014
+DIALOGUE:
+<s0> Tony: Is the boss in?
+<s1> Claire: Not yet.
+<s2> Tony: Could let me know when he comes, please?
+<s3> Claire: Of course.
+<s4> Tony: Thank you.
+SUMMARY:
+The boss isn't in yet. Claire will let Tony know when he comes.
+ANNOTATION 1: 0,1,2,3
+ANNOTATION 2: 0,1,2,3
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13829562
+DIALOGUE:
+<s0> Rafal: happy birthay !!!1!1!oneone!!
+<s1> Beata: thank you :D I thought you forgot!
+<s2> Rafal: how could I forget you had your birthday 4 days ago
+<s3> Beata: yeah, I still expect some presents xD
+SUMMARY:
+Beata's birthday was 4 days ago.
+ANNOTATION 1: 2
+ANNOTATION 2: 2
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13818385
+DIALOGUE:
+<s0> April: Hi Archi, r u working tmr?
+<s1> April: I'm planning to go for a bike ride.
+<s2> April: Do u want to join in?
+<s3> Archibald: Hi April!
+<s4> Archibald: I'd love to, but I have a funeral to attend to.
+<s5> April: Oh, I'm sorry. I didn't know.
+<s6> April: R u ok?
+<s7> Archibald: Yes, I'm fine. It's my aunt's funeral.
+<s8> April: I'm sorry to hear it.
+<s9> Archibald: Well, not really my aunt. Just a friend of the family.
+<s10> April: I understand.
+<s11> April: Were u close?
+<s12> Archibald: No. I saw her once every two or three years.
+<s13> Archibald: But she was close with my father and I'm taking him to the funeral.
+<s14> April: I see.
+<s15> Archibald: What time did you plan to go biking?
+<s16> April: I thought around noon.
+<s17> Archibald: If you wait until 1 o'clock, I could join you :)
+<s18> April: Ok, I'd like that!
+<s19> Archibald: Cool. Usual meeting point?
+<s20> April: Yes! :)
+<s21> Archibald: See you then!
+<s22> April: :)
+SUMMARY:
+April wants Archibald to join her for a bike ride tomorrow. He is taking his father to a family friend's funeral and will only by available after 1 pm. April will meet him then at their usual meeting spot.
+ANNOTATION 1: 0,1,2,9,13,17,19,20
+ANNOTATION 2: 1,2,9,13,17,19,20
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13829136
+DIALOGUE:
+<s0> Ethan: forgot the flat number
+<s1> Ethan: again. 354?
+<s2> Jared: 377 :D
+<s3> Ethan: XD
+SUMMARY:
+Ethan forgot Jared's flat number again. It's 377.
+ANNOTATION 1: 0,1,2
+ANNOTATION 2: 0,2
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13716847
+DIALOGUE:
+<s0> Ingmar: hi guys I'll be visiting London this week so please give me some recommendations on restaurants and places that locals like
+<s1> Kevin: I'm not going out much but my favorite place is Dino's pizza place at Bottom Alley 50
+<s2> Miranda: Soho is great but it's expensive as fuck
+<s3> Xiao: Mimi Creperie is mindblowing, especially if you love French sweets
+<s4> Ingmar: cool thx
+SUMMARY:
+Ingmar is going to London this week and asks about the restaurants he could visit. Kevin, Miranda and Xiao recommend him some places.
+ANNOTATION 1: 0,1,2,3
+ANNOTATION 2: 0,1,2,3
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13612173
+DIALOGUE:
+<s0> Lizzy: hi love 😗 i’m stopping by a shopping centre in a moment 😊 any ideas for the ideal Christmas present for Toby yet?
+<s1> Mark: hi love 😗 no, not yet, but i’m certain Santa won’t be bringing him an s9 or the newest alienware 😉 maybe look for something inexpensive?
+<s2> Lizzy: easier said than done………….
+SUMMARY:
+Mark is helping Lizzy to find a Christmas gift for Toby. He is suggesting her to look for an inexpensive gift.
+ANNOTATION 1:0,1
+ANNOTATION 2: 0,1
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13828131
+DIALOGUE:
+<s0> Anne: <file_photo>
+<s1> Nick: Wow, what's that?
+<s2> Anne: You remember the curry wurst you brought me from Berlin?
+<s3> Nick: Yeah, how was it?
+<s4> Anne: Frankly? I've just thrown it away and used the jar as a pot for this lovely hyacinth!
+<s5> Nick: You're not only creative, but also have green fingers, wow!
+SUMMARY:
+Anne didn't eat the curry wurst Nick brought her from Berlin. She disposed of it and used the jar as a flower pot.
+ANNOTATION 1: 2,4
+ANNOTATION 2: 2,4
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13728149
+DIALOGUE:
+<s0> Tyler: What the fuck is going on with this weather?!
+<s1> Tyler: I just came home
+<s2> Tyler: The visibility outside is close to 0
+<s3> Tyler: Fog is so thick I can't see 5 meters in front of me.
+<s4> Will: Yeah I know :/ My flight has been deleyed and I'm stuck at the aiport.
+<s5> Tyler: Go get a drink. It's not illegal there you know :)
+<s6> Will: I think you're right. Gonna grab some beer or 2 :)
+<s7> Tyler: That's my man!
+<s8> Will: Hahaha!
+<s9> Tyler: Since I'm home and I'm not going anywhere with this kind of shit outside, I will accompany you. Cheers!
+<s10> Will: Haha! Cheers!
+SUMMARY:
+Will got stuck at the airport because of the fog. His flight was delayed.
+ANNOTATION 1: 3,4
+ANNOTATION 2: 3, 4
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13830029
+DIALOGUE:
+<s0> Caroline: do u think professor mulligan would be willing to write a recommendation leter for me?
+<s1> Amira: i don't know
+<s2> Amira: he's got dozens and dozens of students each semester
+<s3> Amira: he probably doesn't even know who you are :-/
+<s4> Caroline: mmm... you are right, i'm still going to ask him anyway
+SUMMARY:
+Caroline is going to ask professor mulligan to write her a recommendation letter.
+ANNOTATION 1: 0,4
+ANNOTATION 2: 0,4
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13730758
+DIALOGUE:
+<s0> Harry: Hey Emily, i have heard something about you.
+<s1> Emily: Don't play games with me. I know you haven't heard anything.
+<s2> Harry: I swear , i am not bluffing.
+<s3> Emily: Yes you are.
+<s4> Harry: Okay let me put it this way; What were you doing in Prof. Greg's office today?
+<s5> Emily: Don't you say.. You too know about this.
+<s6> Harry: Yes I know and not only me, the whole class knows.
+<s7> Emily: OMG.
+<s8> Harry: What is wrong with you??
+<s9> Emily: I swear it will not happen again.
+<s10> Harry: But still, you must not increased your marks in the absence of professor.
+<s11> Emily: I know but it happened.. I swear it will not happen again.
+<s12> Harry: Go and say sorry to prof. Greg tomorrow. He didn't expect this from you.
+<s13> Emily: Yes, I will
+SUMMARY:
+Harry has heard that Emily was in Prof. Greg's office today. The whole class knows she was there. Emily is surprised that the whole class knows. Emily has changed her marks. Emily will apologise to Prof. Greg tomorrow. Emily will not do that again.
+ANNOTATION 1: 4,6,7,10,11,12,13
+ANNOTATION 2: 4,5,6,7,10,11,12,13
+ANNOTATION 3:
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13862715
+DIALOGUE:
+<s0> Brigitte: Helene will come next Thursday, as David would be away.
+<s1> Laure: Her bed is waiting for her!
+<s2> Brigitte: she has a sport meeting at 7pm, so she'll be there at 8:30pm
+<s3> Laure: ok. Good luck to you
+SUMMARY:
+Helene will come next Thursday at 8:30 pm after her sport meeting. Her bed will be waiting for her.
+ANNOTATION 1:
+ANNOTATION 2: 0,1,2
+ANNOTATION 3: 0,1,2
+END_EXAMPLE
+
+
+
+BEGIN_EXAMPLE
+ID: 13810137
+DIALOGUE:
+<s0> Sam: <file_photo>
+<s1> Dorothy: Who is that?
+<s2> Sam: That's Tom from my morning English literature
+<s3> Dorothy: Yummy
+<s4> Sam: Right?
+<s5> Dorothy: I'd date him
+<s6> Sam:  <file_photo>
+<s7> Dorothy: No...
+<s8> Sam: Yes!!!!!!!!!!
+<s9> Dorothy: Is that really him? Shirtless?
+<s10> Sam: indeed-o :D
+<s11> Dorothy: So what's the plan?
+<s12> Sam: Oh you know, acting casually, looking glamorous :P
+<s13> Dorothy:  <file_gif>
+<s14> Sam: Hahahaha
+<s15> Dorothy: <file_gif>
+<s16> Sam: LOL
+<s17> Dorothy: I just hope he doesn't have some lame girlfriend
+<s18> Sam: I did a basic facebook research and it seems like his miraculously single
+<s19> Dorothy: he's*
+<s20> Sam: you nerd
+<s21> Dorothy: :*
+SUMMARY:
+Dorothy wants to date Tom from Sam's English literature. Sam sent her Tom's photo. He's single.
+ANNOTATION 1: 0,2,5,18
+ANNOTATION 2: 2,5,6,18
+ANNOTATION 3:
+END_EXAMPLE

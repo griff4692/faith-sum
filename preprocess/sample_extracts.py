@@ -1,10 +1,11 @@
 from itertools import combinations
 import os
+from copy import copy
 import ujson
 import regex as re
 
 import argparse
-from datasets import load_dataset, load_metric, load_from_disk
+from datasets import load_metric, load_from_disk
 from p_tqdm import p_uimap
 import numpy as np
 from tqdm import tqdm
@@ -12,7 +13,7 @@ from tqdm import tqdm
 from sum_constants import summarization_name_mapping
 
 
-def gen_oracle(args, example, rouge):
+def gen_oracle(args, example, rouge, max_strategy_types=10):
     input_col, target_col = summarization_name_mapping[args.dataset]
     inputs = example['source_annotated'].strip()
     target = example[target_col].strip()
@@ -24,16 +25,50 @@ def gen_oracle(args, example, rouge):
         s.strip() for i, s in enumerate(tps) if i > 0 if tps[i - 1].startswith('<s') and tps[i - 1].endswith('>')
     ]
 
-    avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1_hist, r2_hist)])
-    sent_priority = np.argsort(-avg_rs)
-    n = len(sent_priority)
-    top_k_sents = sent_priority[:min(n, args.k)]
-    candidates = list(combinations(top_k_sents, 3))
-    np.random.shuffle(candidates)
-    sent_plans = candidates[:args.num_candidates]
-    sent_plans = [tuple(map(int, x)) for x in sent_plans]
+    oracle_idxs = example['oracle_idxs']
 
-    extracts = [' '.join([source_sents[i] for i in idx]) for idx in sent_plans]
+    # Add-1
+    # Erase-1
+    # Swap-1
+    candidates = []
+    num_to_add = min(max_strategy_types, len(source_sents) - len(oracle_idxs))
+    num_to_erase = min(max_strategy_types, len(oracle_idxs))
+    num_to_swap = num_to_add
+    if len(oracle_idxs) == 1:
+        num_to_erase = 0  # No empty extracts
+
+    avg_rs = np.array([(a + b) / 2.0 for a, b in zip(r1_hist, r2_hist)])
+    for idx in oracle_idxs:
+        avg_rs[idx] = float('-inf')
+    sent_priority = np.argsort(-avg_rs)
+    add_priority = sent_priority.copy()
+    for add_idx in add_priority[:num_to_add]:
+        new_cand = oracle_idxs + [add_idx]
+        candidates.append({
+            'strategy': 'add',
+            'idxs': new_cand,
+        })
+
+    remove_order = np.arange(len(oracle_idxs))
+    np.random.shuffle(remove_order)
+    for erase_idx in remove_order[:num_to_erase]:
+        new_cand = oracle_idxs[:erase_idx] + oracle_idxs[erase_idx + 1:]
+        candidates.append({
+            'strategy': 'remove',
+            'idxs': new_cand,
+        })
+
+    for swap_idx in range(num_to_swap):
+        add_idx = add_priority[swap_idx]
+        remove_loc = int(np.random.randint(len(oracle_idxs)))
+        new_cand = copy(oracle_idxs)
+        new_cand[remove_loc] = add_idx
+        candidates.append({
+            'strategy': 'swap',
+            'idxs': new_cand
+        })
+
+    extracts = [' '.join([source_sents[i] for i in obj['idxs']]) for obj in candidates]
     rouges = [
         compute_rouge(rouge, extract, target) for extract in extracts
     ]
@@ -42,11 +77,12 @@ def gen_oracle(args, example, rouge):
         'id': example['id'],
         'candidates': []
     }
-    for extract_idx, extract, rouge in zip(sent_plans, extracts, rouges):
+    for candidate, extract, rouge in zip(candidates, extracts, rouges):
         row = rouge
         row['mean_f1'] = (rouge['rouge1_f1'] + rouge['rouge1_f1']) / 2.0
         row['extract'] = extract
-        row['extract_idx'] = extract_idx
+        row['extract_idx'] = candidate['idxs']
+        row['strategy'] = candidate['strategy']
         output['candidates'].append(row)
 
     output['candidates'] = list(sorted(output['candidates'], key=lambda x: -x['mean_f1']))
@@ -67,22 +103,18 @@ def compute_rouge(rouge, summary, reference):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Extract Oracles for dataset')
 
-    parser.add_argument('--dataset', default='cnn_dailymail')
+    parser.add_argument('--dataset', default='samsum')
     parser.add_argument('--splits', default='train,validation,test')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--num_candidates', default=5, type=int)
-    parser.add_argument('--k', default=10, type=int)
     parser.add_argument('-debug', default=False, action='store_true')
+    parser.add_argument('--cpu_frac', default=0.5, type=float)
 
     args = parser.parse_args()
     rouge = load_metric('rouge')
 
     print(f'Loading {args.dataset}...')
-    if args.dataset == 'cnn_dailymail':
-        data_dir = os.path.join(args.data_dir, args.dataset)
-        dataset = load_from_disk(data_dir)
-    else:
-        dataset = load_dataset(args.dataset)
+    data_dir = os.path.join(args.data_dir, args.dataset)
+    dataset = load_from_disk(data_dir)
 
     out_dir = os.path.join(args.data_dir, args.dataset, 'oracle')
     print(f'Creating directory to store pre-computed oracles -> {out_dir}')
@@ -99,9 +131,9 @@ if __name__ == '__main__':
                 data_split), total=len(data_split)))
         else:
             outputs = list(p_uimap(
-                lambda example: gen_oracle(args, example=example, rouge=rouge), data_split
+                lambda example: gen_oracle(args, example=example, rouge=rouge), data_split, num_cpus=args.cpu_frac
             ))
-        out_fn = os.path.join(out_dir, f'{split}_candidates_v2.json')
+        out_fn = os.path.join(out_dir, f'{split}_candidates.json')
         print(f'Saving {len(outputs)} examples to {out_fn}')
         outputs_by_id = {arr['id']: arr['candidates'] for arr in outputs}
         with open(out_fn, 'w') as fd:

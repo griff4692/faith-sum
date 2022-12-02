@@ -27,9 +27,11 @@ DATASET_KWARGS = {
     },
     'samsum': {
         'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
-        'abstract': {'min_length': 5, 'length_penalty': 2.0}
+        'extract_bert': {'min_length': 2, 'max_length': 10, 'length_penalty': 1.0},
+        'abstract': {'min_length': 10, 'max_length': 100, 'length_penalty': 0.6}
     }
 }
+
 
 BEAM_KWARGS = {
     # https://discuss.huggingface.co/t/facebook-bart-large-cnn-has-a-low-rouge-score-on-cnn-dailymail/673/2
@@ -96,6 +98,7 @@ if __name__ == '__main__':
         'facebook/bart-large-xsum',
         'google/pegasus-xsum'
     ])
+    parser.add_argument('--oracle_column', default='oracle_idxs', choices=['oracle_idxs', 'oracle_idxs_bert'])
     parser.add_argument('--split', default='validation')
     parser.add_argument('--train_frac', default=0.0, type=float)
     parser.add_argument('--chunk', default=None, type=int)
@@ -173,7 +176,8 @@ if __name__ == '__main__':
             )
         outputs = []
 
-        gen_kwargs = DATASET_KWARGS[args.dataset][args.summary_style]
+        bert_suffix = '_bert' if 'bert' in args.oracle_column else ''
+        gen_kwargs = DATASET_KWARGS[args.dataset][args.summary_style + bert_suffix]
         if args.length_penalty is not None:
             default_lp = gen_kwargs['length_penalty']
             print(f'Changing length penalty from default of {default_lp} to {args.length_penalty}')
@@ -261,6 +265,15 @@ if __name__ == '__main__':
         }
 
         exp_results.append(exp_row)
+
+        if args.summary_style == 'extract':
+            extract_idxs = outputs['extract_idx'].tolist()
+            lens = []
+            for cands in extract_idxs:
+                for cand in cands.split('<cand>'):
+                    lens.append(len(cand.split(',')))
+            print(f'Average extract length: {np.mean(lens)}')
+
     exp_results = pd.DataFrame(exp_results)
     out_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}{chunk_suffix}_ranges.csv')
     if not args.do_not_save:

@@ -23,6 +23,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
 
     args = parser.parse_args()
+
     in_dir = os.path.join(args.data_dir, args.dataset)
 
     dataset = load_from_disk(in_dir)['validation']

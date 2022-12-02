@@ -31,7 +31,8 @@ DATASET_KWARGS = {
         'min_length': 56,
     },
     'samsum': {  # TODO idk
-        'min_length': 5,
+        'min_length': 10,
+        'max_length': 100,
         'length_penalty': 2.0,
     },
     'xsum': {
