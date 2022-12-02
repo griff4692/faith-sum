@@ -94,79 +94,85 @@ class SummaryDataModule(pl.LightningDataModule):
 
         brio_candidates = None
         if self.args.add_brio_loss:
-            if self.args.is_word_brio:
-                if self.args.use_regular_candidates:
-                    max_brio_candidates = 4
-                    brio_candidates_raw = self.brio_candidates[split]
-                    brio_candidates = {}
-                    for dataset_id, arr in brio_candidates_raw.items():
-                        candidates = arr[0][:max_brio_candidates]
-                        rouges = np.array(arr[1][:max_brio_candidates])
-                        priority = np.argsort(-rouges)
-                        cands_ordered = [candidates[i] for i in priority]
-                        rouges_ordered = [rouges[i] for i in priority]
-                        brio_candidates[dataset_id] = [cands_ordered, rouges_ordered]
-                else:
-                    extract_fn = '/nlp/projects/faithsum/results/add_doc/'
-                    cand_fn = extract_fn + f'{split}_from_sample_w_diverse_extract_4.csv'
-                    print(f'Loading in over-generated candidates from {cand_fn}')
-                    cands = pd.read_csv(cand_fn)
-                    brio_candidates = {}
-                    dataset_ids = list(split_dataset['id'])
-                    for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
-                        rouges = np.array(list(map(float, record['from_extract_rouges'].split('<cand>'))))
-                        priority = np.argsort(-rouges)
-                        from_extract_abstracts = record['from_extract_abstract'].split('<cand>')
-                        cands_ordered = [from_extract_abstracts[i] for i in priority]
-                        rouges_ordered = [rouges[i] for i in priority]
-                        brio_candidates[dataset_ids[record['dataset_idx']]] = [cands_ordered, rouges_ordered]
-            else:
-                cand_fn = os.path.join(
-                    self.args.data_dir, 'results',
-                    self.args.brio_experiment, f'{split}_sample_w_diverse_outputs.csv'
-                )
-                print(f'Loading in over-generated candidates from {cand_fn}')
-                cands = pd.read_csv(cand_fn)
-                brio_candidates = defaultdict(list)
-                dataset_ids = list(split_dataset['id'])
-                for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
-                    extract_rouges = np.array(list(map(float, record['extract_rouges'].split(','))))
-                    try:
-                        extract_idxs = [
-                            [int(x) for x in idx_str.split(',')] for idx_str in record['extract_idx'].split('<cand>')
-                        ]
-                    except:
-                        print('Cannot parse empty extract')
-                        continue
+            out_dir = os.path.join(self.args.data_dir, self.args.dataset, 'oracle')
+            out_fn = os.path.join(out_dir, f'{split}_candidates.json')
+            with open(out_fn, 'r') as fd:
+                candidates = ujson.load(fd)
 
-                    assert len(extract_rouges) == len(extract_idxs)
-                    priority = np.argsort(-extract_rouges)
-                    extract_idxs_ordered = [extract_idxs[i] for i in priority]
-                    extract_rouges_ordered = [extract_rouges[i] for i in priority]
-
-                    # De-Duplicate
-                    extract_idxs_uniq = [
-                        extract_idx for i, extract_idx in enumerate(
-                            extract_idxs_ordered
-                        ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
-                    ]
-
-                    extract_rouges_uniq = [
-                        extract_rouges_ordered[i] for i, extract_idx in enumerate(
-                            extract_idxs_ordered
-                        ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
-                    ]
-
-                    if len(extract_rouges_uniq) < 2:
-                        print(f'Only {len(extract_rouges_uniq)} unique candidate provided for this example.')
-                        continue
-
-                    brio_candidates[dataset_ids[record['dataset_idx']]] = [extract_idxs_uniq, extract_rouges_uniq]
-            # Filter dataset to only include ones with BRIO candidates generated or 'oracled'
-            available_keys = set(list(brio_candidates.keys()))
-            valid_hf_ids = [i for i, dataset_idx in enumerate(split_dataset['id']) if dataset_idx in available_keys]
-            print(f'Filtering out for {len(valid_hf_ids)}/{len(split_dataset)} contrastive BRIO examples')
-            split_dataset = split_dataset.select(valid_hf_ids)
+        # if self.args.add_brio_loss:
+        #     if self.args.is_word_brio:
+        #         if self.args.use_regular_candidates:
+        #             max_brio_candidates = 4
+        #             brio_candidates_raw = self.brio_candidates[split]
+        #             brio_candidates = {}
+        #             for dataset_id, arr in brio_candidates_raw.items():
+        #                 candidates = arr[0][:max_brio_candidates]
+        #                 rouges = np.array(arr[1][:max_brio_candidates])
+        #                 priority = np.argsort(-rouges)
+        #                 cands_ordered = [candidates[i] for i in priority]
+        #                 rouges_ordered = [rouges[i] for i in priority]
+        #                 brio_candidates[dataset_id] = [cands_ordered, rouges_ordered]
+        #         else:
+        #             extract_fn = '/nlp/projects/faithsum/results/add_doc/'
+        #             cand_fn = extract_fn + f'{split}_from_sample_w_diverse_extract_4.csv'
+        #             print(f'Loading in over-generated candidates from {cand_fn}')
+        #             cands = pd.read_csv(cand_fn)
+        #             brio_candidates = {}
+        #             dataset_ids = list(split_dataset['id'])
+        #             for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
+        #                 rouges = np.array(list(map(float, record['from_extract_rouges'].split('<cand>'))))
+        #                 priority = np.argsort(-rouges)
+        #                 from_extract_abstracts = record['from_extract_abstract'].split('<cand>')
+        #                 cands_ordered = [from_extract_abstracts[i] for i in priority]
+        #                 rouges_ordered = [rouges[i] for i in priority]
+        #                 brio_candidates[dataset_ids[record['dataset_idx']]] = [cands_ordered, rouges_ordered]
+        #     else:
+        #         cand_fn = os.path.join(
+        #             self.args.data_dir, 'results',
+        #             self.args.brio_experiment, f'{split}_sample_w_diverse_outputs.csv'
+        #         )
+        #         print(f'Loading in over-generated candidates from {cand_fn}')
+        #         cands = pd.read_csv(cand_fn)
+        #         brio_candidates = defaultdict(list)
+        #         dataset_ids = list(split_dataset['id'])
+        #         for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
+        #             extract_rouges = np.array(list(map(float, record['extract_rouges'].split(','))))
+        #             try:
+        #                 extract_idxs = [
+        #                     [int(x) for x in idx_str.split(',')] for idx_str in record['extract_idx'].split('<cand>')
+        #                 ]
+        #             except:
+        #                 print('Cannot parse empty extract')
+        #                 continue
+        #
+        #             assert len(extract_rouges) == len(extract_idxs)
+        #             priority = np.argsort(-extract_rouges)
+        #             extract_idxs_ordered = [extract_idxs[i] for i in priority]
+        #             extract_rouges_ordered = [extract_rouges[i] for i in priority]
+        #
+        #             # De-Duplicate
+        #             extract_idxs_uniq = [
+        #                 extract_idx for i, extract_idx in enumerate(
+        #                     extract_idxs_ordered
+        #                 ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
+        #             ]
+        #
+        #             extract_rouges_uniq = [
+        #                 extract_rouges_ordered[i] for i, extract_idx in enumerate(
+        #                     extract_idxs_ordered
+        #                 ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
+        #             ]
+        #
+        #             if len(extract_rouges_uniq) < 2:
+        #                 print(f'Only {len(extract_rouges_uniq)} unique candidate provided for this example.')
+        #                 continue
+        #
+        #             brio_candidates[dataset_ids[record['dataset_idx']]] = [extract_idxs_uniq, extract_rouges_uniq]
+        #     # Filter dataset to only include ones with BRIO candidates generated or 'oracled'
+        #     available_keys = set(list(brio_candidates.keys()))
+        #     valid_hf_ids = [i for i, dataset_idx in enumerate(split_dataset['id']) if dataset_idx in available_keys]
+        #     print(f'Filtering out for {len(valid_hf_ids)}/{len(split_dataset)} contrastive BRIO examples')
+        #     split_dataset = split_dataset.select(valid_hf_ids)
 
         n = len(split_dataset)
         idxs = list(range(n))

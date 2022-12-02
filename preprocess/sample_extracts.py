@@ -1,4 +1,3 @@
-from itertools import combinations
 import os
 from copy import copy
 import ujson
@@ -13,7 +12,7 @@ from tqdm import tqdm
 from sum_constants import summarization_name_mapping
 
 
-def gen_oracle(args, example, rouge, max_strategy_types=10):
+def gen_oracle(args, example, rouge):
     input_col, target_col = summarization_name_mapping[args.dataset]
     inputs = example['source_annotated'].strip()
     target = example[target_col].strip()
@@ -31,8 +30,8 @@ def gen_oracle(args, example, rouge, max_strategy_types=10):
     # Erase-1
     # Swap-1
     candidates = []
-    num_to_add = min(max_strategy_types, len(source_sents) - len(oracle_idxs))
-    num_to_erase = min(max_strategy_types, len(oracle_idxs))
+    num_to_add = min(args.max_strategy_types, len(source_sents) - len(oracle_idxs))
+    num_to_erase = min(args.max_strategy_types, len(oracle_idxs))
     num_to_swap = num_to_add
     if len(oracle_idxs) == 1:
         num_to_erase = 0  # No empty extracts
@@ -79,9 +78,9 @@ def gen_oracle(args, example, rouge, max_strategy_types=10):
     }
     for candidate, extract, rouge in zip(candidates, extracts, rouges):
         row = rouge
-        row['mean_f1'] = (rouge['rouge1_f1'] + rouge['rouge1_f1']) / 2.0
+        row['mean_f1'] = float((rouge['rouge1_f1'] + rouge['rouge1_f1']) / 2.0)
         row['extract'] = extract
-        row['extract_idx'] = candidate['idxs']
+        row['extract_idx'] = [int(x) for x in sorted(candidate['idxs'])]
         row['strategy'] = candidate['strategy']
         output['candidates'].append(row)
 
@@ -104,10 +103,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Extract Oracles for dataset')
 
     parser.add_argument('--dataset', default='samsum')
-    parser.add_argument('--splits', default='train,validation,test')
+    parser.add_argument('--splits', default='validation,test,train')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--cpu_frac', default=0.5, type=float)
+    parser.add_argument('--max_strategy_types', default=10, type=int)
 
     args = parser.parse_args()
     rouge = load_metric('rouge')
@@ -123,7 +123,7 @@ if __name__ == '__main__':
     for split in args.splits.split(','):
         data_split = dataset[split]
         if args.debug:
-            data_split = data_split.select(list(range(128)))
+            data_split = data_split.select(list(range(16)))
         print(f'Processing {len(data_split)} {split} examples')
         if args.debug:
             outputs = list(tqdm(map(
