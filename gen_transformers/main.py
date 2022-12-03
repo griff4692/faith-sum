@@ -34,8 +34,7 @@ def run(args):
     if 'pegasus' in args.hf_model:
         print('Using full precision for PEGASUS.')
         precision = 32
-    experiment_dir = os.path.join(args.weight_dir, args.experiment)
-    os.makedirs(os.path.join(experiment_dir, 'wandb'), exist_ok=True)  # Only way to make sure it's writable
+
     if 'brio' in args.hf_model:
         tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
     else:
@@ -238,12 +237,14 @@ if __name__ == '__main__':
         print('Pre-pending each sentence in the source document with special token <s{idx}>.')
 
     args.weight_dir = os.path.join(args.data_dir, 'weights')
+    experiment_dir = os.path.join(args.weight_dir, args.experiment)
 
-    if os.path.exists(args.weight_dir) and args.skip_if_present:
-        print(f'{args.weight_dir} already exists.  Skipping.  Remove -skip_if_present to re-run.')
+    if os.path.exists(experiment_dir) and args.skip_if_present:
+        print(f'{experiment_dir} already exists.  Skipping.  Remove -skip_if_present to re-run.')
         exit(0)
     print(f'Setting up {args.weight_dir} to store model weights, metrics, and results.')
     os.makedirs(args.weight_dir, exist_ok=True)
+    os.makedirs(os.path.join(experiment_dir, 'wandb'), exist_ok=True)  # Only way to make sure it's writable
 
     # Set same random seed for each run
     set_same_seed(args.seed)
