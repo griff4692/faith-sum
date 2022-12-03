@@ -77,8 +77,8 @@ def run(args):
         model.hparams.brio_weight = args.brio_weight
         val_check_interval = 1.0 if args.debug or args.train_frac <= 0.2 else 0.25
 
-    if args.add_brio_loss:
-        val_check_interval = 0.1
+    # if args.add_brio_loss:
+    #     val_check_interval = 0.2
 
     datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 
@@ -92,13 +92,18 @@ def run(args):
 
     monitor_metric = f'validation/{args.val_monitor_metric}'
     mode = args.val_metric_mode
-    checkpoint_callback = ModelCheckpoint(
-        monitor=monitor_metric,
-        save_top_k=args.save_top_k,
-        save_last=args.save_top_k > 1,
-        mode=mode
-    )
-    callbacks = [checkpoint_callback]
+
+    callbacks = []
+    if args.save_top_k < 1:
+        print('Not saving checkpoints. Will have to re-run.')
+    else:
+        checkpoint_callback = ModelCheckpoint(
+            monitor=monitor_metric,
+            save_top_k=args.save_top_k,
+            save_last=args.save_top_k > 1,
+            mode=mode
+        )
+        callbacks.append(checkpoint_callback)
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')
         callbacks.append(lr_monitor)
@@ -155,15 +160,17 @@ if __name__ == '__main__':
     parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)  # TODO try with dropout
     parser.add_argument('-add_brio_loss', default=False, action='store_true')
     parser.add_argument('-is_word_brio', default=False, action='store_true')
-    parser.add_argument('-use_regular_candidates', default=False, action='store_true')
-    parser.add_argument('--brio_margin', default=0.001, type=float)
+    # parser.add_argument('-use_regular_candidates', default=False, action='store_true')
+    # parser.add_argument('--brio_experiment', default='add_doc')
     parser.add_argument('--brio_weight', default=1, type=float)
     parser.add_argument('--mle_weight', default=1, type=float)
-    parser.add_argument('--brio_experiment', default='add_doc')
+    parser.add_argument('--brio_margin', default=0.001, type=float)
     parser.add_argument('--brio_length_penalty', default=2.0, type=float)
     parser.add_argument('--brio_scale', default=1.0, type=float)
+    parser.add_argument('--max_brio_candidates', default=10, type=int)
     parser.add_argument('--brio_score_mode', default='likelihood', choices=['score', 'likelihood', 'similarity'])
     parser.add_argument('-include_gold', default=False, action='store_true')
+
     parser.add_argument('--val_monitor_metric', default='combined')
     parser.add_argument('--val_metric_mode', default='min')
     parser.add_argument('--oracle_drop_p', default=0.0, type=float)

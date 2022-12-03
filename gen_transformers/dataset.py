@@ -54,11 +54,11 @@ class SummaryDataModule(pl.LightningDataModule):
         self.num_workers = 0 if args.debug else 8
         self.nlp = spacy.load('en_core_web_sm')
 
-        if self.args.is_word_brio and self.args.use_regular_candidates:
-            candidates_fn = '/nlp/projects/faithsum/cnn_brio_outputs.json'
-            print(f'Loading {candidates_fn}')
-            with open(candidates_fn, 'r') as fd:
-                self.brio_candidates = ujson.load(fd)
+        # if self.args.is_word_brio and self.args.use_regular_candidates:
+        #     candidates_fn = '/nlp/projects/faithsum/cnn_brio_outputs.json'
+        #     print(f'Loading {candidates_fn}')
+        #     with open(candidates_fn, 'r') as fd:
+        #         self.brio_candidates = ujson.load(fd)
 
     def get_train_chunk(self, chunk, num_chunks, **dataloader_kwargs):
         split_dataset = self.dataset['train']
@@ -98,6 +98,22 @@ class SummaryDataModule(pl.LightningDataModule):
             out_fn = os.path.join(out_dir, f'{split}_candidates.json')
             with open(out_fn, 'r') as fd:
                 candidates = ujson.load(fd)
+
+            brio_candidates = {}
+            for dataset_id, cands in candidates.items():
+                rouges_ordered = [x['mean_f1'] for x in cands]
+                extract_idxs_ordered = [x['extract_idx'] for x in cands]
+                for i in range(1, len(rouges_ordered)):  # Assert it's pre-sorted by ROUGE
+                    assert rouges_ordered[i - 1] >= rouges_ordered[i]
+                if len(cands) < 2:
+                    continue
+                brio_candidates[dataset_id] = [extract_idxs_ordered, rouges_ordered]
+
+            # Filter dataset to only include ones with BRIO candidates generated or 'oracled'
+            available_keys = set(list(brio_candidates.keys()))
+            valid_hf_ids = [i for i, dataset_idx in enumerate(split_dataset['id']) if dataset_idx in available_keys]
+            print(f'Filtering out for {len(valid_hf_ids)}/{len(split_dataset)} contrastive BRIO examples')
+            split_dataset = split_dataset.select(valid_hf_ids)
 
         # if self.args.add_brio_loss:
         #     if self.args.is_word_brio:
@@ -168,11 +184,6 @@ class SummaryDataModule(pl.LightningDataModule):
         #                 continue
         #
         #             brio_candidates[dataset_ids[record['dataset_idx']]] = [extract_idxs_uniq, extract_rouges_uniq]
-        #     # Filter dataset to only include ones with BRIO candidates generated or 'oracled'
-        #     available_keys = set(list(brio_candidates.keys()))
-        #     valid_hf_ids = [i for i, dataset_idx in enumerate(split_dataset['id']) if dataset_idx in available_keys]
-        #     print(f'Filtering out for {len(valid_hf_ids)}/{len(split_dataset)} contrastive BRIO examples')
-        #     split_dataset = split_dataset.select(valid_hf_ids)
 
         n = len(split_dataset)
         idxs = list(range(n))
@@ -280,11 +291,15 @@ class SummarizationDataset(Dataset):
 
         if self.args.add_brio_loss:
             candidates, scores = self.brio_candidates[dataset_id].copy()  # We modify it in place so let's insert
-            for i in range(len(candidates)):
-                if type(candidates[i]) == dict:
-                    if i < len(candidates) - 1:
-                        assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
-                    candidates[i] = list(sorted(candidates[i]['extract_idx']))
+
+            if len(candidates) > self.args.max_brio_candidates:
+                candidates = candidates[:self.args.max_brio_candidates]
+                scores = scores[:self.args.max_brio_candidates]
+            # for i in range(len(candidates)):
+            #     if type(candidates[i]) == dict:
+            #         if i < len(candidates) - 1:
+            #             assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
+            #         candidates[i] = list(sorted(candidates[i]['extract_idx']))
 
             scores = np.array(scores)
             norm_scores = (scores - min(scores)) / (max(scores) - min(scores))
@@ -298,14 +313,14 @@ class SummarizationDataset(Dataset):
                 candidates.insert(0, list(oracle_labels))
                 norm_scores.insert(0, 1)
 
-            if self.args.is_word_brio:
-                with self.tokenizer.as_target_tokenizer():
-                    brio_word_labels = np.array(self.tokenizer(
-                        candidates, max_length=1024, truncation=True, padding='longest'
-                    )['input_ids'], dtype=np.int64)
-                    brio_word_labels[np.where(brio_word_labels == self.tokenizer.pad_token_id)] = -100
-                row['brio_word_labels'] = brio_word_labels   # brio_word_labels (change back if you need this)
-            else:
-                row['brio_sent_labels'] = candidates
+            # if self.args.is_word_brio:
+            #     with self.tokenizer.as_target_tokenizer():
+            #         brio_word_labels = np.array(self.tokenizer(
+            #             candidates, max_length=1024, truncation=True, padding='longest'
+            #         )['input_ids'], dtype=np.int64)
+            #         brio_word_labels[np.where(brio_word_labels == self.tokenizer.pad_token_id)] = -100
+            #     row['brio_word_labels'] = brio_word_labels   # brio_word_labels (change back if you need this)
+            # else:
+            row['brio_sent_labels'] = candidates
             row['brio_norm_scores'] = norm_scores
         return row

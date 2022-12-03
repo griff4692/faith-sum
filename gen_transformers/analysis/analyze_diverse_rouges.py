@@ -13,8 +13,8 @@ def get_arr(num_str):
 
 
 if __name__ == '__main__':
-    experiment = 'samsum_bert_extract_generator_3e5lr'
-    output = 'test_from_beam_16_extract_lp3'
+    experiment = 'samsum_bert_red_extract_generator_3e5lr'
+    output = 'test_from_beam_16_extract'
     summary_style = 'from_extract_abstract'  # from_extract_abstract
     if summary_style == 'abstract':
         rouge_col = f'eval_{summary_style}_rouge1_f1'
