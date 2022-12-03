@@ -96,6 +96,7 @@ def run(args):
     callbacks = []
     if args.save_top_k < 1:
         print('Not saving checkpoints. Will have to re-run.')
+        checkpoint_callback = None
     else:
         checkpoint_callback = ModelCheckpoint(
             monitor=monitor_metric,
@@ -134,7 +135,8 @@ def run(args):
     else:
         print('Starting training...')
         trainer.fit(model, datamodule=datamodule)
-        print(f'Best weights saved --> {checkpoint_callback.best_model_path}')
+        if checkpoint_callback is not None:
+            print(f'Best weights saved --> {checkpoint_callback.best_model_path}')
 
 
 if __name__ == '__main__':
@@ -192,6 +194,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--train_frac', type=float, default=1.0)
     parser.add_argument('--save_top_k', type=int, default=1)
+    parser.add_argument('-skip_if_present', default=False, action='store_true')
     parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
@@ -235,6 +238,10 @@ if __name__ == '__main__':
         print('Pre-pending each sentence in the source document with special token <s{idx}>.')
 
     args.weight_dir = os.path.join(args.data_dir, 'weights')
+
+    if os.path.exists(args.weight_dir) and args.skip_if_present:
+        print(f'{args.weight_dir} already exists.  Skipping.  Remove -skip_if_present to re-run.')
+        exit(0)
     print(f'Setting up {args.weight_dir} to store model weights, metrics, and results.')
     os.makedirs(args.weight_dir, exist_ok=True)
 
