@@ -24,7 +24,7 @@ do
     for SCALE in "${SCALES[@]}"
     do
       EXP_ARGS="--brio_scale ${SCALE} --mle_weight ${MW} --brio_weight ${CW} --brio_length_penalty ${DEFAULT_LP}"
-      EXP_NAME="cnn_brio_mw_${MW}_cw_${CW}_sc_${SCALE}_lp_${LP}"
+      EXP_NAME="cnn_brio_mw_${MW}_cw_${CW}_sc_${SCALE}_lp_${DEFAULT_LP}"
       echo "Starting Training for ${EXP_NAME}"
       python main.py $SHARED $EXP_ARGS --experiment $EXP_NAME
     done
