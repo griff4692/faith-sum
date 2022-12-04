@@ -68,16 +68,8 @@ def run(args):
             tokenizer.add_special_tokens(special_tokens_dict)
             model.model.resize_token_embeddings(len(tokenizer))
 
-        model.hparams.add_brio_loss = args.add_brio_loss
-        model.hparams.extract_indicators = args.extract_indicators
-        model.hparams.brio_margin = args.brio_margin
-        model.hparams.high_lr = args.high_lr
-        model.hparams.mle_weight = args.mle_weight
-        model.hparams.brio_weight = args.brio_weight
-        val_check_interval = 1.0 if args.debug or args.train_frac <= 0.2 else 0.25
-
-    # if args.add_brio_loss:
-    #     val_check_interval = 0.2
+        model.save_hyperparameters(args)
+        val_check_interval = 1.0 if args.debug else 0.25
 
     datamodule = SummaryDataModule(args, tokenizer=tokenizer)
 

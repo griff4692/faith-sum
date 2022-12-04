@@ -119,47 +119,47 @@ class TransformerSummarizer(pl.LightningModule):
             smooth_lm_loss = self.label_smoother(output, batch['labels'])
 
             # Add word-level brio
-            # if self.hparams.add_brio_loss and self.hparams.is_word_brio:
-            #     margin_losses = []
-            #     pos_neg_gaps = []
-            #     brio_ranks = []
-            #     win_fracs = []
-            #     rank_corels = []
-            #     batch_size = len(batch['labels'])
-            #     for batch_idx in range(batch_size):
-            #         margin_loss, pos_neg_gap, pred_idx, win_frac, rank_corel = self.word_brio_step(
-            #             brio_word_labels[batch_idx],
-            #             encoder_h[batch_idx].unsqueeze(0),
-            #         )
-            #
-            #         rank_corels.append(rank_corel)
-            #         if margin_loss is not None:
-            #             margin_losses.append(margin_loss)
-            #         if pos_neg_gap is not None:
-            #             pos_neg_gaps.append(pos_neg_gap)
-            #         brio_ranks.append(pred_idx)
-            #         if win_frac is not None:
-            #             win_fracs.append(win_frac)
-            #     # Sum in the BRIO paper, was previously mean for us
-            #     margin_losses = torch.stack(margin_losses).mean()
-            #     pos_neg_gaps = np.mean(pos_neg_gaps)
-            #     brio_ranks = np.mean(brio_ranks)
-            #     win_fracs = np.mean(win_fracs)
-            #     rank_corel = np.mean(rank_corels)
-            #     brio_info = {
-            #         'margin_loss': margin_losses,
-            #         'pos_neg_gap': pos_neg_gaps,
-            #         'brio_rank': brio_ranks,
-            #         'brio_win_rate': win_fracs,
-            #         'rank_corel': rank_corel,
-            #     }
-            #
-            #     return_loss += self.hparams.brio_weight * brio_info['margin_loss']
-            #     metrics['word_brio'] = brio_info['margin_loss']
-            #     metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
-            #     metrics['brio_rank'] = brio_info['brio_rank']
-            #     metrics['brio_win_rate'] = brio_info['brio_win_rate']
-            #     metrics['rank_corel'] = brio_info['rank_corel']
+            if self.hparams.add_brio_loss and self.hparams.is_word_brio:
+                margin_losses = []
+                pos_neg_gaps = []
+                brio_ranks = []
+                win_fracs = []
+                rank_corels = []
+                batch_size = len(batch['labels'])
+                for batch_idx in range(batch_size):
+                    margin_loss, pos_neg_gap, pred_idx, win_frac, rank_corel = self.word_brio_step(
+                        brio_word_labels[batch_idx],
+                        encoder_h[batch_idx].unsqueeze(0),
+                    )
+
+                    rank_corels.append(rank_corel)
+                    if margin_loss is not None:
+                        margin_losses.append(margin_loss)
+                    if pos_neg_gap is not None:
+                        pos_neg_gaps.append(pos_neg_gap)
+                    brio_ranks.append(pred_idx)
+                    if win_frac is not None:
+                        win_fracs.append(win_frac)
+                # Sum in the BRIO paper, was previously mean for us
+                margin_losses = torch.stack(margin_losses).mean()
+                pos_neg_gaps = np.mean(pos_neg_gaps)
+                brio_ranks = np.mean(brio_ranks)
+                win_fracs = np.mean(win_fracs)
+                rank_corel = np.mean(rank_corels)
+                brio_info = {
+                    'margin_loss': margin_losses,
+                    'pos_neg_gap': pos_neg_gaps,
+                    'brio_rank': brio_ranks,
+                    'brio_win_rate': win_fracs,
+                    'rank_corel': rank_corel,
+                }
+
+                return_loss += self.hparams.brio_weight * brio_info['margin_loss']
+                metrics['word_brio'] = brio_info['margin_loss']
+                metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
+                metrics['brio_rank'] = brio_info['brio_rank']
+                metrics['brio_win_rate'] = brio_info['brio_win_rate']
+                metrics['rank_corel'] = brio_info['rank_corel']
 
             return_loss += self.hparams.mle_weight * smooth_lm_loss
         return {
