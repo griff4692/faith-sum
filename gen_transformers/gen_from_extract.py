@@ -33,8 +33,7 @@ DATASET_KWARGS = {
     'samsum': {  # TODO idk
         'min_length': 10,
         'max_length': 100,
-        'length_penalty': [2.0],
-        # 'length_penalty': [2.0]  # [4.0, 3.0, 2.0, 1.0]
+        'length_penalty': 2.0  # [4.0, 3.0, 2.0, 1.0],
     },
     'xsum': {
         'min_length': 11,
@@ -153,47 +152,19 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
         }
 
     shared_kwargs.update(gen_kwargs)
-
     shared_kwargs.update(DATASET_KWARGS[args.dataset])
-    shared_kwargs['length_penalty'] = 2.0  # TODO CHANGE back
-    with torch.no_grad(), torch.cuda.amp.autocast():
-        other_pred_ids = model.model.generate(**shared_kwargs).tolist()
-
-    if type(DATASET_KWARGS[args.dataset]['length_penalty']) == list:
-        lp_arr = DATASET_KWARGS[args.dataset]['length_penalty']
-        pred_ids = []
+    if type(shared_kwargs['length_penalty']) == list:
+        lp_arr = shared_kwargs['length_penalty']
+        lp = []
         for idx in range(n):
             dynamic_lp = lp_arr[min(len(set(idx_to_keep[idx])), len(lp_arr)) - 1]
-            single_kwargs = {}
-            for k, v in shared_kwargs.items():
-                if k == 'encoder_outputs':
-                    from transformers.modeling_outputs import BaseModelOutput
-                    this_output = BaseModelOutput(last_hidden_state=v.last_hidden_state[idx].unsqueeze(0))
-                    single_kwargs[k] = this_output
-                elif k == 'attention_mask':
-                    single_kwargs[k] = v[idx].unsqueeze(0)
-                else:
-                    single_kwargs[k] = v
+            lp.append(dynamic_lp)
+        shared_kwargs['length_penalty'] = lp
 
-            single_kwargs.update(DATASET_KWARGS[args.dataset])
-            single_kwargs['length_penalty'] = dynamic_lp
-            print(dynamic_lp)
-
-            with torch.no_grad(), torch.cuda.amp.autocast():
-                pred_id = model.model.generate(**single_kwargs)
-                pred_ids.append(pred_id.tolist()[0])
-    else:
-        shared_kwargs.update(DATASET_KWARGS[args.dataset])
-        with torch.no_grad(), torch.cuda.amp.autocast():
-            pred_ids = model.model.generate(**shared_kwargs).tolist()
+    with torch.no_grad(), torch.cuda.amp.autocast():
+        pred_ids = model.model.generate(**shared_kwargs).tolist()
 
     pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-    other_pred_str = tokenizer.batch_decode(other_pred_ids, skip_special_tokens=True)
-
-    if pred_str != other_pred_str:
-        diff = [i for i in range(len(pred_str)) if pred_str[i] != other_pred_str[i]]
-        print(f'Disagreeing indices -> ' + ', '.join([str(x) for x in diff]))
-
     implied_extracts = compute_implied(args, nlp, pred_str, source_annotated)
 
     ps, rs, f1s = [], [], []

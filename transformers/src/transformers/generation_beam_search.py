@@ -174,10 +174,10 @@ class BeamSearchScorer(BeamScorer):
         self._beam_hyps = [
             BeamHypotheses(
                 num_beams=self.num_beams,
-                length_penalty=self.length_penalty,
+                length_penalty=self.length_penalty if type(self.length_penalty) == float else self.length_penalty[batch],
                 early_stopping=self.do_early_stopping,
             )
-            for _ in range(batch_size)
+            for batch in range(batch_size)
         ]
         self._done = torch.tensor([False for _ in range(batch_size)], dtype=torch.bool, device=self.device)
 
