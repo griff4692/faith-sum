@@ -12,6 +12,8 @@ from transformers import AutoTokenizer, BartTokenizer
 from gen_transformers.dataset import SummaryDataModule
 from gen_transformers.model import TransformerSummarizer
 from global_utils import get_free_gpus, set_same_seed
+from gen_transformers.model_utils import infer_hf_model
+from gen_transformers.data_utils import infer_dataset
 
 
 def run(args):
@@ -51,7 +53,7 @@ def run(args):
         tokenizer.save_pretrained(tokenizer_dir)
     if args.pretrained_path is None:
         model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model)
-        val_check_interval = 1.0 if args.debug or args.train_frac <= 0.2 else 0.25
+        val_check_interval = 1.0 if args.debug else 0.25
     else:
         tok_path = '/'.join(args.pretrained_path.split('/')[:-4]) + '/tokenizer'
         tokenizer = AutoTokenizer.from_pretrained(tok_path)
@@ -134,7 +136,7 @@ if __name__ == '__main__':
     # Configuration Parameters
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--experiment', default='default')
-    parser.add_argument('--dataset', default='cnn_dailymail')
+    parser.add_argument('--dataset', default=None)
     parser.add_argument('--restore_path', default=None)
     parser.add_argument('--seed', default=1992, type=int)
     parser.add_argument('--max_gpus', default=1, type=int)
@@ -181,22 +183,12 @@ if __name__ == '__main__':
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
     parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('--max_input_length', type=int, default=1024)
-    parser.add_argument('--train_frac', type=float, default=1.0)
     parser.add_argument('--save_top_k', type=int, default=1)
     parser.add_argument('-skip_if_present', default=False, action='store_true')
     parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
-    parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
-        'facebook/bart-base',
-        'facebook/bart-large',
-        'Yale-LILY/brio-cnndm-uncased',
-        'google/pegasus-xsum',
-        'google/pegasus-large',
-        'facebook/bart-large-cnn',
-        'facebook/bart-large-xsum',
-        'lidiya/bart-large-xsum-samsum',
-    ])
+    parser.add_argument('--hf_model', default=None)
 
     # Task-specific / Project-specific parameters
     parser.add_argument(
@@ -213,6 +205,9 @@ if __name__ == '__main__':
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
 
     args = parser.parse_args()
+
+    infer_dataset(args, 'experiment')
+    infer_hf_model(args)
 
     # Won't held yet for multi-gpu
     args.grad_accum = args.target_batch_size // args.per_device_train_bs

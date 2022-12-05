@@ -100,7 +100,6 @@ if __name__ == '__main__':
     ])
     parser.add_argument('--oracle_column', default='oracle_idxs', choices=['oracle_idxs', 'oracle_idxs_bert'])
     parser.add_argument('--split', default='validation')
-    parser.add_argument('--train_frac', default=0.0, type=float)
     parser.add_argument('--chunk', default=None, type=int)
     parser.add_argument('--num_chunks', default=8, type=int)
 

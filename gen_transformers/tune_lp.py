@@ -174,6 +174,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    infer_dataset(args, 'abstract_experiment')
     infer_hf_model(args)
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)

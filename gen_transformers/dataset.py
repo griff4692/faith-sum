@@ -85,23 +85,21 @@ class SummaryDataModule(pl.LightningDataModule):
         split_dataset = self.dataset[split]
         if self.args.debug and max_examples is None:
             max_examples = 128
-        elif max_examples is None and split == 'train' and self.args.train_frac < 1:
-            max_examples = round(self.args.train_frac * len(split_dataset))
 
         brio_candidates = None
         if self.args.add_brio_loss:
             out_dir = os.path.join(self.args.data_dir, self.args.dataset, 'oracle')
-            bert_suffix = '_bert' if 'bert' in self.args.oracle_col else ''
+            bert_suffix = '_bert' if 'bert' in self.args.oracle_column else ''
             out_fn = os.path.join(out_dir, f'{split}_candidates{bert_suffix}.json')
             with open(out_fn, 'r') as fd:
                 candidates = ujson.load(fd)
 
             brio_candidates = {}
             for dataset_id, cands in candidates.items():
-                if 'bert' in self.args.oracle_col:
-                    scores_ordered = [x['mean_f1'] for x in cands]
-                else:
+                if 'bert' in self.args.oracle_column:
                     scores_ordered = [x['bertscore_f1'] for x in cands]
+                else:
+                    scores_ordered = [x['mean_f1'] for x in cands]
 
                 extract_idxs_ordered = [x['extract_idx'] for x in cands]
                 for i in range(1, len(scores_ordered)):  # Assert it's pre-sorted by ROUGE
