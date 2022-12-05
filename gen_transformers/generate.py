@@ -68,7 +68,6 @@ if __name__ == '__main__':
     parser.add_argument('--max_input_length', type=int, default=1024)
     # Beam Search or Nucleus Sampling (more diverse)
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
-    parser.add_argument('-add_control_code', default=False, action='store_true')
     parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--seed', default=1992, type=int)
     parser.add_argument('--max_num_sents', type=int, default=200)

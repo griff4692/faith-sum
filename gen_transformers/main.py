@@ -43,8 +43,6 @@ def run(args):
     if args.add_sent_toks:
         add_tokens = [f'<s{i}>' for i in range(args.max_num_sents)]
         add_tokens.append('<sep>')  # Not used right now
-        if args.add_control_code:
-            add_tokens += ['<lowest-focus>', '<lower-focus>', '<higher-focus>', '<highest-focus>']
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
@@ -213,7 +211,6 @@ if __name__ == '__main__':
     )
     # This will be automatically determine by summary_style (i.e., 'plan' or not)
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
-    parser.add_argument('-add_control_code', default=False, action='store_true')
 
     args = parser.parse_args()
 

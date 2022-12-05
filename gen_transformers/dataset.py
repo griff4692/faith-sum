@@ -76,7 +76,6 @@ class SummaryDataModule(pl.LightningDataModule):
             max_input_length=self.args.max_input_length,
             max_output_length=self.args.max_output_length,
             split='train',
-            add_control_code=False,
         )
         kwargs = {
             'num_workers': self.num_workers,
@@ -210,7 +209,6 @@ class SummaryDataModule(pl.LightningDataModule):
             max_input_length=self.args.max_input_length,
             max_output_length=self.args.max_output_length,
             split=split,
-            add_control_code=self.args.add_control_code
         )
         batch_size = self.args.per_device_train_bs if split == 'train' else self.args.per_device_eval_bs
         kwargs = {
@@ -265,20 +263,6 @@ class SummarizationDataset(Dataset):
                 assert example['input_ids'][0] == 96103
             min_sent_id = input_ids[first_sent_idx]
             input_ids = [x for x in input_ids if x < min_sent_id]
-
-        if self.args.add_control_code:
-            code = '<highest-focus>'
-            if example['oracle_focus_score'] < -0.0035660862922668457:
-                code = '<lowest-focus>'
-            elif example['oracle_focus_score'] < 0.005008697509765625:
-                code = '<lower-focus>'
-            elif example['oracle_focus_score'] < 0.013791143894195557:
-                code = '<higher-focus>'
-
-            code_id = self.tokenizer.convert_tokens_to_ids(code)
-            input_ids.insert(0, code_id)
-            if len(input_ids) > self.args.max_input_length:
-                input_ids = input_ids[:-1]
 
         row = {
             'input_ids': input_ids,

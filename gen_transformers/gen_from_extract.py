@@ -33,7 +33,7 @@ DATASET_KWARGS = {
     'samsum': {  # TODO idk
         'min_length': 10,
         'max_length': 100,
-        'length_penalty': 2.0  # [4.0, 3.0, 2.0, 1.0],
+        'length_penalty': [3.0, 2.0],
     },
     'xsum': {
         'min_length': 11,
@@ -98,10 +98,7 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
     has_bos = 'pegasus' not in args.hf_model
     n = len(idx_to_keep)
 
-    if args.control_code is None:
-        source_annotated_rep = [source_annotated for _ in range(len(idx_to_keep))]
-    else:
-        source_annotated_rep = [args.control_code + source_annotated for _ in range(len(idx_to_keep))]
+    source_annotated_rep = [source_annotated for _ in range(len(idx_to_keep))]
 
     inputs = tokenizer(
         source_annotated_rep,
@@ -113,15 +110,11 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
     input_ids = inputs['input_ids'].to(args.gpu_device)
     attention_mask = inputs['attention_mask'].to(args.gpu_device)
     cls_mask = input_ids >= special_id_min
-
-    if args.control_code is not None:
-        cls_mask[0] = False
-
     extract_indicators = []
 
     # No highlights on last beam
     if args.convert_last_to_unprompted:
-        idx_to_keep[-1] = []
+        idx_to_keep[-1] = list(range(100))
 
     for cand_idx, extract_idx in enumerate(idx_to_keep):
         ei = sentence_indicators(
@@ -238,7 +231,6 @@ if __name__ == '__main__':
     parser.add_argument('--split', default='test')
     parser.add_argument('-verbose', default=False, action='store_true')
     parser.add_argument('-add_abstract_experiment', default=False, action='store_true')
-    parser.add_argument('--control_code', default=None)
     parser.add_argument('-convert_last_to_unprompted', default=False, action='store_true')
     parser.add_argument('--chunk', default=None)
 
@@ -345,15 +337,16 @@ if __name__ == '__main__':
     if not args.do_not_save:
         top_k_str = '' if args.top_k is None else f'_{args.top_k}'
         chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'
+        prompt_suffix = '_w_unprompted' if args.convert_last_to_unprompted else ''
         if args.add_abstract_experiment:
             out_fn = os.path.join(
                 results_dir,
-                f'{args.split}_from_{decode_suffix}_extract{top_k_str}_{args.abstract_experiment}{chunk_suffix}.csv'
+                f'{args.split}_from_{decode_suffix}_extract{top_k_str}_{args.abstract_experiment}{prompt_suffix}{chunk_suffix}.csv'
             )
         else:
             out_fn = os.path.join(
                 results_dir,
-                f'{args.split}_from_{decode_suffix}_extract{top_k_str}{chunk_suffix}.csv'
+                f'{args.split}_from_{decode_suffix}_extract{top_k_str}{prompt_suffix}{chunk_suffix}.csv'
             )
         print(f'Saving prompted abstracts to {out_fn}')
         updated_df.to_csv(out_fn, index=False)

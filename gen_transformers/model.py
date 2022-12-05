@@ -20,7 +20,8 @@ from transformers.trainer_pt_utils import LabelSmoother
 from transformers.models.bart.modeling_bart import BartForConditionalCopy
 
 from preprocess.extract_oracles import convert_to_sents
-from gen_transformers.model_utils import implement_oracle_indicators
+from gen_transformers.objectives import label_smoothed_unlikelihood
+from gen_transformers.model_utils import implement_oracle_indicators, corrupt_oracle_indicators
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from eval.rouge_metric import RougeMetric
 from eval.diversity import diversity_score
@@ -105,7 +106,6 @@ class TransformerSummarizer(pl.LightningModule):
             # sent_decoder_h_pad = torch.nn.utils.rnn.pad_sequence(sent_decoder_h, padding_value=0.0).transpose(1, 0)
 
             # Model the word-level sentence encoder states with the sentence-level decoder states
-
             updated_inputs = {
                 'encoder_outputs': encoder_outputs,
                 'attention_mask': batch['attention_mask'],
@@ -117,6 +117,23 @@ class TransformerSummarizer(pl.LightningModule):
             metrics['loss'] = output.loss  # Log unsmoothed loss for comparison to earlier runs.
             # Return label-smoothed loss for BART Decoder
             smooth_lm_loss = self.label_smoother(output, batch['labels'])
+
+            if self.hparams.extract_indicators:
+                has_bos = 'pegasus' not in self.hparams.hf_model
+                encoder_inputs['extract_indicators'] = corrupt_oracle_indicators(batch, has_bos=has_bos)
+                corrupt_encoder_outputs = self.get_encoder_h(encoder_inputs)
+                updated_inputs = {
+                    'encoder_outputs': corrupt_encoder_outputs,
+                    'attention_mask': batch['attention_mask'],
+                    'labels': batch['labels'],
+                }
+
+                output = self.model(**updated_inputs, use_cache=False)
+                # Add unlikelihood loss
+                probs_neg = torch.softmax(output.logits, dim=-1)
+                unlike_smooth, _ = label_smoothed_unlikelihood(probs_neg, batch['labels'], reduce=True)
+                metrics['unlikelihood'] = unlike_smooth
+                return_loss += unlike_smooth
 
             # Add word-level brio
             if self.hparams.add_brio_loss and self.hparams.is_word_brio:
@@ -1081,7 +1098,11 @@ class TransformerSummarizer(pl.LightningModule):
         best_metric = self.compute_rouge([candidates[best_cand]], reference, prefix=f'best_{prefix}_', eval=eval)
         diversity = 0
         if len(candidates) >= 2:
-            diversity = np.mean(diversity_score(candidates))
+            try:
+                diversity = np.mean(diversity_score(candidates))
+            except IndexError:
+                print('Index error when using NLTK for diversity score. Setting diversity to None.')
+                diversity = None
         return cand_metrics, best_metric, avg_r1_f1, diversity
 
     def configure_optimizers(self):

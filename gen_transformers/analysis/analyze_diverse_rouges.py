@@ -14,7 +14,7 @@ def get_arr(num_str):
 
 if __name__ == '__main__':
     experiment = 'samsum_bert_red_extract_generator_3e5lr'
-    output = 'test_from_beam_16_extract'
+    output = 'test_from_beam_16_extract_w_unprompted'
     summary_style = 'from_extract_abstract'  # from_extract_abstract
     if summary_style == 'abstract':
         rouge_col = f'eval_{summary_style}_rouge1_f1'
@@ -42,7 +42,7 @@ if __name__ == '__main__':
     rouges = [get_arr(x) for x in df[rouge_col].tolist()]
 
     try:
-        diversities = [float(x) for x in df[diversity_col]]
+        diversities = [float(x) for x in df[diversity_col].dropna()]
     except:
         print('This has been fixed in generate but lets deal with it here.')
         diversities = []
