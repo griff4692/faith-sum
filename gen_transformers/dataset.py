@@ -1,17 +1,14 @@
 import ujson
 import os
 from string import punctuation
-from collections import defaultdict
 import regex as re
 
 import numpy as np
 from nltk.corpus import stopwords
 import pytorch_lightning as pl
-import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
 STOPWORDS = set(stopwords.words('english'))
-from tqdm import tqdm
 
 from datasets import load_from_disk
 from gen_transformers.data_utils import Seq2SeqCollate
@@ -94,19 +91,24 @@ class SummaryDataModule(pl.LightningDataModule):
         brio_candidates = None
         if self.args.add_brio_loss:
             out_dir = os.path.join(self.args.data_dir, self.args.dataset, 'oracle')
-            out_fn = os.path.join(out_dir, f'{split}_candidates.json')
+            bert_suffix = '_bert' if 'bert' in self.args.oracle_col else ''
+            out_fn = os.path.join(out_dir, f'{split}_candidates{bert_suffix}.json')
             with open(out_fn, 'r') as fd:
                 candidates = ujson.load(fd)
 
             brio_candidates = {}
             for dataset_id, cands in candidates.items():
-                rouges_ordered = [x['mean_f1'] for x in cands]
+                if 'bert' in self.args.oracle_col:
+                    scores_ordered = [x['mean_f1'] for x in cands]
+                else:
+                    scores_ordered = [x['bertscore_f1'] for x in cands]
+
                 extract_idxs_ordered = [x['extract_idx'] for x in cands]
-                for i in range(1, len(rouges_ordered)):  # Assert it's pre-sorted by ROUGE
-                    assert rouges_ordered[i - 1] >= rouges_ordered[i]
+                for i in range(1, len(scores_ordered)):  # Assert it's pre-sorted by ROUGE
+                    assert scores_ordered[i - 1] >= scores_ordered[i]
                 if len(cands) < 2:
                     continue
-                brio_candidates[dataset_id] = [extract_idxs_ordered, rouges_ordered]
+                brio_candidates[dataset_id] = [extract_idxs_ordered, scores_ordered]
 
             # Filter dataset to only include ones with BRIO candidates generated or 'oracled'
             available_keys = set(list(brio_candidates.keys()))

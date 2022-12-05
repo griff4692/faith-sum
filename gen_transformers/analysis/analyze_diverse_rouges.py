@@ -174,6 +174,6 @@ def analyze(experiment, output, summary_style=None):
 
 
 if __name__ == '__main__':
-    experiment = 'samsum_bert_red_extract_generator_3e5lr'
-    output = 'test_from_beam_16_extract_w_unprompted'
+    experiment = 'add_doc_bart_large_cnn'
+    output = 'test_from_beam_16_extract'
     analyze(experiment, output)

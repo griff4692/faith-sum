@@ -240,7 +240,7 @@ if __name__ == '__main__':
     print(results.rouge1.tolist())
     out_fn = os.path.join(results_dir, 'tuned_extract_lengths.csv')
     print(f'Saving Results to {out_fn}')
-    # results.to_csv(out_fn, index=False)
+    results.to_csv(out_fn, index=False)
 
     for elen in sorted(results['extract_length'].unique().tolist()):
         er = results[results['extract_length'] == elen]

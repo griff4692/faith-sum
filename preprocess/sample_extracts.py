@@ -8,11 +8,12 @@ from datasets import load_metric, load_from_disk
 from p_tqdm import p_uimap
 import numpy as np
 from tqdm import tqdm
+from bert_score.scorer import BERTScorer
 
 from sum_constants import summarization_name_mapping
 
 
-def gen_oracle(args, example, rouge):
+def gen_oracle(args, example, rouge, bs):
     input_col, target_col = summarization_name_mapping[args.dataset]
     inputs = example['source_annotated'].strip()
     target = example[target_col].strip()
@@ -24,7 +25,7 @@ def gen_oracle(args, example, rouge):
         s.strip() for i, s in enumerate(tps) if i > 0 if tps[i - 1].startswith('<s') and tps[i - 1].endswith('>')
     ]
 
-    oracle_idxs = example['oracle_idxs']
+    oracle_idxs = list(sorted(example[args.oracle_col]))
 
     # Add-1
     # Erase-1
@@ -67,24 +68,34 @@ def gen_oracle(args, example, rouge):
             'idxs': new_cand
         })
 
+    oracle_extract = ' '.join([source_sents[i] for i in oracle_idxs])
     extracts = [' '.join([source_sents[i] for i in obj['idxs']]) for obj in candidates]
     rouges = [
         compute_rouge(rouge, extract, target) for extract in extracts
     ]
 
+    bp, br, bf1 = bs.score(cands=extracts, refs=[oracle_extract for _ in range(len(extracts))])
+
+    bp = bp.cpu().numpy().tolist()
+    br = br.cpu().numpy().tolist()
+    bf1 = bf1.cpu().numpy().tolist()
+
     output = {
         'id': example['id'],
         'candidates': []
     }
-    for candidate, extract, rouge in zip(candidates, extracts, rouges):
+    for candidate, extract, rouge, p, r, f1 in zip(candidates, extracts, rouges, bp, br, bf1):
         row = rouge
         row['mean_f1'] = float((rouge['rouge1_f1'] + rouge['rouge1_f1']) / 2.0)
         row['extract'] = extract
         row['extract_idx'] = [int(x) for x in sorted(candidate['idxs'])]
         row['strategy'] = candidate['strategy']
+        row['berscore_p'] = p
+        row['bertscore_r'] = r
+        row['bertscore_f1'] = f1
         output['candidates'].append(row)
 
-    output['candidates'] = list(sorted(output['candidates'], key=lambda x: -x['mean_f1']))
+    output['candidates'] = list(sorted(output['candidates'], key=lambda x: -x['bertscore_f1']))
     return output
 
 
@@ -107,6 +118,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--cpu_frac', default=0.5, type=float)
+    parser.add_argument('--oracle_col', default='oracle_idxs')
     parser.add_argument('--max_strategy_types', default=10, type=int)
 
     args = parser.parse_args()
@@ -115,6 +127,8 @@ if __name__ == '__main__':
     print(f'Loading {args.dataset}...')
     data_dir = os.path.join(args.data_dir, args.dataset)
     dataset = load_from_disk(data_dir)
+
+    bs = BERTScorer(model_type='microsoft/deberta-large-mnli')
 
     out_dir = os.path.join(args.data_dir, args.dataset, 'oracle')
     print(f'Creating directory to store pre-computed oracles -> {out_dir}')
@@ -125,15 +139,18 @@ if __name__ == '__main__':
         if args.debug:
             data_split = data_split.select(list(range(16)))
         print(f'Processing {len(data_split)} {split} examples')
-        if args.debug:
-            outputs = list(tqdm(map(
-                lambda example: gen_oracle(args, example=example, rouge=rouge),
-                data_split), total=len(data_split)))
-        else:
-            outputs = list(p_uimap(
-                lambda example: gen_oracle(args, example=example, rouge=rouge), data_split, num_cpus=args.cpu_frac
-            ))
-        out_fn = os.path.join(out_dir, f'{split}_candidates.json')
+        # if args.debug:
+        outputs = list(tqdm(map(
+            lambda example: gen_oracle(args, example=example, rouge=rouge, bs=bs),
+            data_split), total=len(data_split)))
+        # else:
+        #     outputs = list(p_uimap(
+        #         lambda example: gen_oracle(args, example=example, rouge=rouge, bs=bs), data_split,
+        #         num_cpus=args.cpu_frac
+        #     ))
+
+        bert_suffix = '_bert' if 'bert' in args.oracle_col else ''
+        out_fn = os.path.join(out_dir, f'{split}_candidates{bert_suffix}.json')
         print(f'Saving {len(outputs)} examples to {out_fn}')
         outputs_by_id = {arr['id']: arr['candidates'] for arr in outputs}
         with open(out_fn, 'w') as fd:

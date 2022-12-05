@@ -28,7 +28,7 @@ DATASET_KWARGS = {
     },
     'samsum': {
         'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
-        'extract_bert': {'min_length': 3, 'max_length': 10, 'length_penalty': 1.0},  # min_length previously 2
+        'extract_bert': {'min_length': 2, 'max_length': 10, 'length_penalty': 1.0},
         'abstract': {'min_length': 10, 'max_length': 100, 'length_penalty': 0.6}
     }
 }

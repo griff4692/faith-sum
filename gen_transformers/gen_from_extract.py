@@ -17,6 +17,7 @@ from gen_transformers.model import TransformerSummarizer
 from gen_transformers.model_utils import sentence_indicators, infer_hf_model
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
+from gen_transformers.analysis.add_eval_rouge import process_file
 
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
@@ -355,6 +356,9 @@ if __name__ == '__main__':
             )
         print(f'Saving prompted abstracts to {out_fn}')
         updated_df.to_csv(out_fn, index=False)
+
+        # Adding eval ROUGE with multi-processing (much faster)
+        process_file(out_fn)
 
     extract_tok_len = updated_df['extract'].apply(lambda x: len(
         x.split('<cand>')[0].split(' '))).mean()

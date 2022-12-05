@@ -30,18 +30,22 @@ def corrupt_oracle_indicators(batch, has_bos=True, full_random=False):
             idx_to_keep = np.sort(np.random.choice(other_sents, size=(num_to_replace, ), replace=False))
         else:
             if len(other_sents) >= 1:
-                coin_flip = np.random.random()
                 other_sent = np.random.choice(other_sents)
-                this_sent = np.random.choice(list(range(len(idx_to_keep))))
-                if coin_flip < 0.33:
-                    idx_to_keep[np.random.randint(len(idx_to_keep))] = other_sent
-                    idx_to_keep = torch.sort(idx_to_keep)[0]
-                elif coin_flip < 0.66:
-                    idx_to_keep = idx_to_keep.cpu().numpy().tolist()
-                    idx_to_keep.append(other_sent)
-                else:
-                    idx_to_keep = idx_to_keep.cpu().numpy().tolist()
-                    idx_to_keep.pop(this_sent)
+                # coin_flip = np.random.random()
+                # this_sent = np.random.choice(list(range(len(idx_to_keep))))
+
+                idx_to_keep[np.random.randint(len(idx_to_keep))] = other_sent
+                idx_to_keep = torch.sort(idx_to_keep)[0]
+
+                # if coin_flip < 0.33:  # Swap
+                #     idx_to_keep[np.random.randint(len(idx_to_keep))] = other_sent
+                #     idx_to_keep = torch.sort(idx_to_keep)[0]
+                # elif coin_flip < 0.66:  # Add
+                #     idx_to_keep = idx_to_keep.cpu().numpy().tolist()
+                #     idx_to_keep.append(other_sent)
+                # else:  # Delete
+                #     idx_to_keep = idx_to_keep.cpu().numpy().tolist()
+                #     idx_to_keep.pop(this_sent)
         updated_mask = sentence_indicators(cls_locations, idx_to_keep, prev_mask, has_bos=has_bos)
         ids.append(updated_mask)
     return torch.cat(ids)

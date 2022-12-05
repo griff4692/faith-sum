@@ -1,4 +1,3 @@
-import os
 from collections import defaultdict
 
 import pandas as pd
@@ -7,9 +6,6 @@ from p_tqdm import p_uimap
 
 from eval.rouge_metric import RougeMetric
 from gen_transformers.analysis.analyze_diverse_rouges import analyze
-
-
-DEFAULT_FN = '/nlp/projects/faithsum/results/add_doc_bart_large_cnn/test_from_beam_16_extract.csv'
 
 
 def get_arr(num_str):
@@ -59,36 +55,22 @@ def process_example(record, rouge_metric):
     return record
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser('ADD PERL ROUGE Eval')
-
-    parser.add_argument('--data_dir', default='/nlp/projects/faithsum/results')
-    parser.add_argument('--fn', default=DEFAULT_FN)
-    parser.add_argument('--columns', default='extract,from_extract_abstract', choices=[
-        'extract', 'extract,from_extract_abstract', 'abstract', 'abstract,implied_extract'
-    ])
-    parser.add_argument('--num_cpus', default=32, type=int)
-
-    args = parser.parse_args()
+def process_file(fn, num_cpus=32):
     rouge_metric = RougeMetric()
 
-    out_fn = os.path.join(args.data_dir, args.fn)
-    print(f'Reading predictions from {out_fn}')
-    outputs = pd.read_csv(out_fn)
+    print(f'Reading predictions from {fn}')
+    outputs = pd.read_csv(fn)
     records = outputs.to_dict('records')
 
-    args = parser.parse_args()
-
-    if args.num_cpus == 1:
+    if num_cpus == 1:
         augmented_records = list(map(lambda record: process_example(record, rouge_metric), records))
     else:
         augmented_records = p_uimap(
-            lambda record: process_example(record, rouge_metric), records, num_cpus=args.num_cpus
+            lambda record: process_example(record, rouge_metric), records, num_cpus=num_cpus
         )
     augmented_df = pd.DataFrame(augmented_records).sort_values(by='dataset_idx').reset_index(drop=True)
-
-    print(f'Saving with PERL eval ROUGE columns added back to {args.fn}')
-    augmented_df.to_csv(out_fn, index=False)
+    print(f'Saving with PERL eval ROUGE columns added back to {fn}')
+    augmented_df.to_csv(fn, index=False)
 
     for col in augmented_df.columns.tolist():
         if 'rouge' in col and 'eval' in col:
@@ -97,5 +79,16 @@ if __name__ == '__main__':
             except:
                 print(f'Array col: {col}')
 
-    s = args.fn.split('/')
+    s = fn.split('/')
     analyze(s[-2], s[-1].replace('.csv', ''))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser('ADD Python PERL ROUGE Eval')
+
+    parser.add_argument('--fn')
+    parser.add_argument('--num_cpus', default=32, type=int)
+
+    args = parser.parse_args()
+
+    process_file(args.fn, args.num_cpus)
