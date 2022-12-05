@@ -12,10 +12,25 @@ def get_arr(num_str):
     return [float(y) for y in num_str.split(delim)]
 
 
-if __name__ == '__main__':
-    experiment = 'samsum_bert_red_extract_generator_3e5lr'
-    output = 'test_from_beam_16_extract_w_unprompted'
-    summary_style = 'from_extract_abstract'  # from_extract_abstract
+def analyze(experiment, output, summary_style=None):
+    score_col = 'rank_scores'
+    reranked = False
+    in_fn = f'/nlp/projects/faithsum/results/{experiment}/{output}.csv'
+    print(in_fn)
+    df = pd.read_csv(in_fn)
+    print(f'Loaded {len(df)} examples')
+
+    if summary_style is None:
+        if 'from_extract_abstract' in df.columns:
+            summary_style = 'from_extract_abstract'
+        else:
+            summary_style = 'abstract'
+
+    df = df.dropna(subset=[summary_style])
+    print(summary_style)
+    df['source_len'] = df['source'].apply(lambda x: len(x.split(' ')))
+    # orig_df = df.assign(bin=pd.qcut(df['source_len'], q=4, labels=np.arange(4)))
+
     if summary_style == 'abstract':
         rouge_col = f'eval_{summary_style}_rouge1_f1'
         diversity_col = 'diversity'
@@ -28,16 +43,6 @@ if __name__ == '__main__':
     else:
         rouge_col = f'eval_{summary_style}_rouge1_f1'
         diversity_col = f'{summary_style}_diversity'
-    score_col = 'rank_scores'
-    reranked = False
-    print(summary_style)
-    in_fn = f'/nlp/projects/faithsum/results/{experiment}/{output}.csv'
-    print(in_fn)
-    df = pd.read_csv(in_fn).dropna(subset=[summary_style])
-    print(f'Loaded {len(df)} examples')
-
-    df['source_len'] = df['source'].apply(lambda x: len(x.split(' ')))
-    orig_df = df.assign(bin=pd.qcut(df['source_len'], q=4, labels=np.arange(4)))
 
     rouges = [get_arr(x) for x in df[rouge_col].tolist()]
 
@@ -161,8 +166,14 @@ if __name__ == '__main__':
     #         out.append(str(np.mean(max_rouges_by_beam[beam])))
     #     print('\t'.join(out))
 
-        # print('Mean Cumulative BartScore by Beam...')
-        # out = []
-        # for beam in range(len(avg_rouges_by_beam)):
-        #     out.append(str(np.mean(avg_bartscores_by_beam[beam])))
-        # print('\t'.join(out))
+    # print('Mean Cumulative BartScore by Beam...')
+    # out = []
+    # for beam in range(len(avg_rouges_by_beam)):
+    #     out.append(str(np.mean(avg_bartscores_by_beam[beam])))
+    # print('\t'.join(out))
+
+
+if __name__ == '__main__':
+    experiment = 'samsum_bert_red_extract_generator_3e5lr'
+    output = 'test_from_beam_16_extract_w_unprompted'
+    analyze(experiment, output)

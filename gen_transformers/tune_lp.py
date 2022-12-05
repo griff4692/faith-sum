@@ -12,10 +12,10 @@ import spacy
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from data_utils import get_path_from_exp
+from data_utils import get_path_from_exp, infer_dataset
 from eval.rouge_metric import RougeMetric
 from gen_transformers.model import TransformerSummarizer
-from gen_transformers.model_utils import sentence_indicators
+from gen_transformers.model_utils import sentence_indicators, infer_hf_model
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
 
@@ -174,14 +174,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    if args.hf_model is None:
-        # Infer it
-        if args.dataset == 'samsum':
-            args.hf_model = 'lidiya/bart-large-xsum-samsum'
-        elif args.dataset == 'cnn_dailymail':
-            args.hf_model = 'facebook/bart-large-cnn'
-        else:
-            raise Exception('Unknown Yet.')
+    infer_hf_model(args)
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
     decode_suffix = args.decode_method + '_' + str(args.num_candidates)

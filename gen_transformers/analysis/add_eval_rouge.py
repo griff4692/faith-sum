@@ -6,6 +6,7 @@ import argparse
 from p_tqdm import p_uimap
 
 from eval.rouge_metric import RougeMetric
+from gen_transformers.analysis.analyze_diverse_rouges import analyze
 
 
 DEFAULT_FN = '/nlp/projects/faithsum/results/add_doc_bart_large_cnn/test_from_beam_16_extract.csv'
@@ -30,10 +31,14 @@ def evaluate_summary(rouge_metric, generated, gold, prefix=''):
     return stats
 
 
-def process_example(args, record, rouge_metric):
+def process_example(record, rouge_metric):
     try:
         metric_str = defaultdict(list)
-        for col in args.columns.split(','):
+        for col in record:
+            if col not in {'abstract', 'implied_extract', 'extract', 'from_extract_abstract'}:
+                continue
+            if type(record[col]) == float:
+                continue
             summaries = record[col].split('<cand>')
             metrics = list(map(lambda s: evaluate_summary(rouge_metric, s, record['reference']), summaries))
             mean_f1s = []
@@ -74,10 +79,12 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    augmented_records = p_uimap(
-        lambda record: process_example(args, record, rouge_metric), records, num_cpus=args.num_cpus
-    )
-    # augmented_records = list(map(lambda record: process_example(args, record, rouge_metric), records))
+    if args.num_cpus == 1:
+        augmented_records = list(map(lambda record: process_example(record, rouge_metric), records))
+    else:
+        augmented_records = p_uimap(
+            lambda record: process_example(record, rouge_metric), records, num_cpus=args.num_cpus
+        )
     augmented_df = pd.DataFrame(augmented_records).sort_values(by='dataset_idx').reset_index(drop=True)
 
     print(f'Saving with PERL eval ROUGE columns added back to {args.fn}')
@@ -89,3 +96,6 @@ if __name__ == '__main__':
                 print(col, ': ', str(augmented_df[col].dropna().mean()))
             except:
                 print(f'Array col: {col}')
+
+    s = args.fn.split('/')
+    analyze(s[-2], s[-1].replace('.csv', ''))

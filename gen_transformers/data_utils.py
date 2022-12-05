@@ -10,6 +10,19 @@ def postprocess_text(texts):
     return ['\n'.join(nltk.sent_tokenize(text.strip())) for text in texts]
 
 
+def infer_dataset(args, col):
+    if args.dataset is None:
+        rel_name = getattr(args, col)
+        if 'samsum' in rel_name:
+            args.dataset = 'samsum'
+        elif 'cnn' in rel_name:
+            args.dataset = 'cnn_dailymail'
+        elif 'xsum' in rel_name:
+            args.dataset = 'xsum'
+        else:
+            raise Exception(f'Cant infer dataset from {rel_name}. Must pass with --dataset flag.')
+
+
 class Seq2SeqCollate:
     def __init__(
             self, tokenizer, max_input_length=8192, max_output_length=512, split=None, verbose=False,

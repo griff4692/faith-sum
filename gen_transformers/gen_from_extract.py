@@ -11,10 +11,10 @@ import spacy
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from data_utils import get_path_from_exp
+from data_utils import get_path_from_exp, infer_dataset
 from eval.rouge_metric import RougeMetric
 from gen_transformers.model import TransformerSummarizer
-from gen_transformers.model_utils import sentence_indicators
+from gen_transformers.model_utils import sentence_indicators, infer_hf_model
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
 
@@ -33,7 +33,7 @@ DATASET_KWARGS = {
     'samsum': {  # TODO idk
         'min_length': 10,
         'max_length': 100,
-        'length_penalty': [3.0, 2.0],
+        'length_penalty': [3.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 1.0],
     },
     'xsum': {
         'min_length': 11,
@@ -114,6 +114,7 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
 
     # No highlights on last beam
     if args.convert_last_to_unprompted:
+        # Highlights every sentence and lets model choose...
         idx_to_keep[-1] = list(range(100))
 
     for cand_idx, extract_idx in enumerate(idx_to_keep):
@@ -150,7 +151,8 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
         lp_arr = shared_kwargs['length_penalty']
         lp = []
         for idx in range(n):
-            dynamic_lp = lp_arr[min(len(set(idx_to_keep[idx])), len(lp_arr)) - 1]
+            elen = len(set(idx_to_keep[idx]))
+            dynamic_lp = lp_arr[min(elen, len(lp_arr)) - 1]
             lp.append(dynamic_lp)
         shared_kwargs['length_penalty'] = lp
 
@@ -162,7 +164,7 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
 
     ps, rs, f1s = [], [], []
     for extract_idx, implied in zip(idx_to_keep, implied_extracts):
-        if len(extract_idx) == 0:
+        if len(extract_idx) == 0 or len(extract_idx) == 100:
             assert args.convert_last_to_unprompted
             continue
 
@@ -221,9 +223,9 @@ if __name__ == '__main__':
     parser.add_argument('--extract_experiment', default='add_doc')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-do_not_save', default=False, action='store_true')
-    parser.add_argument('--hf_model', default='facebook/bart-base')
+    parser.add_argument('--hf_model', default=None)
     parser.add_argument('--max_examples', default=999999, type=int)
-    parser.add_argument('--dataset', default='cnn_dailymail')
+    parser.add_argument('--dataset', default=None)
     parser.add_argument('--decode_method', default='beam', choices=['diverse', 'beam', 'nucleus'])
     parser.add_argument('--num_candidates', default=16, type=int)
     parser.add_argument('--top_k', default=None, type=int)
@@ -235,6 +237,9 @@ if __name__ == '__main__':
     parser.add_argument('--chunk', default=None)
 
     args = parser.parse_args()
+
+    infer_dataset(args, 'extract_experiment')
+    infer_hf_model(args)
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
     decode_suffix = args.decode_method + '_' + str(args.num_candidates)

@@ -9,9 +9,10 @@ import torch
 from transformers import AutoTokenizer, BartTokenizer
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
-from data_utils import get_path_from_exp
+from data_utils import get_path_from_exp, infer_dataset
 from gen_transformers.dataset import SummaryDataModule
 from gen_transformers.model import TransformerSummarizer
+from gen_transformers.model_utils import infer_hf_model
 from global_utils import get_free_gpus
 
 
@@ -27,7 +28,7 @@ DATASET_KWARGS = {
     },
     'samsum': {
         'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
-        'extract_bert': {'min_length': 2, 'max_length': 10, 'length_penalty': 1.0},
+        'extract_bert': {'min_length': 3, 'max_length': 10, 'length_penalty': 1.0},  # min_length previously 2
         'abstract': {'min_length': 10, 'max_length': 100, 'length_penalty': 0.6}
     }
 }
@@ -56,7 +57,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('BART/PEGASUS Generator & Evaluator.')
     parser.add_argument('--wandb_name', default=None)
     parser.add_argument('--experiment', default=None)
-    parser.add_argument('--dataset', default='cnn_dailymail')
+    parser.add_argument('--dataset', default=None)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-do_not_save', default=False, action='store_true')
@@ -110,6 +111,7 @@ if __name__ == '__main__':
     parser.add_argument('--diversity_penalty', default=None, type=float)
 
     args = parser.parse_args()
+
     args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style or args.extract_indicators
 
     np.random.seed(args.seed)
@@ -123,6 +125,9 @@ if __name__ == '__main__':
 
     if args.experiment is None:
         args.experiment = args.wandb_name
+
+    infer_dataset(args, 'wandb_name')
+    infer_hf_model(args)
 
     weight_dir = os.path.join(args.data_dir, 'weights')
     results_dir = os.path.join(args.data_dir, 'results', args.experiment)
