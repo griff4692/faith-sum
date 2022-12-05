@@ -89,15 +89,7 @@ if __name__ == '__main__':
         ], help='Target output during training. plan is a sequence of <s{idx}> tokens, extract is oracle summary, '
                 'abstract is original reference'
     )
-    parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
-        'facebook/bart-base',
-        'facebook/bart-large',
-        'facebook/bart-large-cnn',
-        'Yale-LILY/brio-cnndm-uncased',
-        'lidiya/bart-large-xsum-samsum',
-        'facebook/bart-large-xsum',
-        'google/pegasus-xsum'
-    ])
+    parser.add_argument('--hf_model', default=None)
     parser.add_argument('--oracle_column', default='oracle_idxs', choices=['oracle_idxs', 'oracle_idxs_bert'])
     parser.add_argument('--split', default='validation')
     parser.add_argument('--chunk', default=None, type=int)
@@ -108,6 +100,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_return_sequences', default=1, type=int)
     parser.add_argument('--length_penalty', default=None, type=float)
     parser.add_argument('--diversity_penalty', default=None, type=float)
+    parser.add_argument('--copy_bart_class_dropout', default=0.1, type=float)
 
     args = parser.parse_args()
 
@@ -155,8 +148,10 @@ if __name__ == '__main__':
             tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
 
         print(f'Loading model from {ckpt_path}...')
+        args.lr = None
         model = TransformerSummarizer.load_from_checkpoint(
-            checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(gpu).eval()
+            args=args, checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False
+        ).to(gpu).eval()
 
     # TODO why do we need this
     model.hparams.summary_style = args.summary_style

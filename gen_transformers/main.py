@@ -150,7 +150,7 @@ if __name__ == '__main__':
     # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
     parser.add_argument('-extract_indicators', default=False, action='store_true')
-    parser.add_argument('--copy_bart_class_dropout', default=0.0, type=float)  # TODO try with dropout
+    parser.add_argument('--copy_bart_class_dropout', default=0.1, type=float)
     parser.add_argument('-add_brio_loss', default=False, action='store_true')
     parser.add_argument('-is_word_brio', default=False, action='store_true')
     # parser.add_argument('-use_regular_candidates', default=False, action='store_true')

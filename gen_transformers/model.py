@@ -357,6 +357,14 @@ class TransformerSummarizer(pl.LightningModule):
                 dist_flat = ','.join([str(x['beam_score']) for x in gen_output['extracts']])
                 save_out['extract_beam_scores'] = dist_flat
 
+            if (
+                    gen_output['extracts'] is not None
+                    and len(gen_output['extracts']) > 0
+                    and 'calibrated_beam_score' in gen_output['extracts'][0]
+            ):
+                dist_flat = ','.join([str(x['calibrated_beam_score']) for x in gen_output['extracts']])
+                save_out['calibrated_beam_score'] = dist_flat
+
             # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
             if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
                 save_out.update(self.compute_rouge(gen_output['abstracts'][:1], [reference], eval=eval))
@@ -537,13 +545,37 @@ class TransformerSummarizer(pl.LightningModule):
             #         print(k, v)
             outputs = self.generate_with_sent_bart(source_ngrams=source_ngrams[batch_idx], **fixed_kwargs)
             beam_scores = outputs.sequences_scores.cpu().numpy().tolist()
+
             pred_ids = outputs.sequences
+
+            sent_labels = [
+                list(set(self.remove_special_tokens_from_sent_bart(pred_id.cpu().numpy().tolist(), eos_token_id)))
+                for pred_id in pred_ids
+            ]
+
+            sent_encoder_h = self.sent_bart.model.encoder(inputs_embeds=inputs_embeds).last_hidden_state
+            encoder_sent = sent_encoder_h[:, 1:, :]
+            assert len(encoder_sent) == 1
+            pooled_extract = torch.stack([encoder_sent[0, x].mean(dim=0) for i, x in enumerate(sent_labels)])
+            encoder_doc_rep = sent_encoder_h[:, 0, :].repeat(len(sent_labels), 1)
+            pooled = torch.cat([encoder_doc_rep, pooled_extract], dim=1)
+            calibrated_scores = self.sent_bart.calibration_classifier(pooled).squeeze(1).cpu().numpy().tolist()
+
             raw_predictions.append(pred_ids)
             return_obj = []
             for pred_idx, summary_idx in enumerate(pred_ids.tolist()):
                 summary_idx_no_special = self.remove_special_tokens_from_sent_bart(summary_idx, eos_token_id)
-                summary_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special)
+                summary_idx_no_special_no_dup = []
+                seen = set()
+                for sidx in summary_idx_no_special:
+                    if sidx in seen:
+                        print(f'Duplicated generated sentence {sidx}. Removing.')
+                        continue
+                    summary_idx_no_special_no_dup.append(sidx)
+                    seen.add(sidx)
+                summary_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special_no_dup)
                 summary_obj['beam_score'] = beam_scores[pred_idx]
+                summary_obj['calibrated_beam_score'] = calibrated_scores[pred_idx]
                 return_obj.append(summary_obj)
             extractive_summaries.append(return_obj)
         return extractive_summaries, raw_predictions
