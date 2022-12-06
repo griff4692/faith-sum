@@ -29,3 +29,6 @@ echo "From Scratch"
 SCRATCH_ARGS="$SHARED --mle_weight 1.0 --brio_weight 1.0 --experiment cnn_score_brio_no_pretrain"
 echo $SCRATCH_ARGS
 python main.py $SCRATCH_ARGS
+
+echo "Higher Margin"
+#python main.py --max_epochs 1 --brio_score_mode score --per_device_train_bs 8 --max_brio_candidates 8 --save_top_k 3 --dataset cnn_dailymail --gpu_device 1 --hf_model facebook/bart-large-cnn -add_brio_loss --extract_method generate --val_metric_mode max --val_monitor_metric rank_corel --copy_bart_class_dropout 0.1 --mle_weight 0.1 --brio_weight 1.0 --pretrained_path /nlp/projects/faithsum/weights/add_doc_bart_large_cnn/faith_sum/3ne4vd5n/checkpoints/epoch=0-step=17944.ckpt --experiment cnn_score_brio_baseline_higher_margin --brio_margin 0.01

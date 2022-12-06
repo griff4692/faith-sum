@@ -340,6 +340,46 @@ if __name__ == '__main__':
     print(f'Win share: {winshare}')
 
     updated_df = pd.DataFrame(updated_records)
+
+    def compute_corel(xs, ys=None):
+        from scipy.stats import spearmanr
+        corels = []
+        if ys is None:
+            ys = [None for _ in range(len(xs))]
+        for x, y in zip(xs, ys):
+            x_delim = ',' if ',' in x else '<cand>'
+            x_arr = list(map(float, x.split(x_delim)))
+            if y is None:
+                y_arr = -np.array(list(range(len(x_arr))))
+            else:
+                y_delim = ',' if ',' in y else '<cand>'
+                y_arr = list(map(float, y.split(y_delim)))
+            corels.append(spearmanr(x_arr, y_arr)[0])
+        return float(np.mean(corels))
+
+    e_ea = compute_corel(
+        updated_df['extract_rouges'].tolist(), updated_df['from_extract_rouges'].tolist()
+    )
+    print(f'Extract ROUGE F1 Corel With Extract-Abstract ROUGE F1: {e_ea}')
+
+    if 'calibrated_beam_score' in updated_df.columns:
+        calibrated_ea = compute_corel(
+            updated_df['calibrated_beam_score'].tolist(), updated_df['extract_rouges'].tolist()
+        )
+        print(f'Extract Calibration Corel With E ROUGE F1: {calibrated_ea}')
+
+        calibrated_ea = compute_corel(
+            updated_df['calibrated_beam_score'].tolist(), updated_df['from_extract_rouges'].tolist()
+        )
+
+        print(f'Extract Calibration Corel With E-A ROUGE F1: {calibrated_ea}')
+
+    beam_ea = compute_corel(updated_df['extract_rouges'].tolist())
+    print(f'Extract Beam Corel With E ROUGE F1: {beam_ea}')
+
+    beam_ea = compute_corel(updated_df['from_extract_rouges'].tolist())
+    print(f'Extract Beam Corel With E->A ROUGE F1: {beam_ea}')
+
     if not args.do_not_save:
         top_k_str = '' if args.top_k is None else f'_{args.top_k}'
         chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'

@@ -164,7 +164,7 @@ if __name__ == '__main__':
         # Override behavior during training
         dataloader_kwargs = {'shuffle': False, 'batch_size': args.batch_size}
 
-        if args.split == 'train':
+        if args.split == 'train' and args.chunk is not None:
             dataloader, dataset_idxs = datamodule.get_train_chunk(
                 args.chunk, args.num_chunks, **dataloader_kwargs
             )

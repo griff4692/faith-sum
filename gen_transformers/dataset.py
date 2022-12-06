@@ -191,15 +191,15 @@ class SummaryDataModule(pl.LightningDataModule):
             print(f'First {min(10, len(idxs))} idxs sampled: {idxs[:min(10, len(idxs))]}')
             split_dataset = split_dataset.select(idxs)
 
-        if split == 'train' and self.args.oracle_drop_p > 0:
-            oracle_rouge_1 = split_dataset['oracle_rouge1']
-            oracle_rouge_2 = split_dataset['oracle_rouge2']
-            avg_rouge = [(a + b) / 2.0 for (a, b) in zip(oracle_rouge_1, oracle_rouge_2)]
-            priority = np.argsort(avg_rouge)
-            drop_n = round(len(split_dataset) * self.args.oracle_drop_p)
-            print(f'Filtering out {drop_n} training examples with lowest oracle score.')
-            keep_idxs = list(sorted(priority[drop_n:]))
-            split_dataset = split_dataset.select(keep_idxs)
+        # if split == 'train' and self.args.oracle_drop_p > 0:
+        #     oracle_rouge_1 = split_dataset['oracle_rouge1']
+        #     oracle_rouge_2 = split_dataset['oracle_rouge2']
+        #     avg_rouge = [(a + b) / 2.0 for (a, b) in zip(oracle_rouge_1, oracle_rouge_2)]
+        #     priority = np.argsort(avg_rouge)
+        #     drop_n = round(len(split_dataset) * self.args.oracle_drop_p)
+        #     print(f'Filtering out {drop_n} training examples with lowest oracle score.')
+        #     keep_idxs = list(sorted(priority[drop_n:]))
+        #     split_dataset = split_dataset.select(keep_idxs)
 
         split_dataset_pl = SummarizationDataset(
             self.args, split_dataset, self.tokenizer, split, brio_candidates=brio_candidates
