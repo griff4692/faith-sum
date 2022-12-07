@@ -13,13 +13,12 @@ def get_arr(num_str):
 
 
 def analyze(experiment, output, summary_style=None):
-    score_col = 'rank_scores'
-    reranked = False
+    score_col = 'calibrated_beam_score'
     in_fn = f'/nlp/projects/faithsum/results/{experiment}/{output}.csv'
     print(in_fn)
     df = pd.read_csv(in_fn)
+    reranked = score_col in df.columns
     print(f'Loaded {len(df)} examples')
-
     if summary_style is None:
         if 'from_extract_abstract' in df.columns:
             summary_style = 'from_extract_abstract'
@@ -174,6 +173,9 @@ def analyze(experiment, output, summary_style=None):
 
 
 if __name__ == '__main__':
-    experiment = 'add_doc_bart_large_cnn'
-    output = 'test_from_beam_16_extract'
+    # experiment = 'add_doc_bart_large_cnn'
+    # experiment = 'samsum_bert_red_extract_generator_3e5lr'
+    # output = 'test_from_beam_32_extract'
+    experiment = 'samsum_brio_extract_calibrate_downstream_no_pretrain'
+    output = 'test_from_beam_32_extract'
     analyze(experiment, output)

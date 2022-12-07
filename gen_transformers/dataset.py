@@ -6,6 +6,7 @@ import regex as re
 import numpy as np
 from nltk.corpus import stopwords
 import pytorch_lightning as pl
+import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
 STOPWORDS = set(stopwords.words('english'))
@@ -14,6 +15,11 @@ from datasets import load_from_disk
 from gen_transformers.data_utils import Seq2SeqCollate
 from preprocess.helpers import _get_ngrams
 from sum_constants import summarization_name_mapping
+
+
+BRIO_EXPS = {
+    'samsum': '/nlp/projects/faithsum/results/samsum_bert_red_extract_generator_3e5lr/{}_from_beam_10_extract.csv'
+}
 
 
 def remove_stopwords(tokens):
@@ -88,25 +94,42 @@ class SummaryDataModule(pl.LightningDataModule):
 
         brio_candidates = None
         if self.args.add_brio_loss:
-            out_dir = os.path.join(self.args.data_dir, self.args.dataset, 'oracle')
-            bert_suffix = '_bert' if 'bert' in self.args.oracle_column else ''
-            out_fn = os.path.join(out_dir, f'{split}_candidates{bert_suffix}.json')
-            with open(out_fn, 'r') as fd:
-                candidates = ujson.load(fd)
+            if self.args.use_oracle_candidates:
+                out_dir = os.path.join(self.args.data_dir, self.args.dataset, 'oracle')
+                bert_suffix = '_bert' if 'bert' in self.args.oracle_column else ''
+                out_fn = os.path.join(out_dir, f'{split}_candidates{bert_suffix}.json')
+                with open(out_fn, 'r') as fd:
+                    candidates = ujson.load(fd)
 
-            brio_candidates = {}
-            for dataset_id, cands in candidates.items():
-                if 'bert' in self.args.oracle_column:
-                    scores_ordered = [x['bertscore_f1'] for x in cands]
-                else:
-                    scores_ordered = [x['mean_f1'] for x in cands]
+                brio_candidates = {}
+                for dataset_id, cands in candidates.items():
+                    if 'bert' in self.args.oracle_column:
+                        scores_ordered = [x['bertscore_f1'] for x in cands]
+                    else:
+                        scores_ordered = [x['mean_f1'] for x in cands]
 
-                extract_idxs_ordered = [x['extract_idx'] for x in cands]
-                for i in range(1, len(scores_ordered)):  # Assert it's pre-sorted by ROUGE
-                    assert scores_ordered[i - 1] >= scores_ordered[i]
-                if len(cands) < 2:
-                    continue
-                brio_candidates[dataset_id] = [extract_idxs_ordered, scores_ordered]
+                    extract_idxs_ordered = [x['extract_idx'] for x in cands]
+                    for i in range(1, len(scores_ordered)):  # Assert it's pre-sorted by ROUGE
+                        assert scores_ordered[i - 1] >= scores_ordered[i]
+                    if len(cands) < 2:
+                        continue
+                    brio_candidates[dataset_id] = [extract_idxs_ordered, scores_ordered]
+            else:
+                predictions_df = pd.read_csv(BRIO_EXPS[self.args.dataset].format(split))
+                brio_candidates = {}
+                dataset_ids = split_dataset['id']
+                for record in predictions_df.to_dict('records'):
+                    extracts = [[int(y) for y in cand.split(',')] for cand in record['extract_idx'].split('<cand>')]
+                    ea_rouges = [
+                        float(x) for x in record['from_extract_rouges'].split('<cand>')
+                    ]
+
+                    order = np.argsort(-np.array(ea_rouges))
+                    extract_idxs_ordered = [extracts[i] for i in order]
+                    rouges_ordered = [ea_rouges[i] for i in order]
+                    if len(extract_idxs_ordered) < 2:
+                        continue
+                    brio_candidates[dataset_ids[record['dataset_idx']]] = [extract_idxs_ordered, rouges_ordered]
 
             # Filter dataset to only include ones with BRIO candidates generated or 'oracled'
             available_keys = set(list(brio_candidates.keys()))
