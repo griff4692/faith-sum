@@ -131,7 +131,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Extract Oracles for dataset')
 
     parser.add_argument('--dataset', default='xsum')
-    parser.add_argument('---device', default=0, type=int)
+    parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--splits', default='train,validation,test')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--hf_model', default='facebook/bart-large-xsum', choices=[
