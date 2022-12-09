@@ -12,7 +12,7 @@ def get_arr(num_str):
     return [float(y) for y in num_str.split(delim)]
 
 
-def analyze(experiment, output, summary_style=None):
+def analyze(experiment, output, summary_style=None, max_beams=16):
     score_col = 'calibrated_beam_score'
     in_fn = f'/nlp/projects/faithsum/results/{experiment}/{output}.csv'
     print(in_fn)
@@ -61,8 +61,8 @@ def analyze(experiment, output, summary_style=None):
     avg_rouges = []
     max_rouges = []
     # avg_bartscores = []
-    max_rouges_by_beam = [[] for _ in range(len(rouges[0]))]
-    avg_rouges_by_beam = [[] for _ in range(len(rouges[0]))]
+    max_rouges_by_beam = [[] for _ in range(min(max_beams, len(rouges[0])))]
+    avg_rouges_by_beam = [[] for _ in range(min(max_beams, len(rouges[0])))]
     # avg_bartscores_by_beam = [[] for _ in range(len(rouges[0]))]
 
     for i in range(n):
@@ -79,7 +79,8 @@ def analyze(experiment, output, summary_style=None):
         avg_rouges.append(np.mean(rouge_arr))
         # avg_bartscores.append(np.mean(bartscore_arr_sorted))
         max_rouges.append(max(rouge_arr))
-        for beam in range(len(avg_rouges_by_beam)):
+        num_beams = min(max_beams, len(avg_rouges_by_beam))
+        for beam in range(num_beams):
             cum_rouge = rouge_arr_sorted[:beam + 1]
             avg_rouges_by_beam[beam].append(np.mean(cum_rouge))
             max_rouges_by_beam[beam].append(max(cum_rouge))
@@ -176,6 +177,6 @@ if __name__ == '__main__':
     # experiment = 'add_doc_bart_large_cnn'
     # experiment = 'samsum_bert_red_extract_generator_3e5lr'
     # output = 'test_from_beam_32_extract'
-    experiment = 'samsum_brio_extract_calibrate_downstream_no_pretrain'
-    output = 'test_from_beam_32_extract'
+    experiment = 'samsum_bert_red_extract_generator_3e5lr'
+    output = 'test_from_beam_16_extract_w_unprompted'
     analyze(experiment, output)

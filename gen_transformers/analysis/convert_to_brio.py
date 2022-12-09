@@ -54,6 +54,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    if not args.fn.endswith('.csv'):
+        args.fn += '.csv'
+
     nlp = spacy.load('en_core_web_sm')
     data_fn = os.path.join(args.data_dir, args.dataset)
     dataset = load_from_disk(data_fn)

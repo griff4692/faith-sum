@@ -11,7 +11,7 @@ from transformers import AutoModel
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from sum_constants import summarization_name_mapping
-from preprocess.bert_align_playground import add_bert_alignment_no_red
+from preprocess.bert_align_playground import add_bert_alignment_no_red, add_bert_alignment
 
 
 BS_PARAMS = {
@@ -23,6 +23,16 @@ BS_PARAMS = {
         'max_imp_threshold': 0.15,
         'max_coverage': 0.95,
         'max_retrievals': 4,
+    },
+    'xsum': {
+        'threshold': 0.55,
+        'p_factor': 1.3,
+        'max_per_sent': 2,
+    },
+    'cnn_dailymail': {
+        'threshold': 0.55,
+        'p_factor': 1.1,
+        'max_per_sent': 2,
     }
 }
 
@@ -73,23 +83,21 @@ def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, bs, bs_toke
         idxs, rouge, r1_hist, r2_hist, best_hist = gain_selection(
             source_sents_tok, target_sents_tok, 5, lower=True, sort=False)
 
-        # threshold = BS_PARAMS[args.dataset]['threshold']
-        # p_factor = BS_PARAMS[args.dataset]['p_factor']
-        # max_per_sent = BS_PARAMS[args.dataset]['max_per_sent']
         source_sents_str = [str(x) for x in source_sents]
         target_sents_str = [str(x) for x in target_sents]
         if bs is not None:
             try:
-                # bert_idxs, _ = add_bert_alignment(
-                #     bs, source_sents_str, target_sents_str, threshold=threshold, p_factor=p_factor,
-                #     max_per_sent=max_per_sent
-                # )
-
-                bert_idxs, _ = add_bert_alignment_no_red(
-                    bs, bs_tokenizer, source_sents_str, target_sents_str,
-                    **BS_PARAMS[args.dataset]
-                )
-            except:
+                if args.dataset == 'samsum':
+                    bert_idxs, _ = add_bert_alignment_no_red(
+                        bs, bs_tokenizer, source_sents_str, target_sents_str,
+                        **BS_PARAMS[args.dataset]
+                    )
+                else:
+                    bert_idxs, _ = add_bert_alignment(
+                        bs, source_sents_str, target_sents_str, **BS_PARAMS[args.dataset]
+                    )
+            except Exception as e:
+                print(e)
                 print('Error with BertScore. Probably empty source or target. Setting to same as ROUGE gain')
                 bert_idxs = idxs
             oracle_bert_idxs.append(bert_idxs)
@@ -122,10 +130,11 @@ def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, bs, bs_toke
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Extract Oracles for dataset')
 
-    parser.add_argument('--dataset', default='samsum')
+    parser.add_argument('--dataset', default='xsum')
+    parser.add_argument('---device', default=0, type=int)
     parser.add_argument('--splits', default='train,validation,test')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--hf_model', default='facebook/bart-base', choices=[
+    parser.add_argument('--hf_model', default='facebook/bart-large-xsum', choices=[
         'facebook/bart-base',
         'facebook/bart-large',
         'facebook/bart-large-cnn',
@@ -143,10 +152,12 @@ if __name__ == '__main__':
     bs_tokenizer = None
     if args.add_bert:
         args.num_proc = 1  # Can't use torch in multi-process without 'spawn' start method (not worth it)
-        # bs = BERTScorer(lang='en', idf=False)
         hf = 'microsoft/deberta-large-mnli'
-        bs = AutoModel.from_pretrained(hf).eval().to(0)
-        bs_tokenizer = AutoTokenizer.from_pretrained(hf)
+        if args.dataset == 'samsum':
+            bs = AutoModel.from_pretrained(hf).eval().to(0)
+            bs_tokenizer = AutoTokenizer.from_pretrained(hf)
+        else:
+            bs = BERTScorer(model_type=hf, device=args.device, idf=False)
 
     input_col, target_col = summarization_name_mapping[args.dataset]
     if 'pegasus' in args.hf_model:

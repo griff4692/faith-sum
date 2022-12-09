@@ -105,8 +105,8 @@ def gen_from_guide(
         max_length=512 if 'pegasus' in args.hf_model else 1024,
         return_tensors='pt',
     )
-    input_ids = inputs['input_ids'].to(args.gpu_device)
-    attention_mask = inputs['attention_mask'].to(args.gpu_device)
+    input_ids = inputs['input_ids'].to(args.device)
+    attention_mask = inputs['attention_mask'].to(args.device)
     cls_mask = input_ids >= special_id_min
     extract_indicators = []
     for cand_idx, extract_idx in enumerate(idx_to_keep):
@@ -158,7 +158,7 @@ def get_extract_idxs_from_str(extract_str):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Generate From Extract')
 
-    parser.add_argument('--gpu_device', default=0, type=int)
+    parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--abstract_experiment', default='samsum_from_bert_red_extract_w_unlike')
     parser.add_argument('--extract_experiment', default='samsum_bert_red_extract_generator_3e5lr')
@@ -166,7 +166,7 @@ if __name__ == '__main__':
     parser.add_argument('-do_not_save', default=False, action='store_true')
     parser.add_argument('--hf_model', default=None)
     parser.add_argument('--max_examples', default=99999999, type=int)
-    parser.add_argument('--dataset', default='samsum')
+    parser.add_argument('--dataset', default=None)
     parser.add_argument('--decode_method', default='beam', choices=['diverse', 'beam', 'nucleus'])
     parser.add_argument('--num_candidates', default=16, type=int)
     parser.add_argument('--split', default='validation')
@@ -210,14 +210,17 @@ if __name__ == '__main__':
 
     print(f'Loading model from {ckpt_path}...')
     model = TransformerSummarizer.load_from_checkpoint(
-        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(args.gpu_device).eval()
+        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(args.device).eval()
 
     if 'pegasus' not in args.hf_model:
         model = model.half()
 
     rouge_metric = RougeMetric()
     results = []
-    lp_candidates = [0.0, 0.5, 1.0, 2.0, 3.0, 4.0]
+    if args.dataset == 'samsum':
+        lp_candidates = [0.0, 0.5, 1.0, 2.0, 3.0, 4.0]
+    else:
+        lp_candidates = [1.0, 2.0, 3.0, 4.0, 5.0]
     for lp in lp_candidates:
         stats_by_extract_len = defaultdict(list)
         for record in tqdm(records, total=len(records)):

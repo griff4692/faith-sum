@@ -62,7 +62,7 @@ if __name__ == '__main__':
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-do_not_save', default=False, action='store_true')
     parser.add_argument('-cpu', default=False, action='store_true')
-    parser.add_argument('--gpu_device', default=None, type=int)
+    parser.add_argument('--device', default=None, type=int)
     parser.add_argument('--max_examples', default=None, type=int)
     parser.add_argument('--max_output_length', type=int, default=256)
     parser.add_argument('--per_device_eval_bs', type=int, default=1)
@@ -129,7 +129,7 @@ if __name__ == '__main__':
     if args.cpu:
         gpu = 'cpu'
     else:
-        gpu = free_gpus[0] if args.gpu_device is None else args.gpu_device
+        gpu = free_gpus[0] if args.device is None else args.device
 
     # Generating from this pre-trained model
     if args.wandb_name is None:

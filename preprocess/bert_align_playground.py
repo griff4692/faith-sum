@@ -23,24 +23,143 @@ STOPWORDS = set([x.lower() for x in stopwords.words('english')])
 from sum_constants import summarization_name_mapping
 
 
+def bs_overlap(bs, aligned_idxs, annotations, source_sents):
+    annotation_sents = [
+        ' '.join([source_sents[i] for i in annot]) for annot in annotations
+    ]
+
+    aligned_sents = [source_sents[i] for i in aligned_idxs]
+    aligned_rep = [' '.join(aligned_sents) for _ in range(len(annotations))]
+    bs_p, bs_r, bs_f1 = bs.score(aligned_rep, annotation_sents)
+    return float(bs_f1.mean().item())
+
+
+def tune_coverage(
+        args, model, tokenizer, bs, avg_thresholds, max_imp_thresholds, max_coverages, max_retrieval_candidates
+):
+    outputs = []
+    best_bs = 0
+    for avg_imp_threshold in avg_thresholds:
+        avg_imp_threshold = float(avg_imp_threshold)
+        for max_imp_threshold in max_imp_thresholds:
+            max_imp_threshold = float(max_imp_threshold)
+            for max_coverage in max_coverages:
+                for max_retrievals in max_retrieval_candidates:
+                    ps, rs, f1s = [], [], []
+                    lens = []
+                    bs_align = []
+                    for example in tqdm(examples):
+                        annotations = example['annotations']
+                        align_idxs, aligned_sents = add_bert_alignment_no_red(
+                            model, tokenizer, example['dialogue'], example['summary'],
+                            avg_imp_threshold=avg_imp_threshold,
+                            max_imp_threshold=max_imp_threshold,
+                            max_coverage=max_coverage,
+                            max_retrievals=max_retrievals
+                        )
+
+                        bs_align.append(
+                            bs_overlap(bs, align_idxs, annotations, example['dialogue'])
+                        )
+
+                        lens.append(len(align_idxs))
+
+                        p, r, f1 = compute_alignment_score(align_idxs, annotations)
+                        ps.append(p)
+                        rs.append(r)
+                        f1s.append(f1)
+
+                    old_best = best_bs
+                    avg_f1 = float(np.mean(f1s))
+                    avg_bs = float(np.mean(bs_align))
+                    best_bs = max(avg_bs, best_bs)
+                    if old_best != best_bs:
+                        print('\n', best_bs)
+
+                    outputs.append({
+                        'avg_imp_threshold': avg_imp_threshold,
+                        'avg_max_threshold': max_imp_threshold,
+                        'max_coverage': max_coverage,
+                        'max_retrievals': max_retrievals,
+                        'p': float(np.mean(ps)),
+                        'r': float(np.mean(rs)),
+                        'f1': avg_f1,
+                        'bs_align': avg_bs,
+                        'length': float(np.mean(lens)),
+                    })
+    outputs = pd.DataFrame(outputs)
+    print(args.dataset + ' coverage tuning results...')
+    outputs = outputs.sort_values(by='f1', ascending=False).reset_index(drop=True)
+    print(outputs.head(n=5))
+
+    outputs = outputs.sort_values(by='bs_align', ascending=False).reset_index(drop=True)
+    print(outputs.head(n=5))
+    outputs.to_csv(f'{args.dataset}_bert_coverage_tune_results.csv', index=False)
+
+
+def tune_align(args, bs, thresholds, max_retrieval_candidates, p_factors):
+    outputs = []
+    best_bs = 0
+    for threshold in thresholds:
+        for max_retrievals in max_retrieval_candidates:
+            for p_factor in p_factors:
+                ps, rs, f1s = [], [], []
+                lens = []
+                bs_align = []
+                for example in tqdm(examples):
+                    annotations = example['annotations']
+                    align_idxs, aligned_sents = add_bert_alignment(
+                        bs, example['dialogue'], example['summary'],
+                        threshold=threshold,
+                        p_factor=p_factor,
+                        max_per_sent=max_retrievals
+                    )
+
+                    bs_align.append(
+                        bs_overlap(bs, align_idxs, annotations, example['dialogue'])
+                    )
+
+                    lens.append(len(align_idxs))
+
+                    p, r, f1 = compute_alignment_score(align_idxs, annotations)
+                    ps.append(p)
+                    rs.append(r)
+                    f1s.append(f1)
+
+                    old_best = best_bs
+                    avg_f1 = float(np.mean(f1s))
+                    avg_bs = float(np.mean(bs_align))
+                    best_bs = max(avg_bs, best_bs)
+                    if old_best != best_bs:
+                        print('\n', best_bs)
+
+                    outputs.append({
+                        'threshold': threshold,
+                        'max_retrievals': max_retrievals,
+                        'p_factor': p_factor,
+                        'p': float(np.mean(ps)),
+                        'r': float(np.mean(rs)),
+                        'f1': avg_f1,
+                        'bs_align': avg_bs,
+                        'length': float(np.mean(lens)),
+                    })
+
+    outputs = pd.DataFrame(outputs)
+    print(args.dataset + ' coverage tuning results...')
+    outputs = outputs.sort_values(by='f1', ascending=False).reset_index(drop=True)
+    print(outputs.head(n=5))
+
+    outputs = outputs.sort_values(by='bs_align', ascending=False).reset_index(drop=True)
+    print(outputs.head(n=5))
+    outputs.to_csv(f'{args.dataset}_bert_align_tune_results.csv', index=False)
+
+
 def encode(text, model, tokenizer, device, max_length=128, max_batch_size=100, top_n_layers=1):
     seq_lens = []
     outputs = {'hidden_states': [], 'logits': []}
     text_batches = [list(x) for x in np.array_split(np.arange(len(text)), round(len(text) // max_batch_size) + 1)]
     text_batches = [x for x in text_batches if len(x) > 0]
     inputs = tokenizer(text, truncation=True, padding='longest', max_length=max_length, return_tensors='pt')
-
-    stopword_masks = []
-
-    # for idx, id in enumerate(inputs['input_ids'].cpu().numpy()):
-    #     seq_len = int(inputs['attention_mask'][idx].sum().item())
-    #     toks = tokenizer.convert_ids_to_tokens(id)
-    #     is_stop = [x.lower().strip('Ġ') in STOPWORDS or x.lower().strip('Ġ') in string.punctuation for x in toks]
-    #     is_stop = is_stop[:seq_len]
-    #     is_stop[0] = True
-    #     is_stop[-1] = True
-    #     stopword_masks.append(is_stop)
-
     with torch.no_grad():
         for batch_idxs in text_batches:
             batch_inputs = {k: v[batch_idxs].to(device) for k, v in inputs.items()}
@@ -155,36 +274,6 @@ def compute_alignment_score(pred_idxs, annotation_idxs):
     return np.mean(ps), np.mean(rs), np.mean(f1s)
 
 
-# def add_bert_alignment(nlp, batch_data, target_col, bs):
-#     target = batch_data[target_col]
-#     target_sents = list(map(str, convert_to_sents(target, nlp, is_dialogue=False)))
-#     source_sents = []
-#     tps = re.split(r'(<s\d+>)', batch_data['source_annotated'])
-#     for tp_idx, tp in enumerate(tps):
-#         if re.match(r'(<s\d+>)', tp) is not None:
-#             source_sents.append(tps[tp_idx + 1].strip())
-#
-#     bert_idxs, bert_alignments = _add_bert_alignment(bs, source_sents, target_sents)
-#
-#     rouge_oracle = list(sorted(batch_data['oracle_idxs']))
-#     if bert_idxs == rouge_oracle:
-#         print('equal')
-#     else:
-#         print('\n', bert_idxs, rouge_oracle)
-#         print(bert_alignments)
-#         print('\n')
-#         print(batch_data['source_annotated'])
-#         print('\n')
-#         print('Summary: ', target)
-#         print('\n\n\n')
-#         print('not equal')
-#
-#     return {
-#         'bert_idxs': bert_idxs,
-#         'bert_alignments': bert_alignments
-#     }
-
-
 def add_bert_alignment_no_red(
         model, tokenizer, source_sents, target_sents,
         avg_imp_threshold=0.01, max_imp_threshold=0.05, max_retrievals=3, max_coverage=0.85,
@@ -214,20 +303,56 @@ def add_bert_alignment_no_red(
     return idxs, keep_sents
 
 
+def read_annotations(annotation_fn, nlp):
+    annots_len = []
+
+    with open(annotation_fn, 'r') as fd:
+        lines = fd.readlines()
+        lines = [x.strip() for x in lines if len(x.strip()) > 0]
+
+        examples = []
+        for idx, line in enumerate(lines):
+            if line == 'BEGIN_EXAMPLE':
+                curr_dialogue = []
+                curr_annotations = []
+                curr_summary = []
+            elif line.startswith('<s'):
+                curr_dialogue.append(re.sub('<s\d+> ', '', line))
+            elif line.startswith('ANNOTATION'):
+                annots = [int(x.strip()) for x in line.split(':')[1].strip().split(',') if len(x.strip()) > 0]
+                if len(annots) > 0:
+                    annots_len.append(len(annots))
+                    curr_annotations.append(annots)
+            elif line == 'SUMMARY:':
+                if args.dataset == 'samsum':
+                    curr_summary = [str(x) for x in list(nlp(lines[idx + 1]).sents) if len(x) > 0]
+                else:
+                    curr_summary = []
+                    for next in range(idx + 1, len(lines)):
+                        curr_summary.append(str(lines[next]))
+                        if lines[next + 1].startswith('ANNOTATION'):
+                            break
+            elif line == 'END_EXAMPLE':
+                examples.append({
+                    'dialogue': curr_dialogue,
+                    'annotations': curr_annotations,
+                    'summary': curr_summary,
+                })
+        return examples, annots_len
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Extract Oracles for dataset')
 
-    parser.add_argument('--dataset', default='samsum')
+    parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--splits', default='validation')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--device', default=1, type=int)
+    parser.add_argument('--device', default=0, type=int)
+    parser.add_argument('--mode', default='tune', choices=['tune', 'run'])
+    parser.add_argument('--algorithm', default='bert_coverage', choices=['bert_coverage', 'bert_align', 'rouge'])
     parser.add_argument('-save_annotation_examples', default=False, action='store_true')
 
     args = parser.parse_args()
-
-    hf = 'microsoft/deberta-large-mnli'
-    model = AutoModel.from_pretrained(hf).eval().to(0)
-    tokenizer = AutoTokenizer.from_pretrained(hf)
 
     if args.save_annotation_examples:
         input_col, target_col = summarization_name_mapping[args.dataset]
@@ -237,7 +362,7 @@ if __name__ == '__main__':
         val = dataset['validation']
         rand_idxs = list(np.sort(np.random.choice(np.arange(len(val)), size=(30, ), replace=False)))
         val_subset = val.select(rand_idxs)
-        annotation_fn = os.path.expanduser('~/samsum_annotations.txt')
+        annotation_fn = os.path.expanduser(f'./analysis/{args.dataset}_annotations.txt')
         lines = []
         for record in val_subset:
             id = record['id']
@@ -256,115 +381,76 @@ if __name__ == '__main__':
             fd.write('\n'.join(lines))
         exit(0)
 
-    annotation_fn = os.path.expanduser('~/faith-sum/preprocess/analysis/samsum_alignment_annotations.txt')
+    hf = 'microsoft/deberta-large-mnli'
+    bs = BERTScorer(model_type=hf)
+    model = AutoModel.from_pretrained(hf).eval().to(args.device)
+    tokenizer = AutoTokenizer.from_pretrained(hf)
+
+    annotation_fn = os.path.expanduser(f'~/faith-sum/preprocess/analysis/{args.dataset}_alignment_annotations.txt')
     nlp = spacy.load('en_core_web_sm')
-    annots_len = []
-
-    with open(annotation_fn, 'r') as fd:
-        lines = fd.readlines()
-        lines = [x.strip() for x in lines if len(x.strip()) > 0]
-
-        examples = []
-        for idx, line in enumerate(lines):
-            if line == 'BEGIN_EXAMPLE':
-                curr_dialogue = []
-                curr_annotations = []
-                curr_summary = ''
-            elif line.startswith('<s'):
-                curr_dialogue.append(re.sub('<s\d+> ', '', line))
-            elif line.startswith('ANNOTATION'):
-                annots = [int(x.strip()) for x in line.split(':')[1].strip().split(',') if len(x.strip()) > 0]
-                if len(annots) > 0:
-                    annots_len.append(len(annots))
-                    curr_annotations.append(annots)
-            elif line == 'SUMMARY:':
-                curr_summary = [str(x) for x in list(nlp(lines[idx + 1]).sents) if len(x) > 0]
-            elif line == 'END_EXAMPLE':
-                examples.append({
-                    'dialogue': curr_dialogue,
-                    'annotations': curr_annotations,
-                    'summary': curr_summary,
-                })
+    examples, annots_len = read_annotations(annotation_fn, nlp)
 
     print(f'Average annotation length in sentences: ', np.mean(annots_len))
 
-    # Benchmark against ROUGE Gain
-    # rouge_outputs = []
-    # lens, ps, rs, f1s = [], [], [], []
-    # for example in tqdm(examples):
-    #     source_sents_tok = [[str(token.text) for token in nlp(sentence)] for sentence in example['dialogue']]
-    #     target_sents_tok = [[str(token.text) for token in nlp(sentence)] for sentence in example['summary']]
-    #     # Sort oracle order or not
-    #     align_idxs, rouge, r1_hist, r2_hist, best_hist = gain_selection(
-    #         source_sents_tok, target_sents_tok, 5, lower=True, sort=False
-    #     )
-    #     rouge_outputs.append(align_idxs)
-    #     p, r, f1 = compute_alignment_score(align_idxs, example['annotations'])
-    #     ps.append(p)
-    #     rs.append(r)
-    #     f1s.append(f1)
-    #     lens.append(len(align_idxs))
-    #
-    # print('Rouge gain alignments (P / R / F1 / # Sent)...')
-    # print(np.mean(ps), np.mean(rs), np.mean(f1s), np.mean(lens))
+    if args.algorithm == 'rouge':
+        # Benchmark against ROUGE Gain
+        rouge_outputs = []
+        lens, ps, rs, f1s = [], [], [], []
+        bs_align = []
+        for example in tqdm(examples):
+            annotations = example['annotations']
+            source_sents_tok = [[str(token.text) for token in nlp(sentence)] for sentence in example['dialogue']]
+            target_sents_tok = [[str(token.text) for token in nlp(sentence)] for sentence in example['summary']]
+            # Sort oracle order or not
+            align_idxs, rouge, r1_hist, r2_hist, best_hist = gain_selection(
+                source_sents_tok, target_sents_tok, 5, lower=True, sort=False
+            )
+            rouge_outputs.append(align_idxs)
+            p, r, f1 = compute_alignment_score(align_idxs, annotations)
+            bs_align.append(
+                bs_overlap(bs, align_idxs, annotations, example['dialogue'])
+            )
 
-    # avg_imp_threshold = 0.01, max_imp_threshold = 0.05, max_retrievals = 3, max_coverage = 0.85,
-    # avg_thresholds = [0.01, 0.05, 0.02, 0.025]
-    # max_imp_thresholds = [0.05, 0.1, 0.15]
-    # max_retrieval_candidates = [2, 3, 4, 5, 6, 7]
-    # max_coverages = [0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
-    #
-    # outputs = []
-    # best_f1 = 0
-    # for avg_imp_threshold in avg_thresholds:
-    #     avg_imp_threshold = float(avg_imp_threshold)
-    #     for max_imp_threshold in max_imp_thresholds:
-    #         max_imp_threshold = float(max_imp_threshold)
-    #         for max_coverage in max_coverages:
-    #             for max_retrievals in max_retrieval_candidates:
-    #                 ps, rs, f1s = [], [], []
-    #                 for example in tqdm(examples):
-    #                     align_idxs, _ = add_bert_alignment_no_red(
-    #                         model, tokenizer, example['dialogue'], example['summary'],
-    #                         avg_imp_threshold=avg_imp_threshold,
-    #                         max_imp_threshold=max_imp_threshold,
-    #                         max_coverage=max_coverage,
-    #                         max_retrievals=max_retrievals
-    #                     )
-    #
-    #                     p, r, f1 = compute_alignment_score(align_idxs, example['annotations'])
-    #                     ps.append(p)
-    #                     rs.append(r)
-    #                     f1s.append(f1)
-    #
-    #                 old_best = best_f1
-    #                 avg_f1 = float(np.mean(f1s))
-    #                 best_f1 = max(avg_f1, best_f1)
-    #                 if old_best != best_f1:
-    #                     print('\n', best_f1)
-    #
-    #                 outputs.append({
-    #                     'avg_imp_threshold': avg_imp_threshold,
-    #                     'avg_max_threshold': max_imp_threshold,
-    #                     'max_coverage': max_coverage,
-    #                     'max_retrievals': max_retrievals,
-    #                     'p': float(np.mean(ps)),
-    #                     'r': float(np.mean(rs)),
-    #                     'f1': avg_f1,
-    #                 })
-    # outputs = pd.DataFrame(outputs)
-    # outputs = outputs.sort_values(by='f1', ascending=False).reset_index(drop=True)
-    # print(outputs.head(n=10))
-    # outputs.to_csv('tmp.csv', index=False)
-    # exit(0)
+            ps.append(p)
+            rs.append(r)
+            f1s.append(f1)
+            lens.append(len(align_idxs))
+        print('Rouge gain alignments (BS F1 / P / R / F1 / # Sent)...')
+        print(np.mean(bs_align), np.mean(ps), np.mean(rs), np.mean(f1s), np.mean(lens))
+        exit(0)
 
-    # bs = BERTScorer(model_type='microsoft/deberta-large-mnli')  #  lang='en')
-    # threshold = 0.87
-    # p_factor = 0.8
-    # max_per_sent = 3
+    if args.mode == 'tune':
+        if args.algorithm == 'bert_coverage':
+            if args.dataset == 'cnn_dailymail':
+                avg_thresholds = [0.1, 0.15, 0.2]
+                max_imp_thresholds = [0.6, 0.7, 0.8]
+                max_retrieval_candidates = [2, 3, 4]
+                max_coverages = [0.8, 0.9, 1.0]
+            elif args.dataset == 'xsum':
+                avg_thresholds = [0.05, 0.075, 0.1]
+                max_imp_thresholds = [0.1, 0.15, 0.2]
+                max_retrieval_candidates = [7, 8, 9]
+                max_coverages = [0.85, 0.9, 0.95, 1.0]
+            else:
+                avg_thresholds = [0.01, 0.02, 0.03]
+                max_imp_thresholds = [0.1, 0.15, 0.2, 0.25, 0.3]
+                max_retrieval_candidates = [3, 4, 5]
+                max_coverages = [0.8, 0.9, 0.95, 1.0]
+            tune_coverage(
+                args, model, tokenizer, bs, avg_thresholds, max_imp_thresholds, max_coverages, max_retrieval_candidates
+            )
+        elif args.algorithm == 'bert_align':
+            thresholds = [0.55, 0.560, 0.565, 0.57, 0.575]
+            max_retrieval_candidates = [2, 3, 4]
+            p_factors = [1.1, 1.2, 1.3, 1.4]
+            tune_align(args, bs, thresholds, max_retrieval_candidates, p_factors)
+        else:
+            raise Exception(f'Unrecognized algorithm --> {args.algorithm}')
+        exit(0)
 
     lens, ps, rs, f1s = [], [], [], []
     new_lens, new_ps, new_rs, new_f1s = [], [], [], []
+    new_bs = []
     bert_outputs = []
 
     # Best
@@ -376,6 +462,7 @@ if __name__ == '__main__':
     output_str = []
 
     for example in tqdm(examples):
+        annotations = example['annotations']
         new_align_idxs, new_align_sents = add_bert_alignment_no_red(
             model, tokenizer, example['dialogue'], example['summary'],
             avg_imp_threshold=avg_imp_threshold,
@@ -384,7 +471,8 @@ if __name__ == '__main__':
             max_coverage=max_coverage
         )
 
-        new_p, new_r, new_f1 = compute_alignment_score(new_align_idxs, example['annotations'])
+        new_bs.append(bs_overlap(bs, new_align_idxs, annotations, example['dialogue']))
+        new_p, new_r, new_f1 = compute_alignment_score(new_align_idxs, annotations)
         new_ps.append(new_p)
         new_rs.append(new_r)
         new_f1s.append(new_f1)
@@ -405,71 +493,6 @@ if __name__ == '__main__':
         'p': float(np.mean(new_ps)),
         'r': float(np.mean(new_rs)),
         'f1': float(np.mean(new_f1s)),
+        'bs_align': float(np.mean(new_bs)),
         'num_sents': float(np.mean(new_lens)),
     })
-
-    # print('\n'.join([f'BERT (Red):{x}' for x in output_str]))
-    # print({
-    #     'threshold': threshold,
-    #     'p_factor': p_factor,
-    #     'p': float(np.mean(ps)),
-    #     'r': float(np.mean(rs)),
-    #     'f1': float(np.mean(f1s)),
-    #     'num_sents': float(np.mean(lens)),
-    # })
-
-    #
-    # for example_idx, example in enumerate(examples):
-    #     dialogue_str = '\n'.join([f'<s{d}> {t}' for d, t in enumerate(example['dialogue'])])
-    #     summary_str = ' '.join(example['summary'])
-    #     rouge = list(sorted(rouge_outputs[example_idx]))
-    #     bert = list(sorted(bert_outputs[example_idx]))
-    #
-    #     if rouge != bert:
-    #         print('DIALOGUE:')
-    #         print(dialogue_str)
-    #         print('\n')
-    #         print('SUMMARY:')
-    #         print(summary_str)
-    #         print('\n')
-    #         print('ROUGE: ', rouge)
-    #         print('HUMAN: ', list(sorted(example['annotations'])))
-    #         print('BERT : ', bert)
-    #         print('\n\n')
-
-    # thresholds = np.arange(0.5, 0.725, 0.025).tolist()
-    # p_factors = np.arange(0.75, 1.255, 0.05).tolist()
-    # outputs = []
-    # best_f1 = 0
-    # for p_factor in p_factors:
-    #     p_factor = float(p_factor)
-    #     for threshold in thresholds:
-    #         threshold = float(threshold)
-    #         ps, rs, f1s = [], [], []
-    #         for example in tqdm(examples):
-    #             align_idxs, align_sents = add_bert_alignment(
-    #                 bs, example['dialogue'], example['summary'], threshold=threshold, p_factor=p_factor
-    #             )
-    #
-    #             p, r, f1 = compute_alignment_score(align_idxs, example['annotations'])
-    #             ps.append(p)
-    #             rs.append(r)
-    #             f1s.append(f1)
-    #
-    #         old_best = best_f1
-    #         avg_f1 = float(np.mean(f1s))
-    #         best_f1 = max(avg_f1, best_f1)
-    #         if old_best != best_f1:
-    #             print('\n', best_f1)
-    #
-    #         outputs.append({
-    #             'threshold': threshold,
-    #             'p_factor': p_factor,
-    #             'p': float(np.mean(ps)),
-    #             'r': float(np.mean(rs)),
-    #             'f1': float(np.mean(f1s)),
-    #         })
-    # outputs = pd.DataFrame(outputs)
-    # outputs = outputs.sort_values(by='f1', ascending=False).reset_index(drop=True)
-    # print(outputs.head(n=10))
-    # outputs.to_csv('tmp_bert.csv', index=False)

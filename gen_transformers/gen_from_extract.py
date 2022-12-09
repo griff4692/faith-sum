@@ -11,8 +11,8 @@ import spacy
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from data_utils import get_path_from_exp, infer_dataset
 from eval.rouge_metric import RougeMetric
+from gen_transformers.data_utils import get_path_from_exp, infer_dataset
 from gen_transformers.model import TransformerSummarizer
 from gen_transformers.model_utils import sentence_indicators, infer_hf_model
 from preprocess.extract_oracles import convert_to_sents
@@ -27,7 +27,7 @@ np.random.seed(1992)
 # TODO: Grid-search
 DATASET_KWARGS = {
     'cnn_dailymail': {
-        'length_penalty': 1.0,  # previously was 4.0, could try 1.0
+        'length_penalty': [4.0, 4.0, 3.0, 2.0, 1.0],  # Previously 1.0 (this was tuned for unlikelihood training)
         'max_length': 142,
         'min_length': 56,
     },
@@ -95,7 +95,9 @@ def get_idx(idx_str):
     return list(map(int, idxs))
 
 
-def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, special_id_min, num_return_sequences=1):
+def gen_from_guide(
+        args, nlp, model, tokenizer, source_annotated, reference, idx_to_keep, special_id_min, num_return_sequences=1
+):
     has_bos = 'pegasus' not in args.hf_model
     n = len(idx_to_keep)
 
@@ -108,8 +110,8 @@ def gen_from_guide(args, nlp, model, tokenizer, source_annotated, idx_to_keep, s
         max_length=512 if 'pegasus' in args.hf_model else 1024,
         return_tensors='pt',
     )
-    input_ids = inputs['input_ids'].to(args.gpu_device)
-    attention_mask = inputs['attention_mask'].to(args.gpu_device)
+    input_ids = inputs['input_ids'].to(args.device)
+    attention_mask = inputs['attention_mask'].to(args.device)
     cls_mask = input_ids >= special_id_min
     extract_indicators = []
 
@@ -218,7 +220,7 @@ def get_extract_idxs_from_str(extract_str):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Generate From Extract')
 
-    parser.add_argument('--gpu_device', default=0, type=int)
+    parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--abstract_experiment', default='extract_indicators')
     parser.add_argument('--extract_experiment', default='add_doc')
@@ -275,7 +277,7 @@ if __name__ == '__main__':
 
     print(f'Loading model from {ckpt_path}...')
     model = TransformerSummarizer.load_from_checkpoint(
-        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(args.gpu_device).eval()
+        checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(args.device).eval()
 
     if 'pegasus' not in args.hf_model:
         model = model.half()
@@ -298,7 +300,7 @@ if __name__ == '__main__':
         if args.top_k is not None and args.top_k < len(extract_idx):
             extract_idx = extract_idx[:args.top_k]
         gen_output = gen_from_guide(
-            args, nlp, model, tokenizer, source_annotated, extract_idx, special_id_min,
+            args, nlp, model, tokenizer, source_annotated, reference, extract_idx, special_id_min,
             num_return_sequences=args.num_return_sequences
         )
 

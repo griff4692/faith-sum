@@ -104,11 +104,15 @@ class SummaryDataModule(pl.LightningDataModule):
                 brio_candidates = {}
                 for dataset_id, cands in candidates.items():
                     if 'bert' in self.args.oracle_column:
-                        scores_ordered = [x['bertscore_f1'] for x in cands]
+                        scores = [float(x) for x in cands['ea']['from_extract_rouges'].split('<cand>')]
+                        extract_idxs = [x['extract_idx'] for x in cands['oracles']]
+                        order = np.argsort(-np.array(scores))
+                        scores_ordered = [scores[i] for i in order]
+                        extract_idxs_ordered = [extract_idxs[i] for i in order]
                     else:
                         scores_ordered = [x['mean_f1'] for x in cands]
+                        extract_idxs_ordered = [x['extract_idx'] for x in cands]
 
-                    extract_idxs_ordered = [x['extract_idx'] for x in cands]
                     for i in range(1, len(scores_ordered)):  # Assert it's pre-sorted by ROUGE
                         assert scores_ordered[i - 1] >= scores_ordered[i]
                     if len(cands) < 2:
