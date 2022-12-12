@@ -101,6 +101,16 @@ def gen_from_guide(
     has_bos = 'pegasus' not in args.hf_model
     n = len(idx_to_keep)
 
+    # Remove Duplicates
+    # idx_to_keep_no_dup = []
+    # seen = set()
+    # for extract in idx_to_keep:
+    #     key = '_'.join(list(map(str, list(sorted(list(set(extract)))))))
+    #     if key in seen:
+    #         continue
+    #     idx_to_keep_no_dup.append(list(sorted(set(extract))))
+    #     seen.add(key)
+
     source_annotated_rep = [source_annotated for _ in range(len(idx_to_keep))]
 
     inputs = tokenizer(
@@ -238,11 +248,12 @@ if __name__ == '__main__':
     parser.add_argument('-add_abstract_experiment', default=False, action='store_true')
     parser.add_argument('-convert_last_to_unprompted', default=False, action='store_true')
     parser.add_argument('--chunk', default=None)
+    parser.add_argument('-use_calibration', default=False, action='store_true')
 
     args = parser.parse_args()
 
     infer_dataset(args, 'extract_experiment')
-    infer_hf_model(args)
+    infer_hf_model(args, is_abstract=True)
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
     decode_suffix = args.decode_method + '_' + str(args.num_candidates)
@@ -298,7 +309,12 @@ if __name__ == '__main__':
 
         extract_idx = [get_extract_idxs_from_str(x) for x in record['extract_idx'].split('<cand>')]
         if args.top_k is not None and args.top_k < len(extract_idx):
-            extract_idx = extract_idx[:args.top_k]
+            if 'calibrated_beam_score' in record and args.use_calibration:
+                order = np.argsort(-np.array([float(y) for y in record['calibrated_beam_score'].split(',')]))
+            else:
+                order = np.arange(len(extract_idx))
+            # Truncate
+            extract_idx = [extract_idx[i] for i in order[:args.top_k]]
         gen_output = gen_from_guide(
             args, nlp, model, tokenizer, source_annotated, reference, extract_idx, special_id_min,
             num_return_sequences=args.num_return_sequences
@@ -359,28 +375,29 @@ if __name__ == '__main__':
             corels.append(spearmanr(x_arr, y_arr)[0])
         return float(np.mean(corels))
 
-    e_ea = compute_corel(
-        updated_df['extract_rouges'].tolist(), updated_df['from_extract_rouges'].tolist()
-    )
-    print(f'Extract ROUGE F1 Corel With Extract-Abstract ROUGE F1: {e_ea}')
-
-    if 'calibrated_beam_score' in updated_df.columns:
-        calibrated_ea = compute_corel(
-            updated_df['calibrated_beam_score'].tolist(), updated_df['extract_rouges'].tolist()
+    if args.top_k is None:
+        e_ea = compute_corel(
+            updated_df['extract_rouges'].tolist(), updated_df['from_extract_rouges'].tolist()
         )
-        print(f'Extract Calibration Corel With E ROUGE F1: {calibrated_ea}')
+        print(f'Extract ROUGE F1 Corel With Extract-Abstract ROUGE F1: {e_ea}')
 
-        calibrated_ea = compute_corel(
-            updated_df['calibrated_beam_score'].tolist(), updated_df['from_extract_rouges'].tolist()
-        )
+        if 'calibrated_beam_score' in updated_df.columns:
+            calibrated_ea = compute_corel(
+                updated_df['calibrated_beam_score'].tolist(), updated_df['extract_rouges'].tolist()
+            )
+            print(f'Extract Calibration Corel With E ROUGE F1: {calibrated_ea}')
 
-        print(f'Extract Calibration Corel With E-A ROUGE F1: {calibrated_ea}')
+            calibrated_ea = compute_corel(
+                updated_df['calibrated_beam_score'].tolist(), updated_df['from_extract_rouges'].tolist()
+            )
 
-    beam_ea = compute_corel(updated_df['extract_rouges'].tolist())
-    print(f'Extract Beam Corel With E ROUGE F1: {beam_ea}')
+            print(f'Extract Calibration Corel With E-A ROUGE F1: {calibrated_ea}')
 
-    beam_ea = compute_corel(updated_df['from_extract_rouges'].tolist())
-    print(f'Extract Beam Corel With E->A ROUGE F1: {beam_ea}')
+        beam_ea = compute_corel(updated_df['extract_rouges'].tolist())
+        print(f'Extract Beam Corel With E ROUGE F1: {beam_ea}')
+
+        beam_ea = compute_corel(updated_df['from_extract_rouges'].tolist())
+        print(f'Extract Beam Corel With E->A ROUGE F1: {beam_ea}')
 
     if not args.do_not_save:
         top_k_str = '' if args.top_k is None else f'_{args.top_k}'
@@ -400,7 +417,7 @@ if __name__ == '__main__':
         updated_df.to_csv(out_fn, index=False)
 
         # Adding eval ROUGE with multi-processing (much faster)
-        process_file(out_fn)
+        process_file(out_fn, should_analyze=args.top_k is None)
 
     extract_tok_len = updated_df['extract'].apply(lambda x: len(
         x.split('<cand>')[0].split(' '))).mean()

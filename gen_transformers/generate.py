@@ -24,7 +24,8 @@ DATASET_KWARGS = {
     },
     'xsum': {
         'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
-        'abstract': {'min_length': 11, 'max_length': 62, 'length_penalty': 0.6}
+        'extract_bert': {'min_length': 2, 'max_length': 10, 'length_penalty': 1.0},
+        'abstract': {'min_length': 11, 'max_length': 62, 'length_penalty': 0.6},
     },
     'samsum': {
         'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},

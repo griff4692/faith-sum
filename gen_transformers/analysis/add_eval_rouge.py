@@ -55,7 +55,7 @@ def process_example(record, rouge_metric):
     return record
 
 
-def process_file(fn, num_cpus=32):
+def process_file(fn, num_cpus=32, should_analyze=True):
     rouge_metric = RougeMetric()
 
     print(f'Reading predictions from {fn}')
@@ -80,7 +80,8 @@ def process_file(fn, num_cpus=32):
                 print(f'Array col: {col}')
 
     s = fn.split('/')
-    analyze(s[-2], s[-1].replace('.csv', ''))
+    if should_analyze:
+        analyze(s[-2], s[-1].replace('.csv', ''))
 
 
 if __name__ == '__main__':

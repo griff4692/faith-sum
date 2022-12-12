@@ -47,6 +47,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Convert fn to BRIO directory format')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--experiment', default='add_doc_bart_large_cnn')
+    parser.add_argument('--save_suffix', default=None, required=True)
     parser.add_argument('--fn', default='test_from_beam_16_extract.csv')
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--splits', default='test')
@@ -71,12 +72,20 @@ if __name__ == '__main__':
         split_dataset = dataset[split]
         articles = split_dataset[input_col]
         records = df.to_dict('records')
-        out_dir = os.path.join(args.data_dir, 'results', args.experiment, 'diverse', split)
-        print(f'Will save outputs to {out_dir}')
-        os.makedirs(out_dir, exist_ok=True)
+        brio_dataset = None
+        if args.dataset == 'cnn_dailymail':
+            brio_dataset = 'cnndm'
+        else:
+            brio_dataset = args.dataset
+        brio_out_dir = os.path.expanduser(
+            os.path.join('~', 'BRIO', brio_dataset, args.experiment + '_' + args.save_suffix)
+        )
+        split_dir = os.path.join(brio_out_dir, 'diverse', split)
+        print(f'Will save outputs to {split_dir}')
+        os.makedirs(split_dir, exist_ok=True)
 
         ptb_results = None
-        ptb_fn = os.path.join(args.data_dir, 'results', args.experiment, 'diverse', split + '.tokenized')
+        ptb_fn = os.path.join(brio_out_dir, split + '.tokenized')
         if os.path.exists(ptb_fn):
             print(f'Loading PTB tokenized results from {ptb_fn}')
             ptb_results = []
@@ -142,8 +151,19 @@ if __name__ == '__main__':
                     'candidates': candidates_tok,
                 }
             else:
-                ptb_ref = sent_tokenize(ptb_results[idx]['ref'])
-                ptb_cands = list(map(sent_tokenize, ptb_results[idx]['cand']))
+                try:
+                    ptb_ref = sent_tokenize(ptb_results[idx]['ref'])
+                except:
+                    ptb_ref = [ptb_results[idx]['ref']]
+
+                ptb_cands = []
+                for cand in ptb_results[idx]['cand']:
+                    try:
+                        tok = sent_tokenize(cand)
+                    except:
+                        print(f'Failed to tokenize sentence: {cand}')
+                        tok = [cand]
+                    ptb_cands.append(tok)
                 ptb_cands_w_rouges = [[c, r] for c, r in zip(ptb_cands, rouges)]
                 toks = {
                     'abstract': ptb_ref,
@@ -152,12 +172,12 @@ if __name__ == '__main__':
 
             obj.update(toks)
 
-            out_fn = os.path.join(out_dir, f'{idx}.json')
+            out_fn = os.path.join(split_dir, f'{idx}.json')
             with open(out_fn, 'w') as fd:
                 ujson.dump(obj, fd)
 
-        print(f'Saved BRIO outputs to {out_dir}')
-        to_ptb_fn = os.path.join(args.data_dir, 'results', args.experiment, 'diverse', split + '.txt')
+        print(f'Saved BRIO outputs to {split_dir}')
+        to_ptb_fn = os.path.join(brio_out_dir, split + '.txt')
         if not os.path.exists(to_ptb_fn):
             with open(to_ptb_fn, 'w') as fd:
                 fd.write('\n'.join(for_ptb))

@@ -170,13 +170,12 @@ def analyze(experiment, output, summary_style=None, max_beams=16):
     # out = []
     # for beam in range(len(avg_rouges_by_beam)):
     #     out.append(str(np.mean(avg_bartscores_by_beam[beam])))
-    # print('\t'.join(out))
+    # print('\t'.join(out)
 
 
 if __name__ == '__main__':
-    # experiment = 'add_doc_bart_large_cnn'
-    # experiment = 'samsum_bert_red_extract_generator_3e5lr'
-    # output = 'test_from_beam_32_extract'
-    experiment = 'samsum_bert_red_extract_generator_3e5lr'
-    output = 'test_from_beam_16_extract_w_unprompted'
+    # experiment = 'xsum_extract_generator_512_len'
+    # output = 'test_from_beam_16_extract_pegasus_xsum_indicator_drop_33'
+    experiment = 'pegasus_xsum'
+    output = 'test_beam_16_outputs'
     analyze(experiment, output)

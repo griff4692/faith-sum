@@ -120,7 +120,9 @@ class TransformerSummarizer(pl.LightningModule):
 
             if self.hparams.extract_indicators:
                 has_bos = 'pegasus' not in self.hparams.hf_model
-                encoder_inputs['extract_indicators'] = corrupt_oracle_indicators(batch, has_bos=has_bos)
+                encoder_inputs['extract_indicators'] = corrupt_oracle_indicators(
+                    batch, has_bos=has_bos, full_random=self.hparams.corrupt_strategy == 'random'
+                )
                 corrupt_encoder_outputs = self.get_encoder_h(encoder_inputs)
                 updated_inputs = {
                     'encoder_outputs': corrupt_encoder_outputs,
@@ -133,7 +135,7 @@ class TransformerSummarizer(pl.LightningModule):
                 probs_neg = torch.softmax(output.logits, dim=-1)
                 unlike_smooth, _ = label_smoothed_unlikelihood(probs_neg, batch['labels'], reduce=True)
                 metrics['unlikelihood'] = unlike_smooth
-                return_loss += unlike_smooth
+                return_loss += self.hparams.unlike_coef * unlike_smooth
 
             # Add word-level brio
             if self.hparams.add_brio_loss and self.hparams.is_word_brio:

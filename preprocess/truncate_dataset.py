@@ -16,13 +16,13 @@ from preprocess.bert_align_playground import add_bert_alignment_no_red, add_bert
 
 BS_PARAMS = {
     'samsum': {
-        # 'threshold': 0.87,
-        # 'p_factor': 0.8,
-        # 'max_per_sent': 3,
-        'avg_imp_threshold': 0.02,
-        'max_imp_threshold': 0.15,
-        'max_coverage': 0.95,
-        'max_retrievals': 4,
+        # 'avg_imp_threshold': 0.02,
+        # 'max_imp_threshold': 0.15,
+        # 'max_coverage': 0.95,
+        # 'max_retrievals': 4,
+        'threshold': 0.575,
+        'p_factor': 1.1,
+        'max_per_sent': 3,
     },
     'xsum': {
         'threshold': 0.55,
@@ -87,15 +87,9 @@ def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, bs, bs_toke
         target_sents_str = [str(x) for x in target_sents]
         if bs is not None:
             try:
-                if args.dataset == 'samsum':
-                    bert_idxs, _ = add_bert_alignment_no_red(
-                        bs, bs_tokenizer, source_sents_str, target_sents_str,
-                        **BS_PARAMS[args.dataset]
-                    )
-                else:
-                    bert_idxs, _ = add_bert_alignment(
-                        bs, source_sents_str, target_sents_str, **BS_PARAMS[args.dataset]
-                    )
+                bert_idxs, _ = add_bert_alignment(
+                    bs, source_sents_str, target_sents_str, **BS_PARAMS[args.dataset]
+                )
             except Exception as e:
                 print(e)
                 print('Error with BertScore. Probably empty source or target. Setting to same as ROUGE gain')
@@ -153,17 +147,14 @@ if __name__ == '__main__':
     if args.add_bert:
         args.num_proc = 1  # Can't use torch in multi-process without 'spawn' start method (not worth it)
         hf = 'microsoft/deberta-large-mnli'
-        if args.dataset == 'samsum':
-            bs = AutoModel.from_pretrained(hf).eval().to(0)
-            bs_tokenizer = AutoTokenizer.from_pretrained(hf)
-        else:
-            bs = BERTScorer(model_type=hf, device=args.device, idf=False)
+        bs = BERTScorer(model_type=hf, device=args.device, idf=False)
 
     input_col, target_col = summarization_name_mapping[args.dataset]
     if 'pegasus' in args.hf_model:
         out_dir = os.path.join(args.data_dir, args.dataset + '_pegasus')
     else:
         out_dir = os.path.join(args.data_dir, args.dataset)
+    print(f'Saving to {out_dir}')
 
     if args.dataset == 'xsum':
         max_input_length = 512
