@@ -5,40 +5,13 @@ import argparse
 import spacy
 from datasets import load_dataset
 from transformers import AutoTokenizer
-from bert_score.scorer import BERTScorer
-from transformers import AutoModel
 
 from preprocess.extract_oracles import convert_to_sents
-from preprocess.convert_abstractive_to_extractive import gain_selection
 from sum_constants import summarization_name_mapping
-from preprocess.bert_align_playground import add_bert_alignment_no_red, add_bert_alignment
-
-
-BS_PARAMS = {
-    'samsum': {
-        # 'avg_imp_threshold': 0.02,
-        # 'max_imp_threshold': 0.15,
-        # 'max_coverage': 0.95,
-        # 'max_retrievals': 4,
-        'threshold': 0.575,
-        'p_factor': 1.1,
-        'max_per_sent': 3,
-    },
-    'xsum': {
-        'threshold': 0.55,
-        'p_factor': 1.3,
-        'max_per_sent': 2,
-    },
-    'cnn_dailymail': {
-        'threshold': 0.55,
-        'p_factor': 1.1,
-        'max_per_sent': 2,
-    }
-}
 
 
 def get_ids(
-        args, nlp, tokenizer, batch_data, input_col, target_col, bs, bs_tokenizer, max_input_length=1024,
+        args, nlp, tokenizer, batch_data, input_col, target_col, max_input_length=1024,
         max_output_length=256
 ):
     batch_source_sents = [
@@ -68,59 +41,14 @@ def get_ids(
         max_length=max_output_length,
     )['input_ids']
 
-    oracle_idxs = []
-    oracle_bert_idxs = []
-    batch_size = len(source_annotated)
-    oracle_rouge1 = []
-    oracle_rouge2 = []
-    rouge1_history = []
-    rouge2_history = []
-    best_history = []
-    for batch_idx in range(batch_size):
-        target = batch_data[target_col][batch_idx]
-        target_sents = convert_to_sents(target, nlp, is_dialogue=False)  # Summaries never in dialogue format
-        source_sents = [sent for i, sent in enumerate(batch_source_sents[batch_idx]) if i < num_sents[batch_idx]]
-        source_sents_tok = [[str(token.text) for token in sentence] for sentence in source_sents]
-        target_sents_tok = [[str(token.text) for token in sentence] for sentence in target_sents]
-        # Sort oracle order or not
-        idxs, rouge, r1_hist, r2_hist, best_hist = gain_selection(
-            source_sents_tok, target_sents_tok, 5, lower=True, sort=False)
-
-        source_sents_str = [str(x) for x in source_sents]
-        target_sents_str = [str(x) for x in target_sents]
-        if bs is not None:
-            try:
-                bert_idxs, _ = add_bert_alignment(
-                    bs, source_sents_str, target_sents_str, **BS_PARAMS[args.dataset]
-                )
-            except Exception as e:
-                print(e)
-                print('Error with BertScore. Probably empty source or target. Setting to same as ROUGE gain')
-                bert_idxs = idxs
-            oracle_bert_idxs.append(bert_idxs)
-
-        rouge1_history.append(r1_hist)
-        rouge2_history.append(r2_hist)
-        best_history.append(best_hist)
-        oracle_idxs.append(idxs)
-        oracle_rouge1.append(rouge['rouge_1'])
-        oracle_rouge2.append(rouge['rouge_2'])
-
     row = {
         'source_annotated': source_annotated,
         'input_ids': input_ids,
         'labels': labels,
         'num_source_sents_pre_trunc': [len(x) for x in batch_source_sents],
         'num_source_sents': num_sents,
-        'oracle_idxs': oracle_idxs,
-        'oracle_rouge1': oracle_rouge1,
-        'oracle_rouge2': oracle_rouge2,
-        'rouge1_history': rouge1_history,
-        'rouge2_history': rouge2_history,
-        'best_history': best_history,
     }
-    if bs is not None:
-        row['oracle_idxs_bert'] = oracle_bert_idxs
+
     return row
 
 
@@ -141,17 +69,9 @@ if __name__ == '__main__':
     ])
     parser.add_argument('--num_proc', default=16, type=int)
     parser.add_argument('--max_num_sents', default=200, type=int)
-    parser.add_argument('-add_bert', default=False, action='store_true')
 
     args = parser.parse_args()
     nlp = spacy.load('en_core_web_sm')
-    bs = None
-    bs_tokenizer = None
-    if args.add_bert:
-        args.num_proc = 1  # Can't use torch in multi-process without 'spawn' start method (not worth it)
-        hf = 'microsoft/deberta-large-mnli'
-        bs = BERTScorer(model_type=hf, device=args.device, idf=False)
-
     input_col, target_col = summarization_name_mapping[args.dataset]
     if 'pegasus' in args.hf_model:
         out_dir = os.path.join(args.data_dir, args.dataset + '_pegasus')
@@ -183,10 +103,10 @@ if __name__ == '__main__':
     for split in args.splits.split(','):
         print(f'Processing {len(dataset[split])} {split} examples')
         encoded = dataset[split].map(lambda examples: get_ids(
-            args, nlp, tokenizer, examples, input_col, target_col, bs, bs_tokenizer,
+            args, nlp, tokenizer, examples, input_col, target_col,
             max_input_length=max_input_length,
             max_output_length=max_output_length,
-        ), batched=True, batch_size=100, num_proc=args.num_proc)
+        ), batched=True, batch_size=1000, num_proc=args.num_proc)
         encoded = encoded.filter(lambda example: len(example[input_col].strip()) > 0)
         dataset[split] = encoded
     dataset.save_to_disk(out_dir)
