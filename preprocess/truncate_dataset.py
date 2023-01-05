@@ -37,7 +37,10 @@ BS_PARAMS = {
 }
 
 
-def get_ids(args, nlp, tokenizer, batch_data, input_col, target_col, bs, bs_tokenizer, max_input_length=1024, max_output_length=256):
+def get_ids(
+        args, nlp, tokenizer, batch_data, input_col, target_col, bs, bs_tokenizer, max_input_length=1024,
+        max_output_length=256
+):
     batch_source_sents = [
         convert_to_sents(inputs, nlp, is_dialogue=args.dataset == 'samsum') for inputs in batch_data[input_col]
     ]

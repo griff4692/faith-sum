@@ -175,7 +175,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     infer_dataset(args, 'abstract_experiment')
-    infer_hf_model(args)
+    infer_hf_model(args, is_abstract=True)
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
     decode_suffix = args.decode_method + '_' + str(args.num_candidates)
@@ -219,6 +219,8 @@ if __name__ == '__main__':
     results = []
     if args.dataset == 'samsum':
         lp_candidates = [0.0, 0.5, 1.0, 2.0, 3.0, 4.0]
+    elif args.dataset == 'xsum':
+        lp_candidates = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     else:
         lp_candidates = [1.0, 2.0, 3.0, 4.0, 5.0]
     for lp in lp_candidates:
