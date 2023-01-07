@@ -2,6 +2,7 @@ import os
 import regex as re
 
 import argparse
+import ujson
 import spacy
 from datasets import load_dataset
 from transformers import AutoTokenizer
@@ -11,23 +12,37 @@ from sum_constants import summarization_name_mapping
 
 
 def get_ids(
-        args, nlp, tokenizer, batch_data, input_col, target_col, max_input_length=1024,
-        max_output_length=256
+        args, split, tokenizer, batch_data, max_input_length=1024,
+        max_output_length=256,
 ):
-    batch_source_sents = [
-        convert_to_sents(inputs, nlp, is_dialogue=args.dataset == 'samsum') for inputs in batch_data[input_col]
-    ]
-    source_annotated = [
-        # TODO test this
-        # WARNING!  When running CNN/DM, s.text.strip() was just s
-        # Might be different pre-processing results
-        ''.join(
-            [f'<s{i}> {s.text.strip()}' for i, s in enumerate(source_sents) if i < args.max_num_sents]
-        ) for source_sents in batch_source_sents
-    ]
+
+    source_edus = []
+    target_edus = []
+    source_annotated = []
+    target_annotated = []
+    for id in batch_data['id']:
+        fn = os.path.join(args.data_dir, 'edu', split, f'{id}.json')
+        with open(fn, 'r') as fd:
+            edus = ujson.load(fd)
+
+        sedu = [x for x in edus if x['dtype'] == 'source']
+        tedu = [x for x in edus if x['dtype'] == 'target']
+
+        sedu = list(sorted(sedu, key=lambda x: x['sent_idx']))
+        tedu = list(sorted(tedu, key=lambda x: x['sent_idx']))
+
+        tps = re.split(r'(<e>)', ' '.join(sedu))
+        sedu_arr = [
+            s.strip() for i, s in enumerate(tps) if i > 0 if tps[i - 1] == '<e>'
+        ]
+
+        source_edus.append(sedu_arr)
+        target_edus.append(tedu)
+
+
 
     input_ids = tokenizer(
-        source_annotated,
+        source_edus,
         truncation=True,
         max_length=max_input_length,
     )['input_ids']
@@ -36,7 +51,7 @@ def get_ids(
         len(re.findall('<s\d+>', x)) for x in decoded
     ]
     labels = tokenizer(
-        batch_data[target_col],
+        batch_data['target'],
         truncation=True,
         max_length=max_output_length,
     )['input_ids']

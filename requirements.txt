@@ -6,3 +6,4 @@ pytorch-lightning
 py7zr
 regex
 bert_score
+p-tqdm
