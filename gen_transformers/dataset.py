@@ -15,6 +15,7 @@ from datasets import load_from_disk
 from gen_transformers.data_utils import Seq2SeqCollate
 from preprocess.helpers import _get_ngrams
 from sum_constants import summarization_name_mapping
+from preprocess.align_edu import edus_from_html
 
 
 BRIO_EXPS = {
@@ -27,18 +28,11 @@ def remove_stopwords(tokens):
 
 
 def get_sent_ngrams(source_annotated):
-    tps = re.split(r'(<s\d+>)', source_annotated)
-    source_sents = []
-    for tp_idx, tp in enumerate(tps):
-        if re.match(r'(<s\d+>)', tp) is not None:
-            source_sents.append(tps[tp_idx + 1].strip())
-
-    num_sents = len(re.findall(r'(<s\d+>)', source_annotated))
-    assert len(source_sents) == num_sents
-    def get_ngrams(sent):
-        toks = list(map(lambda x: x.lower(), sent.split(' ')))
+    source_edus = edus_from_html(source_annotated)
+    def get_ngrams(edu):
+        toks = list(map(lambda x: x.lower(), edu.split('\W+')))
         return [_get_ngrams(1, toks), _get_ngrams(2, toks), _get_ngrams(3, toks)]
-    source_ngrams = list(map(get_ngrams, source_sents))
+    source_ngrams = list(map(get_ngrams, source_edus))
     return source_ngrams
 
 
@@ -96,23 +90,19 @@ class SummaryDataModule(pl.LightningDataModule):
         if self.args.add_brio_loss:
             if self.args.use_oracle_candidates:
                 out_dir = os.path.join(self.args.data_dir, self.args.dataset, 'oracle')
-                bert_suffix = '_bert' if 'bert' in self.args.oracle_column else ''
-                out_fn = os.path.join(out_dir, f'{split}_candidates{bert_suffix}.json')
+                out_fn = os.path.join(out_dir, f'{split}_candidates.json')
                 with open(out_fn, 'r') as fd:
                     candidates = ujson.load(fd)
 
                 brio_candidates = {}
                 for dataset_id, cands in candidates.items():
-                    if 'bert' in self.args.oracle_column:
-                        scores = [float(x) for x in cands['ea']['from_extract_rouges'].split('<cand>')]
-                        extract_idxs = [x['extract_idx'] for x in cands['oracles']]
-                        order = np.argsort(-np.array(scores))
-                        scores_ordered = [scores[i] for i in order]
-                        extract_idxs_ordered = [extract_idxs[i] for i in order]
-                    else:
-                        scores_ordered = [x['mean_f1'] for x in cands]
-                        extract_idxs_ordered = [x['extract_idx'] for x in cands]
-
+                    scores = [float(x) for x in cands['ea']['from_extract_rouges'].split('<cand>')]
+                    extract_idxs = [x['extract_idx'] for x in cands['oracles']]
+                    order = np.argsort(-np.array(scores))
+                    scores_ordered = [scores[i] for i in order]
+                    extract_idxs_ordered = [extract_idxs[i] for i in order]
+                    # scores_ordered = [x['mean_f1'] for x in cands]
+                    # extract_idxs_ordered = [x['extract_idx'] for x in cands]
                     for i in range(1, len(scores_ordered)):  # Assert it's pre-sorted by ROUGE
                         assert scores_ordered[i - 1] >= scores_ordered[i]
                     if len(cands) < 2:
@@ -140,76 +130,6 @@ class SummaryDataModule(pl.LightningDataModule):
             valid_hf_ids = [i for i, dataset_idx in enumerate(split_dataset['id']) if dataset_idx in available_keys]
             print(f'Filtering out for {len(valid_hf_ids)}/{len(split_dataset)} contrastive BRIO examples')
             split_dataset = split_dataset.select(valid_hf_ids)
-
-        # if self.args.add_brio_loss:
-        #     if self.args.is_word_brio:
-        #         if self.args.use_regular_candidates:
-        #             max_brio_candidates = 4
-        #             brio_candidates_raw = self.brio_candidates[split]
-        #             brio_candidates = {}
-        #             for dataset_id, arr in brio_candidates_raw.items():
-        #                 candidates = arr[0][:max_brio_candidates]
-        #                 rouges = np.array(arr[1][:max_brio_candidates])
-        #                 priority = np.argsort(-rouges)
-        #                 cands_ordered = [candidates[i] for i in priority]
-        #                 rouges_ordered = [rouges[i] for i in priority]
-        #                 brio_candidates[dataset_id] = [cands_ordered, rouges_ordered]
-        #         else:
-        #             extract_fn = '/nlp/projects/faithsum/results/add_doc/'
-        #             cand_fn = extract_fn + f'{split}_from_sample_w_diverse_extract_4.csv'
-        #             print(f'Loading in over-generated candidates from {cand_fn}')
-        #             cands = pd.read_csv(cand_fn)
-        #             brio_candidates = {}
-        #             dataset_ids = list(split_dataset['id'])
-        #             for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
-        #                 rouges = np.array(list(map(float, record['from_extract_rouges'].split('<cand>'))))
-        #                 priority = np.argsort(-rouges)
-        #                 from_extract_abstracts = record['from_extract_abstract'].split('<cand>')
-        #                 cands_ordered = [from_extract_abstracts[i] for i in priority]
-        #                 rouges_ordered = [rouges[i] for i in priority]
-        #                 brio_candidates[dataset_ids[record['dataset_idx']]] = [cands_ordered, rouges_ordered]
-        #     else:
-        #         cand_fn = os.path.join(
-        #             self.args.data_dir, 'results',
-        #             self.args.brio_experiment, f'{split}_sample_w_diverse_outputs.csv'
-        #         )
-        #         print(f'Loading in over-generated candidates from {cand_fn}')
-        #         cands = pd.read_csv(cand_fn)
-        #         brio_candidates = defaultdict(list)
-        #         dataset_ids = list(split_dataset['id'])
-        #         for record in tqdm(cands.to_dict('records'), total=len(cands), desc='Sorting them:'):
-        #             extract_rouges = np.array(list(map(float, record['extract_rouges'].split(','))))
-        #             try:
-        #                 extract_idxs = [
-        #                     [int(x) for x in idx_str.split(',')] for idx_str in record['extract_idx'].split('<cand>')
-        #                 ]
-        #             except:
-        #                 print('Cannot parse empty extract')
-        #                 continue
-        #
-        #             assert len(extract_rouges) == len(extract_idxs)
-        #             priority = np.argsort(-extract_rouges)
-        #             extract_idxs_ordered = [extract_idxs[i] for i in priority]
-        #             extract_rouges_ordered = [extract_rouges[i] for i in priority]
-        #
-        #             # De-Duplicate
-        #             extract_idxs_uniq = [
-        #                 extract_idx for i, extract_idx in enumerate(
-        #                     extract_idxs_ordered
-        #                 ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
-        #             ]
-        #
-        #             extract_rouges_uniq = [
-        #                 extract_rouges_ordered[i] for i, extract_idx in enumerate(
-        #                     extract_idxs_ordered
-        #                 ) if i == 0 or extract_idxs_ordered[i - 1] != extract_idx
-        #             ]
-        #
-        #             if len(extract_rouges_uniq) < 2:
-        #                 print(f'Only {len(extract_rouges_uniq)} unique candidate provided for this example.')
-        #                 continue
-        #
-        #             brio_candidates[dataset_ids[record['dataset_idx']]] = [extract_idxs_uniq, extract_rouges_uniq]
 
         n = len(split_dataset)
         idxs = list(range(n))
@@ -279,7 +199,7 @@ class SummarizationDataset(Dataset):
         # Empirically, better performance from generating extracts in order in which they appear in source
         # Rather than by "relevance" as defined by ROUGE, for instance
         # Sort oracle order or not
-        oracle_labels = np.sort(example[self.args.oracle_column])
+        oracle_labels = np.sort(example['oracle_idxs'])
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
         source_annotated = example['source_annotated']
         input_ids = example['input_ids']
@@ -306,11 +226,6 @@ class SummarizationDataset(Dataset):
             if len(candidates) > self.args.max_brio_candidates:
                 candidates = candidates[:self.args.max_brio_candidates]
                 scores = scores[:self.args.max_brio_candidates]
-            # for i in range(len(candidates)):
-            #     if type(candidates[i]) == dict:
-            #         if i < len(candidates) - 1:
-            #             assert candidates[i]['mean_f1'] >= candidates[i + 1]['mean_f1']
-            #         candidates[i] = list(sorted(candidates[i]['extract_idx']))
 
             scores = np.array(scores)
             norm_scores = (scores - min(scores)) / (max(scores) - min(scores))

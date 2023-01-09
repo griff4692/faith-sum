@@ -30,6 +30,20 @@ from eval.diversity import diversity_score
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 
 
+def edu_reps(mask, h):
+    assert mask.sum() % 2 == 1  # Assert Odd
+
+    edu_idxs = torch.where(mask)[0]
+
+    assert int(edu_idxs[0].item()) == 0
+    cls_h = [h[edu_idxs[0]]]
+    for start in range(1, len(edu_idxs), 2):
+        pooled = h[edu_idxs[start]:edu_idxs[start + 1]].mean(dim=1)
+        cls_h.append(pooled)
+
+    return torch.stack(cls_h)
+
+
 class TransformerSummarizer(pl.LightningModule):
     def __init__(self, args, tokenizer, hf_model):
         super().__init__()
@@ -443,7 +457,10 @@ class TransformerSummarizer(pl.LightningModule):
         sent_decoder_h = []
         stop_input_id = torch.LongTensor([0]).to(self.device)
         for batch_idx in range(batch_size):
-            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
+            row_h = encoder_h[batch_idx]
+            mask = cls_mask[batch_idx]
+
+            cls_h = edu_reps(mask, row_h)
             eos_id = self.get_eos(cls_h.size()[1])
             labels = oracle_labels[batch_idx]
             eos_dummy = torch.LongTensor([eos_id]).to(self.device)
@@ -530,7 +547,7 @@ class TransformerSummarizer(pl.LightningModule):
         batch_size = len(cls_mask)
         stop_input_id = torch.LongTensor([0]).to(self.device)
         for batch_idx in range(batch_size):
-            cls_h = encoder_h[batch_idx, cls_mask[batch_idx], :].unsqueeze(0)
+            cls_h = edu_reps(cls_mask[batch_idx], encoder_h[batch_idx])
             inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
             eos_token_id = self.get_eos(cls_h.size()[1])
             fixed_kwargs = {
@@ -542,9 +559,6 @@ class TransformerSummarizer(pl.LightningModule):
             }
 
             fixed_kwargs.update(**gen_kwargs)
-            # for k, v in fixed_kwargs.items():
-            #     if k not in {'inputs_embeds', 'eos_token_id'}:
-            #         print(k, v)
             outputs = self.generate_with_sent_bart(source_ngrams=source_ngrams[batch_idx], **fixed_kwargs)
             beam_scores = outputs.sequences_scores.cpu().numpy().tolist()
 

@@ -3,7 +3,6 @@ import regex as re
 
 import argparse
 import ujson
-import spacy
 from datasets import load_from_disk
 from transformers import AutoTokenizer
 from gen_transformers.model_utils import infer_hf_model
@@ -18,7 +17,7 @@ def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, 
 
     num_source_edus_pre_trunc = []
     for id in batch_data['id']:
-        fn = os.path.join(args.data_dir, 'edu', split, f'{id}.json')
+        fn = os.path.join(args.data_dir, 'edu', args.dataset, split, f'{id}.json')
         assert os.path.exists(fn)
         with open(fn, 'r') as fd:
             edus = ujson.load(fd)
@@ -73,7 +72,7 @@ if __name__ == '__main__':
     parser.add_argument('--splits', default='train,validation,test')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--hf_model', default=None)
-    parser.add_argument('--num_proc', default=64, type=int)
+    parser.add_argument('--num_proc', default=1, type=int)
 
     args = parser.parse_args()
 
@@ -98,8 +97,14 @@ if __name__ == '__main__':
     tokenizer.add_special_tokens(special_tokens_dict)
     encoded_data = {}
     for split in args.splits.split(','):
-        print(f'Processing {len(dataset[split])} {split} examples')
-        encoded = dataset[split].map(
+        # Filter dataset by which have been extracted
+        filtered = dataset[split].filter(
+            lambda ex: os.path.exists(os.path.join(args.data_dir, 'edu', args.dataset, split, ex['id'] + '.json')),
+            batched=False, num_proc=args.num_proc,
+        )
+
+        print(f'Processing {len(filtered)}/{len(dataset[split])} {split} examples')
+        encoded = filtered.map(
             lambda examples: add_edus_and_ids(
                 args, split, tokenizer, examples, max_input_length=max_input_length,
                 max_output_length=max_output_length,

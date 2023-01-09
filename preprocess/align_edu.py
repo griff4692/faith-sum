@@ -42,7 +42,7 @@ def align_example_edus(batch):
         target_edus = edus_from_html(target_annot)
 
         score_matrix = align_edus(source_edus, target_edus)
-        osl = list(map(float, np.argmax(score_matrix, axis=1).tolist()))
+        osl = list(map(float, np.max(score_matrix, axis=1).tolist()))
         oa = list(map(int, np.argmax(score_matrix, axis=0).tolist()))
 
         oracle_alignments.append(oa)

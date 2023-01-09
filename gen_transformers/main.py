@@ -43,8 +43,7 @@ def run(args):
         tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
 
     if args.add_sent_toks:
-        add_tokens = [f'<s{i}>' for i in range(args.max_num_sents)]
-        add_tokens.append('<sep>')  # Not used right now
+        add_tokens = ['<e>', '</e>']
         special_tokens_dict = {'additional_special_tokens': add_tokens}
         tokenizer.add_special_tokens(special_tokens_dict)
 
@@ -61,9 +60,8 @@ def run(args):
             checkpoint_path=args.pretrained_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False
         )
 
-        if args.add_sent_toks and '<s1>' not in tokenizer.additional_special_tokens:
-            add_tokens = [f'<s{i}>' for i in range(args.max_num_sents)]
-            add_tokens.append('<sep>')  # Not used right now
+        if args.add_sent_toks and '<e>' not in tokenizer.additional_special_tokens:
+            add_tokens = ['<e>', '</e>']
             special_tokens_dict = {'additional_special_tokens': add_tokens}
             tokenizer.add_special_tokens(special_tokens_dict)
             model.model.resize_token_embeddings(len(tokenizer))
@@ -170,7 +168,6 @@ if __name__ == '__main__':
     parser.add_argument('--val_monitor_metric', default='combined')
     parser.add_argument('--val_metric_mode', default='min')
     parser.add_argument('--oracle_drop_p', default=0.0, type=float)
-    parser.add_argument('--oracle_column', default='oracle_idxs', choices=['oracle_idxs', 'oracle_idxs_bert'])
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 3e-5
@@ -184,7 +181,6 @@ if __name__ == '__main__':
     parser.add_argument('--max_steps', default=150000, type=int)
     parser.add_argument('--max_epochs', default=20, type=int)
     parser.add_argument('--max_output_length', type=int, default=256)  # For training only
-    parser.add_argument('--max_num_sents', type=int, default=200)
     parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--save_top_k', type=int, default=1)
     parser.add_argument('-skip_if_present', default=False, action='store_true')
@@ -221,7 +217,7 @@ if __name__ == '__main__':
     # Override: If we are generating an extract, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style or args.extract_indicators
     if args.add_sent_toks:
-        print('Pre-pending each sentence in the source document with special token <s{idx}>.')
+        print('Bracketing each EDU in the source document with special tokens <e> ... </e>.')
 
     args.weight_dir = os.path.join(args.data_dir, 'weights')
     experiment_dir = os.path.join(args.weight_dir, args.experiment)
