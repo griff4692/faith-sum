@@ -9,6 +9,8 @@ def infer_hf_model(args, is_abstract=False):
             args.hf_model = 'lidiya/bart-large-xsum-samsum'
         elif args.dataset == 'cnn_dailymail':
             args.hf_model = 'facebook/bart-large-cnn'
+        elif args.dataset == 'nyt':  # TODO ask Alex-Fabbri (Github TM) - which tokenizer to use
+            args.hf_model = 'facebook/bart-large'
         elif args.dataset == 'xsum':
             if not is_abstract:
                 args.hf_model = 'facebook/bart-large-xsum'
