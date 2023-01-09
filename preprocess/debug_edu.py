@@ -41,15 +41,25 @@ def validate_example(fn):
         return None
 
 
+def get_error_cts(fn):
+    assert fn.endswith('json')
+    with open(fn, 'r') as fd:
+        obj = ujson.load(fd)
+        return any(['error' in x for x in obj])
+
+
 if __name__ == '__main__':
     alex_pattern = True
+    check_for_errors = True
     if alex_pattern:
         pattern = '/nlp/projects/faithsum/edu/*/*/*.json'
     else:
         pattern = os.path.expanduser(os.path.join('~', 'edu_alignments_sample', '*'))
+
+    func = get_error_cts if check_for_errors else validate_example
     fns = list(glob(pattern))
     print(f'{len(fns)} files matching pattern')
-    invalid_fns = list(filter(None, list(p_uimap(validate_example, fns))))
+    invalid_fns = list(filter(None, list(p_uimap(func, fns))))
 
     print(f'{len(invalid_fns)} invalid fns')
     counts = []

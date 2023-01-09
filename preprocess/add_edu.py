@@ -11,11 +11,17 @@ from gen_transformers.model_utils import infer_hf_model
 EDU_SPECIAL_TOKENS = ['<e>', '</e>']
 
 
+def ensure_has_edu(text):
+    ct = len(re.findall('<e>', text))
+    if ct == 0:
+        return f'<e>{text}</e>'
+    return text
+
+
 def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, max_output_length=256):
     target_edu_annotated = []
     source_edu_annotated = []
 
-    num_source_edus_pre_trunc = []
     for id in batch_data['id']:
         fn = os.path.join(args.data_dir, 'edu', args.dataset, split, f'{id}.json')
         assert os.path.exists(fn)
@@ -28,9 +34,8 @@ def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, 
         source_sents_w_edu = list(sorted(sedu, key=lambda x: x['sent_idx']))
         target_sents_w_edu = list(sorted(tedu, key=lambda x: x['sent_idx']))
 
-        num_source_edus_pre_trunc.append(len(source_sents_w_edu))
-        flat_source_sents_w_edu = ' '.join(list(map(lambda x: x['sent_w_edu'], source_sents_w_edu)))
-        target_edu_annotated.append(' '.join(list(map(lambda x: x['sent_w_edu'], target_sents_w_edu))))
+        flat_source_sents_w_edu = ' '.join(list(map(lambda x: ensure_has_edu(x['sent_w_edu']), source_sents_w_edu)))
+        target_edu_annotated.append(' '.join(list(map(lambda x: ensure_has_edu(x['sent_w_edu']), target_sents_w_edu))))
         source_edu_annotated.append(flat_source_sents_w_edu)
 
     input_ids = tokenizer(
