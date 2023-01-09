@@ -69,12 +69,11 @@ def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Add EDUs to the Sentencized Datasets')
 
-    parser.add_argument('--dataset', default='xsum')
-    parser.add_argument('--device', default=0, type=int)
+    parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--splits', default='train,validation,test')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--hf_model', default=None)
-    parser.add_argument('--num_proc', default=16, type=int)
+    parser.add_argument('--num_proc', default=64, type=int)
 
     args = parser.parse_args()
 
