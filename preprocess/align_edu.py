@@ -2,11 +2,13 @@ import os
 import regex as re
 
 import argparse
+import spacy
 import numpy as np
 from datasets import load_from_disk
 
 from gen_transformers.model_utils import infer_hf_model
 from preprocess.convert_abstractive_to_extractive import _calc_rouge
+from preprocess.convert_abstractive_to_extractive import gain_selection
 
 
 def edus_from_html(text):
@@ -33,10 +35,16 @@ def align_edus(sedus, tedus):
     return scores
 
 
-def align_example_edus(batch):
-    oracle_idxs = []
+def align_example_edus(batch, nlp):
+    oracle_align_idxs = []
     oracle_alignments = []
     oracle_soft_labels = []
+    oracle_gain_idxs = []
+    best_oracle_idxs = []
+    gain_r1, gain_r2 = [], []
+    best_r1, best_r2 = [], []
+    gain_r1_v2, gain_r2_v2 = [], []
+    align_r1, align_r2 = [], []
     for source_annot, target_annot, max_num in zip(
             batch['source_edu_annotated'], batch['target_edu_annotated'], batch['num_edus_post_trunc']
     ):
@@ -46,14 +54,59 @@ def align_example_edus(batch):
         score_matrix = align_edus(source_edus, target_edus)
         osl = list(map(float, np.max(score_matrix, axis=1).tolist()))
         oa = list(map(int, np.argmax(score_matrix, axis=0).tolist()))
+        oi = list(sorted(list(set(oa))))
+
+        source_edu_toks = [[x.text.strip() for x in nlp(edu) if len(x.text.strip()) > 0] for edu in source_edus]
+        target_toks = [[x.text.strip() for x in nlp(edu) if len(x.text.strip()) > 0] for edu in target_edus]
+
+        gain_idxs, gain_rouges, _, _, _ = gain_selection(
+            source_edu_toks, target_toks, 20, lower=True, sort=True
+        )
+
+        align_oracle = [source_edus[i] for i in oi]
+        gain_oracle = [source_edus[i] for i in gain_idxs]
+
+        gain_obj = _calc_rouge([target_edus], [gain_oracle])
+        align_obj = _calc_rouge([target_edus], [align_oracle])
+
+        gain_r1.append(gain_obj['rouge_1'])
+        gain_r2.append(gain_obj['rouge_2'])
+
+        align_r1.append(align_obj['rouge_1'])
+        align_r2.append(align_obj['rouge_2'])
+
+        gain_r1_v2.append(gain_rouges['rouge_1'])
+        gain_r2_v2.append(gain_rouges['rouge_2'])
+
+        oracle_gain_idxs.append(gain_idxs)
+
+        if gain_obj['rouge_1'] + gain_obj['rouge_2'] > align_obj['rouge_1'] + align_obj['rouge_2']:
+            best_oracle_idxs.append(gain_idxs)
+            best_r1.append(gain_obj['rouge_1'])
+            best_r2.append(gain_obj['rouge_2'])
+        else:
+            best_oracle_idxs.append(oi)
+            best_r1.append(align_obj['rouge_1'])
+            best_r2.append(align_obj['rouge_2'])
 
         oracle_alignments.append(oa)
-        oracle_idxs.append(list(sorted(list(set(oa)))))
+        oracle_align_idxs.append(oi)
         oracle_soft_labels.append(osl)
 
     return {
+        'oracle_idxs': best_oracle_idxs,
+
         'oracle_alignments': oracle_alignments,
-        'oracle_idxs': oracle_idxs,
+        'oracle_align_idxs': oracle_align_idxs,
+        'oracle_gain_idxs': oracle_gain_idxs,
+        'oracle_align_rouge1': align_r1,
+        'oracle_align_rouge2': align_r2,
+        'oracle_gain_rouge1': gain_r1,
+        'oracle_gain_rouge2': gain_r2,
+        'oracle_gain_rouge1_v2': gain_r1_v2,
+        'oracle_gain_rouge2_v2': gain_r2_v2,
+        'oracle_best_rouge1': best_r1,
+        'oracle_best_rouge2': best_r2,
         'oracle_soft_labels': oracle_soft_labels
     }
 
@@ -76,6 +129,8 @@ if __name__ == '__main__':
 
     infer_hf_model(args, is_abstract=False)
 
+    nlp = spacy.load('en_core_web_sm')
+
     out_dir = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
     print(f'Saving to {out_dir}')
 
@@ -83,12 +138,23 @@ if __name__ == '__main__':
     edu_dir = os.path.join(args.data_dir, args.dataset + '_edus')
     dataset = load_from_disk(edu_dir)
 
-    encoded_data = {}
+    metrics = [
+        'oracle_align_rouge1', 'oracle_align_rouge2',
+        'oracle_gain_rouge1', 'oracle_gain_rouge2',
+        'oracle_gain_rouge1_v2', 'oracle_gain_rouge2_v2',
+        'oracle_best_rouge1', 'oracle_best_rouge2'
+    ]
+
     for split in args.splits.split(','):
         print(f'Processing {len(dataset[split])} {split} examples')
-        encoded = dataset[split].map(
-            align_example_edus,
+        dataset[split] = dataset[split].map(
+            lambda batch: align_example_edus(batch, nlp),
             batched=True, batch_size=1000, num_proc=args.num_proc,
         )
-        dataset[split] = encoded
-    dataset.save_to_disk(out_dir)
+
+        print(f'{split} metrics...')
+        for metric in metrics:
+            val = str(round(np.mean(dataset[split][metric]), 3))
+            print(f'{metric} -> {val}')
+    if not args.debug:
+        dataset.save_to_disk(out_dir)
