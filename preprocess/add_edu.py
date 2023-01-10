@@ -48,7 +48,7 @@ def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, 
 
     input_ids_fixed = []
     # Two things to correct for
-    for id_seq in input_ids_fixed:
+    for id_seq in input_ids:
         if id_seq[-1] == SOE:  # If the sequence ends in a start EDU token lets remove that start token (shift back)
             input_ids_fixed.append(id_seq[:-1])  # Remove that
         elif id_seq.rindex(SOE) > id_seq.rindex(EOE):
@@ -91,7 +91,8 @@ if __name__ == '__main__':
     parser.add_argument('--splits', default='train,validation,test')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--hf_model', default=None)
-    parser.add_argument('--num_proc', default=1, type=int)
+    parser.add_argument('--num_proc', default=64, type=int)
+    parser.add_argument('-debug', default=False, action='store_true')
 
     args = parser.parse_args()
 
