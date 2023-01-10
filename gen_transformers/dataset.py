@@ -44,18 +44,12 @@ class SummaryDataModule(pl.LightningDataModule):
         if 'pegasus' in args.hf_model:
             data_dir = os.path.join(args.data_dir, args.dataset + '_pegasus')
         else:
-            data_dir = os.path.join(args.data_dir, args.dataset)
+            data_dir = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
         print(f'Loading data from {data_dir}')
         self.dataset = load_from_disk(data_dir)
         self.tokenizer = tokenizer
         self.num_workers = 0 if args.debug else 8
         self.nlp = spacy.load('en_core_web_sm')
-
-        # if self.args.is_word_brio and self.args.use_regular_candidates:
-        #     candidates_fn = '/nlp/projects/faithsum/cnn_brio_outputs.json'
-        #     print(f'Loading {candidates_fn}')
-        #     with open(candidates_fn, 'r') as fd:
-        #         self.brio_candidates = ujson.load(fd)
 
     def get_train_chunk(self, chunk, num_chunks, **dataloader_kwargs):
         split_dataset = self.dataset['train']
@@ -195,13 +189,13 @@ class SummarizationDataset(Dataset):
         dataset_id = example['id']
         target = example[self.target_col]
 
-        # Let's get pre-computed oracle indices (locations of sentences included in oracle and oracle-abstract ROUGE)
-        # Empirically, better performance from generating extracts in order in which they appear in source
-        # Rather than by "relevance" as defined by ROUGE, for instance
-        # Sort oracle order or not
         oracle_labels = np.sort(example['oracle_idxs'])
+        oracle_soft_labels = example['oracle_soft_labels']
+        assert len(example['oracle_soft_labels']) == len(
+            [x for x in example['input_ids'] if x == self.tokenizer.additional_special_tokens_ids[0]]
+        )
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
-        source_annotated = example['source_annotated']
+        source_annotated = example['source_edu_annotated']
         input_ids = example['input_ids']
         if not self.args.add_sent_toks:
             # Use tokenizer min
@@ -216,6 +210,7 @@ class SummarizationDataset(Dataset):
             'labels': example['labels'],
             'source': source_annotated,
             'oracle_labels': oracle_labels,
+            'oracle_soft_labels': oracle_soft_labels,
             'reference': target,  # Use for evaluation
             'source_ngrams': get_sent_ngrams(source_annotated)
         }

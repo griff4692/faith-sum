@@ -64,8 +64,10 @@ class Seq2SeqCollate:
         oracle_labels = [
             torch.LongTensor(x['oracle_labels']) if x['oracle_labels'] is not None else None for x in batch_list
         ]
+
         oracle_soft_labels = [
-            x['oracle_soft_labels'] for x in batch_list
+            torch.FloatTensor(x['oracle_soft_labels']) if x['oracle_soft_labels'] is not None else None
+            for x in batch_list
         ]
 
         references = [x['reference'] for x in batch_list]

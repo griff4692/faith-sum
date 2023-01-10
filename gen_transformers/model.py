@@ -19,6 +19,7 @@ from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.trainer_pt_utils import LabelSmoother
 from transformers.models.bart.modeling_bart import BartForConditionalCopy
 
+from preprocess.align_edu import edus_from_html
 from preprocess.extract_oracles import convert_to_sents
 from gen_transformers.objectives import label_smoothed_unlikelihood
 from gen_transformers.model_utils import implement_oracle_indicators, corrupt_oracle_indicators
@@ -38,10 +39,10 @@ def edu_reps(mask, h):
     assert int(edu_idxs[0].item()) == 0
     cls_h = [h[edu_idxs[0]]]
     for start in range(1, len(edu_idxs), 2):
-        pooled = h[edu_idxs[start]:edu_idxs[start + 1]].mean(dim=1)
+        pooled = h[edu_idxs[start]:edu_idxs[start + 1] + 1].mean(dim=0)
         cls_h.append(pooled)
 
-    return torch.stack(cls_h)
+    return torch.stack(cls_h).unsqueeze(0)
 
 
 class TransformerSummarizer(pl.LightningModule):
@@ -482,7 +483,9 @@ class TransformerSummarizer(pl.LightningModule):
             sent_decoder_h.append(output.decoder_hidden_states[-1].mean(dim=0))
 
             # Don't include the document token for the salience classifier (first position)
-            sal_scores = self.sent_bart.salience_classifier(output.encoder_last_hidden_state[:, 1:])
+            # Also don't include the dummy STOP token at position -1
+            # [DOC, EDU 1, EDU 2, ... EDU n, STOP]
+            sal_scores = self.sent_bart.salience_classifier(output.encoder_last_hidden_state[0, 1:-1]).squeeze(-1)
             kl_loss = kld_loss(torch.log_softmax(sal_scores, dim=0), torch.softmax(soft_labels.half(), dim=0)).sum()
             soft_losses.append(kl_loss)
 
@@ -1114,12 +1117,10 @@ class TransformerSummarizer(pl.LightningModule):
         source_special = self.tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
         source_no_special = self.tokenizer.batch_decode(batch['input_ids'].tolist(), skip_special_tokens=True)
         if self.hparams.add_sent_toks:  # If we have sentences demarcated in the source text
-            source_sents = list(map(lambda x: re.split(
-                r'<s\d*>', x.replace('<s>', '').replace('</s>', '').replace('<pad>', '').strip())[1:], source_special))
-            source_sents = list(map(lambda ss: list(map(lambda x: x.strip(), ss)), source_sents))
+            source_sents = [edus_from_html(x) for x in source_special]
             source_sent_toks = [
-                [[str(t.text).strip() for t in self.nlp(sentence) if len(str(t.text).strip()) > 0] for sentence in doc]
-                for doc in source_sents
+                [[str(t.text).strip() for t in self.nlp(edu) if len(str(t.text).strip()) > 0] for edu in edus]
+                for edus in source_sents
             ]
         else:  # We have to sentence split ourselves
             source_sents = [

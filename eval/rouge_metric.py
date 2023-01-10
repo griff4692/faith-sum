@@ -9,12 +9,13 @@ try:
     ROUGE_HOME = os.environ['ROUGE_HOME']
     from pyrouge import Rouge155
     if not os.path.exists(ROUGE_HOME):
+        hash = 'e26bef9'
         print("Preparing ROUGE Perl script - this will take a few seconds")
         subprocess.run(["curl", "-L", "https://github.com/Yale-LILY/SummEval/tarball/master", "-o", "project.tar.gz", "-s"])
         subprocess.run(["tar", "-xzf", "project.tar.gz"])
-        subprocess.run(["mv", "Yale-LILY-SummEval-9b58833/evaluation/summ_eval/ROUGE-1.5.5/", ROUGE_HOME])
+        subprocess.run(["mv", f"Yale-LILY-SummEval-{hash}/evaluation/summ_eval/ROUGE-1.5.5/", ROUGE_HOME])
         subprocess.run(["rm", "project.tar.gz"])
-        subprocess.run(["rm", "-rf", "Yale-LILY-SummEval-9b58833/"])
+        subprocess.run(["rm", "-rf", f"Yale-LILY-SummEval-{hash}"])
 except:
     dirname, _ = os.path.split(os.path.abspath(__file__))
     print(f'Please run the following command and add it to your startup script: \n export ROUGE_HOME={os.path.join(dirname, "ROUGE-1.5.5/")}')
@@ -39,8 +40,12 @@ class RougeMetric:
         try:
             self.r = Rouge155(rouge_dir=rouge_dir, rouge_args=rouge_args, log_level=log_level)
         except:
-            print(f'Please run this command: \n pip install -U  git+https://github.com/bheinzerling/pyrouge.git')
-            exit()
+            try:
+                self.r = Rouge155(rouge_dir=rouge_dir, rouge_args=rouge_args)
+            except Exception as e:
+                print(e)
+                print(f'Please run this command: \n pip install -U  git+https://github.com/bheinzerling/pyrouge.git')
+                exit()
         self.rouge_args = rouge_args
 
     def evaluate_example(self, summary, reference):

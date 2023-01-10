@@ -7,3 +7,7 @@ py7zr
 regex
 bert_score
 p-tqdm
+scipy
+nltk
+rouge_score
+wandb
