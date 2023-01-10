@@ -113,10 +113,13 @@ class TransformerSummarizer(pl.LightningModule):
                     metrics['rank_corel'] = brio_info['rank_corel']
             else:
                 assert self.hparams.extract_method == 'select'
+                salience_loss = None
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
             metrics['extract'] = extract_loss
             return_loss += self.hparams.mle_weight * extract_loss
-            return_loss += self.hparams.salience_weight * salience_loss
+            if salience_loss is not None:
+                return_loss += self.hparams.salience_weight * salience_loss
+                metrics['salience'] = salience_loss
 
         # score is just extraction (no word-level generation)
         if 'abstract' in self.hparams.summary_style:
@@ -154,49 +157,6 @@ class TransformerSummarizer(pl.LightningModule):
                 unlike_smooth, _ = label_smoothed_unlikelihood(probs_neg, batch['labels'], reduce=True)
                 metrics['unlikelihood'] = unlike_smooth
                 return_loss += self.hparams.unlike_coef * unlike_smooth
-
-            # Add word-level brio
-            if self.hparams.add_brio_loss and self.hparams.is_word_brio:
-                margin_losses = []
-                pos_neg_gaps = []
-                brio_ranks = []
-                win_fracs = []
-                rank_corels = []
-                batch_size = len(batch['labels'])
-                for batch_idx in range(batch_size):
-                    margin_loss, pos_neg_gap, pred_idx, win_frac, rank_corel = self.word_brio_step(
-                        brio_word_labels[batch_idx],
-                        encoder_h[batch_idx].unsqueeze(0),
-                    )
-
-                    rank_corels.append(rank_corel)
-                    if margin_loss is not None:
-                        margin_losses.append(margin_loss)
-                    if pos_neg_gap is not None:
-                        pos_neg_gaps.append(pos_neg_gap)
-                    brio_ranks.append(pred_idx)
-                    if win_frac is not None:
-                        win_fracs.append(win_frac)
-                # Sum in the BRIO paper, was previously mean for us
-                margin_losses = torch.stack(margin_losses).mean()
-                pos_neg_gaps = np.mean(pos_neg_gaps)
-                brio_ranks = np.mean(brio_ranks)
-                win_fracs = np.mean(win_fracs)
-                rank_corel = np.mean(rank_corels)
-                brio_info = {
-                    'margin_loss': margin_losses,
-                    'pos_neg_gap': pos_neg_gaps,
-                    'brio_rank': brio_ranks,
-                    'brio_win_rate': win_fracs,
-                    'rank_corel': rank_corel,
-                }
-
-                return_loss += self.hparams.brio_weight * brio_info['margin_loss']
-                metrics['word_brio'] = brio_info['margin_loss']
-                metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
-                metrics['brio_rank'] = brio_info['brio_rank']
-                metrics['brio_win_rate'] = brio_info['brio_win_rate']
-                metrics['rank_corel'] = brio_info['rank_corel']
 
             return_loss += self.hparams.mle_weight * smooth_lm_loss
         return {
@@ -284,17 +244,6 @@ class TransformerSummarizer(pl.LightningModule):
         if len(output_dict['extracts']) > 0:
             extracts = [x['summary'] for x in output_dict['extracts']]
             eval_metrics.update(self.compute_rouge(extracts, batch['references'], prefix='extract_'))
-
-        # Measure consistency between abstract (and implied extract) and generated extract
-        if len(output_dict['abstracts']) > 0 and len(output_dict['extracts']) > 0:
-            if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
-                eval_metrics.update(self.measure_plan_abstract_consistency(batch, output_dict, **validation_kwargs))
-            # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
-            # If the plan is working, this should be very high (the abstract should follow the plan)
-            extracts = [x['summary'] for x in output_dict['extracts']]
-            eval_metrics.update(
-                self.compute_rouge(extracts, output_dict['abstracts'], prefix='extract_gen_')
-            )
 
         self.log_metrics(eval_metrics, is_train=False)
         return return_loss
@@ -434,16 +383,6 @@ class TransformerSummarizer(pl.LightningModule):
                         [str(x['best_extract_mean_f1']) for x in extract_cand_metrics]
                     )
 
-            # Measure consistency between abstract (and implied extract) and generated extract
-            if gen_output['abstracts'] is not None and gen_output['extracts'] is not None:
-                if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
-                    save_out.update(self.measure_plan_abstract_consistency(batch, gen_output, **gen_kwargs))
-                # What is the ROUGE score of the extractive plan treating the abstractive prediction as the reference
-                # If the plan is working, this should be very high (the abstract should follow the plan)
-                extracts = [x['summary'] for x in gen_output['extracts']]
-                save_out.update(
-                    self.compute_rouge(extracts, gen_output['abstracts'], prefix='extract_gen_', eval=eval)
-                )
             batch_outputs.append(save_out)
 
         return batch_outputs
@@ -627,7 +566,7 @@ class TransformerSummarizer(pl.LightningModule):
         if not self.sent_bart.training:
             gen_kwargs = {
                 'min_length': 3,  # 2 without the special token
-                'max_length': 10,
+                'max_length': 20,
                 'num_beams': 4,
             }
             summaries, _ = self.sample_gen_extracts(batch, source, encoder_h, source_ngrams, **gen_kwargs)
@@ -1015,81 +954,6 @@ class TransformerSummarizer(pl.LightningModule):
             print(f'Warning! Truncating non-padding tokens: {full_str} -> {trunc_str}')
         return summary_idx[1: end_idx]
 
-    def measure_plan_abstract_consistency(self, batch, outputs, eval=False, **gen_kwargs):
-        extract_idxs = [x['idxs'] for x in outputs['extracts']]
-        implied_extract_idxs = [x['idxs'] for x in outputs['implied_extracts']]
-
-        extracts = [x['summary'] for x in outputs['extracts']]
-        implied_extracts = [x['summary'] for x in outputs['implied_extracts']]
-
-        metrics = self.compute_rouge(extracts, implied_extracts, eval=eval, prefix='extract_implied_')
-
-        overlaps = []
-        for batch_idx, (extract_idx, implied_idx) in enumerate(zip(extract_idxs, implied_extract_idxs)):
-            n = len(outputs['source'][batch_idx]['sents'])
-            intersection = set(implied_idx).intersection(extract_idx)
-            overlap_p = len(intersection) / len(extract_idx)
-            overlap_r = len(intersection) / len(implied_idx)
-            overlap_f1 = 0.0 if max(overlap_p, overlap_r) == 0 else 2 * overlap_p * overlap_r / (
-                    overlap_p + overlap_r)
-
-            row = {
-                'extract_implied_sent_precision': overlap_p,
-                'extract_implied_sent_recall': overlap_r,
-                'extract_implied_sent_f1': overlap_f1
-            }
-
-            if 'extract' not in self.hparams.summary_style:  # We aren't adhering to anything (they are separate)
-                rand_plan_idxs = list(np.sort(list(np.random.choice(np.arange(n), size=(min(n, 3)), replace=False))))
-                rand_plan = ''.join([f'<s{i}>' for i in rand_plan_idxs])
-                decoder_input_ids = self.tokenizer(
-                    '<s></s>' + rand_plan + '<sep>', add_special_tokens=False, return_tensors='pt'
-                )['input_ids'].to(self.device)
-
-                default_kwargs = {  # Some of these values may get overridden by gen_kwargs
-                    'input_ids': batch['input_ids'][batch_idx].unsqueeze(0),
-                    'attention_mask': batch['attention_mask'][batch_idx].unsqueeze(0),
-                    'decoder_input_ids': decoder_input_ids,
-                    'num_return_sequences': 1,
-                    'max_length': self.hparams.max_output_length,
-                    'no_repeat_ngram_size': 3,
-                    'early_stopping': True,
-                    'output_scores': True
-                }
-
-                default_kwargs.update(gen_kwargs)
-                default_kwargs.pop('references', None)
-                pred_ids = self.model.generate(**default_kwargs)
-                pred = self.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)[0]
-
-                pred_sents = convert_to_sents(pred, self.nlp, is_dialogue=self.hparams.dataset == 'samsum')
-                from_rand_abstract_sents_tok = [[str(token.text) for token in sentence] for sentence in pred_sents]
-
-                source_toks = outputs['source'][batch_idx]['sent_toks']
-                from_rand_implied_idx = gain_selection(
-                    source_toks, from_rand_abstract_sents_tok, 5, lower=True, sort=True
-                )[0]
-
-                rand_plan_int = [int(x.lstrip('<s').rstrip('>')) for x in rand_plan]
-                rand_intersection = set(rand_plan_int).intersection(set(from_rand_implied_idx))
-                rand_overlap_p = len(rand_intersection) / len(rand_plan_int)
-                rand_overlap_r = len(rand_intersection) / len(from_rand_implied_idx)
-                rand_overlap_f1 = 0.0 if max(rand_overlap_p, rand_overlap_r) == 0 \
-                    else 2 * rand_overlap_p * rand_overlap_r / (rand_overlap_p + rand_overlap_r)
-
-                rand_row = {
-                    'rand_plan_implied_sent_precision': rand_overlap_p,
-                    'rand_plan_implied_sent_recall': rand_overlap_r,
-                    'rand_plan_implied_sent_f1': rand_overlap_f1
-                }
-                row.update(rand_row)
-            overlaps.append(row)
-        df = pd.DataFrame(overlaps)
-        avgs = {k: df[k].mean() for k in df.columns}
-        metrics.update(avgs)
-
-        return avgs
-
     def compute_rouge(self, generated, gold, prefix='', eval=False, rouge_types=['rouge1', 'rouge2', 'rougeL']):
         if eval:  # Use SummEval PERL script
             outputs = self.rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
@@ -1227,6 +1091,3 @@ class TransformerSummarizer(pl.LightningModule):
         for k, v in metrics.items():
             split_str = 'train' if is_train else 'validation'
             self.log(f'{split_str}/{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)
-            # Backward compatibility
-            # if is_train:
-            #     self.log(f'{split_str}_{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)
