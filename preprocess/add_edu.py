@@ -19,6 +19,8 @@ def ensure_has_edu(text):
 
 
 def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, max_output_length=256):
+    SOE, EOE = tokenizer.additional_special_tokens_ids
+
     target_edu_annotated = []
     source_edu_annotated = []
 
@@ -44,7 +46,20 @@ def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, 
         max_length=max_input_length,
     )['input_ids']
 
-    decoded = tokenizer.batch_decode(input_ids, skip_special_tokens=False)
+    input_ids_fixed = []
+    # Two things to correct for
+    for id_seq in input_ids_fixed:
+        if id_seq[-1] == SOE:  # If the sequence ends in a start EDU token lets remove that start token (shift back)
+            input_ids_fixed.append(id_seq[:-1])  # Remove that
+        elif id_seq.rindex(SOE) > id_seq.rindex(EOE):
+            assert len([x for x in id_seq if x == SOE]) == len([x for x in id_seq if x == EOE]) + 1
+            # Let's convert last token to EOE
+            id_seq[-1] = EOE
+            input_ids_fixed.append(id_seq)
+        else:
+            input_ids_fixed.append(id_seq)
+
+    decoded = tokenizer.batch_decode(input_ids_fixed, skip_special_tokens=False)
 
     num_source_edus_post_trunc = [
         len(re.findall('<e>', x)) for x in decoded
@@ -59,7 +74,7 @@ def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, 
     row = {
         'source_edu_annotated': source_edu_annotated,
         'target_edu_annotated': target_edu_annotated,
-        'input_ids': input_ids,
+        'input_ids': input_ids_fixed,
         'labels': labels,
         # Tokenizer truncates > 1,024 token sources. We just record the pre and post trunc \# of EDUs
         # We will only compute oracle alignments up to truncated

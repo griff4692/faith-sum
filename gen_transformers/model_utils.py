@@ -84,7 +84,6 @@ def sentence_indicators(cls_mask, sent_idx_to_mask, prev_mask, has_bos=True):
     # TODO check this
     for sent_idx in range(0, num_sents, 2):
         sent_loc = sent_locs[sent_idx].item()
-        # The end of edu token will come after (add 1 because we want to include it)
         end_loc = sent_locs[sent_idx + 1].item() + 1 if sent_idx + 1 < num_sents else max_seq_len
         if sent_idx in sent_idx_to_mask:
             sent_mask[0, sent_loc:end_loc] = 2

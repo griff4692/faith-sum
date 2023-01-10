@@ -1579,6 +1579,14 @@ class BartForConditionalCopy(BartPretrainedModel):
     def __init__(self, config: BartConfig):
         super().__init__(config)
         self.model = BartCopyModel(config)
+
+        self.salience_classifier = BartClassificationHead(
+            config.d_model,
+            config.d_model,
+            1,
+            config.classifier_dropout,
+        )
+
         self.cand_classifier = BartClassificationHead(
             config.d_model * 2 + 30,
             config.d_model,
@@ -1593,6 +1601,9 @@ class BartForConditionalCopy(BartPretrainedModel):
         )
         self.model._init_weights(self.calibration_classifier.dense)
         self.model._init_weights(self.calibration_classifier.out_proj)
+
+        self.model._init_weights(self.salience_classifier.dense)
+        self.model._init_weights(self.salience_classifier.out_proj)
         # self.dropout = nn.Dropout(p=0.1)
         # self.calibration_projection = nn.Linear(config.d_model, config.d_model, bias=True)
         # self.calibration_classifier = nn.Linear(config.d_model * 2, 1, bias=True)

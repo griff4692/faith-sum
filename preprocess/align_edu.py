@@ -37,8 +37,10 @@ def align_example_edus(batch):
     oracle_idxs = []
     oracle_alignments = []
     oracle_soft_labels = []
-    for source_annot, target_annot in zip(batch['source_annotated_edu'], batch['target_annotated_edu']):
-        source_edus = edus_from_html(source_annot)
+    for source_annot, target_annot, max_num in zip(
+            batch['source_annotated_edu'], batch['target_annotated_edu'], batch['num_edus_post_trunc']
+    ):
+        source_edus = edus_from_html(source_annot)[:max_num]
         target_edus = edus_from_html(target_annot)
 
         score_matrix = align_edus(source_edus, target_edus)

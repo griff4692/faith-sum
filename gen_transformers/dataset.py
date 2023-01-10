@@ -239,14 +239,6 @@ class SummarizationDataset(Dataset):
                 candidates.insert(0, list(oracle_labels))
                 norm_scores.insert(0, 1)
 
-            # if self.args.is_word_brio:
-            #     with self.tokenizer.as_target_tokenizer():
-            #         brio_word_labels = np.array(self.tokenizer(
-            #             candidates, max_length=1024, truncation=True, padding='longest'
-            #         )['input_ids'], dtype=np.int64)
-            #         brio_word_labels[np.where(brio_word_labels == self.tokenizer.pad_token_id)] = -100
-            #     row['brio_word_labels'] = brio_word_labels   # brio_word_labels (change back if you need this)
-            # else:
             row['brio_sent_labels'] = candidates
             row['brio_norm_scores'] = norm_scores
         return row

@@ -100,7 +100,9 @@ class TransformerSummarizer(pl.LightningModule):
         if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
             if self.hparams.extract_method == 'generate':
-                extract_loss, extracts, brio_info, sent_decoder_h = self.generate_extracts(batch, source, encoder_h)
+                extract_loss, salience_loss, extracts, brio_info, sent_decoder_h = self.generate_extracts(
+                    batch, source, encoder_h
+                )
                 if brio_info is not None:
                     return_loss += self.hparams.brio_weight * brio_info['margin_loss']
                     metrics['sent_brio'] = brio_info['margin_loss']
@@ -113,6 +115,7 @@ class TransformerSummarizer(pl.LightningModule):
                 extract_loss, extracts = self.score_extracts(batch, source, encoder_h, build=build_extracts)
             metrics['extract'] = extract_loss
             return_loss += self.hparams.mle_weight * extract_loss
+            return_loss += self.hparams.salience_weight * salience_loss
 
         # score is just extraction (no word-level generation)
         if 'abstract' in self.hparams.summary_style:
@@ -450,9 +453,12 @@ class TransformerSummarizer(pl.LightningModule):
     def get_eos(self, seq_len):
         return seq_len - 1  # Decrement for Document Token in first position
 
-    def compute_gen_extract_loss(self, cls_mask, encoder_h, oracle_labels, source_ngrams):
+    def compute_gen_extract_loss(self, cls_mask, encoder_h, oracle_labels, oracle_soft_labels, source_ngrams):
+        kld_loss = nn.KLDivLoss(reduction='none')
+
         batch_size = len(cls_mask)
         losses = []
+        soft_losses = []
         sent_encoder_h = []
         sent_decoder_h = []
         stop_input_id = torch.LongTensor([0]).to(self.device)
@@ -463,6 +469,7 @@ class TransformerSummarizer(pl.LightningModule):
             cls_h = edu_reps(mask, row_h)
             eos_id = self.get_eos(cls_h.size()[1])
             labels = oracle_labels[batch_idx]
+            soft_labels = oracle_soft_labels[batch_idx]
             eos_dummy = torch.LongTensor([eos_id]).to(self.device)
             labels = torch.cat([labels, eos_dummy]).unsqueeze(0)
             # Concatenate
@@ -473,9 +480,16 @@ class TransformerSummarizer(pl.LightningModule):
             loss = output.loss
             sent_encoder_h.append(output.encoder_last_hidden_state)
             sent_decoder_h.append(output.decoder_hidden_states[-1].mean(dim=0))
+
+            # Don't include the document token for the salience classifier (first position)
+            sal_scores = self.sent_bart.salience_classifier(output.encoder_last_hidden_state[:, 1:])
+            kl_loss = kld_loss(torch.log_softmax(sal_scores, dim=0), torch.softmax(soft_labels.half(), dim=0)).sum()
+            soft_losses.append(kl_loss)
+
             losses.append(loss)
         avg_losses = torch.stack(losses).mean()
-        return avg_losses, sent_encoder_h, sent_decoder_h
+        avg_soft_losses = torch.stack(soft_losses).mean()
+        return avg_losses, avg_soft_losses, sent_encoder_h, sent_decoder_h
 
     def sample_score_extracts(self, batch, source, encoder_h, num_return_sequences=1, topk=10, joint_rank=True):
         batch_size = len(batch['cls_mask'])
@@ -603,8 +617,8 @@ class TransformerSummarizer(pl.LightningModule):
         brio_scores = batch.pop('brio_scores', None)
         brio_norm_scores = batch.pop('brio_norm_scores', None)
         source_ngrams = batch.pop('source_ngrams', None)
-        loss, sent_encoder_h, sent_decoder_h = self.compute_gen_extract_loss(
-            cls_mask, encoder_h, batch['oracle_labels'], source_ngrams
+        loss, salience_loss, sent_encoder_h, sent_decoder_h = self.compute_gen_extract_loss(
+            cls_mask, encoder_h, batch['oracle_labels'], batch['oracle_soft_labels'], source_ngrams
         )
         summaries = None
         if not self.sent_bart.training:
@@ -653,7 +667,7 @@ class TransformerSummarizer(pl.LightningModule):
                 'brio_win_rate': win_fracs,
                 'rank_corel': rank_corel,
             }
-        return loss, summaries, brio_info, sent_decoder_h
+        return loss, salience_loss, summaries, brio_info, sent_decoder_h
 
     def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
         all_summaries = []
