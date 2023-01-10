@@ -158,7 +158,7 @@ if __name__ == '__main__':
     parser.add_argument('--brio_weight', default=1, type=float)
     parser.add_argument('--mle_weight', default=1, type=float)
     parser.add_argument('--salience_weight', default=0.0, type=float)
-    parser.add_argument('--salience_temp', default=1.0, type=float)
+    parser.add_argument('--salience_temp', default=10.0, type=float)
     parser.add_argument('--brio_margin', default=0.001, type=float)
     parser.add_argument('--brio_length_penalty', default=2.0, type=float)
     parser.add_argument('--brio_scale', default=1.0, type=float)

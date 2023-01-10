@@ -20,7 +20,7 @@ from global_utils import get_free_gpus
 DATASET_KWARGS = {
     'cnn_dailymail': {
         'abstract': {'min_length': 56, 'max_length': 142, 'length_penalty': 2.0},
-        'extract': {'min_length': 3, 'max_length': 20, 'length_penalty': 2.0},
+        'extract': {'min_length': 3, 'max_length': 20, 'length_penalty': 1.0},
     },
     'xsum': {
         'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
