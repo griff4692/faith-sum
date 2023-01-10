@@ -11,6 +11,13 @@ from gen_transformers.model_utils import infer_hf_model
 EDU_SPECIAL_TOKENS = ['<e>', '</e>']
 
 
+def list_rindex(li, x):
+    for i in reversed(range(len(li))):
+        if li[i] == x:
+            return i
+    raise ValueError(f'{x} is not in list')
+
+
 def ensure_has_edu(text):
     ct = len(re.findall('<e>', text))
     if ct == 0:
@@ -51,7 +58,7 @@ def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, 
     for id_seq in input_ids:
         if id_seq[-1] == SOE:  # If the sequence ends in a start EDU token lets remove that start token (shift back)
             input_ids_fixed.append(id_seq[:-1])  # Remove that
-        elif id_seq.rindex(SOE) > id_seq.rindex(EOE):
+        elif list_rindex(id_seq, SOE) > list_rindex(id_seq, EOE):
             assert len([x for x in id_seq if x == SOE]) == len([x for x in id_seq if x == EOE]) + 1
             # Let's convert last token to EOE
             id_seq[-1] = EOE
@@ -61,9 +68,17 @@ def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, 
 
     decoded = tokenizer.batch_decode(input_ids_fixed, skip_special_tokens=False)
 
-    num_source_edus_post_trunc = [
+    num_source_edus_post_trunc_start = [
         len(re.findall('<e>', x)) for x in decoded
     ]
+
+    num_source_edus_post_trunc = [
+        len(re.findall('</e>', x)) for x in decoded
+    ]
+
+    assert all([
+        a == b for a, b in zip(num_source_edus_post_trunc_start, num_source_edus_post_trunc)
+    ])
 
     labels = tokenizer(
         batch_data['target'],
@@ -95,6 +110,9 @@ if __name__ == '__main__':
     parser.add_argument('-debug', default=False, action='store_true')
 
     args = parser.parse_args()
+
+    if args.debug:
+        args.num_proc = 1
 
     infer_hf_model(args, is_abstract=False)
 

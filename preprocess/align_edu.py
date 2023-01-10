@@ -38,7 +38,7 @@ def align_example_edus(batch):
     oracle_alignments = []
     oracle_soft_labels = []
     for source_annot, target_annot, max_num in zip(
-            batch['source_annotated_edu'], batch['target_annotated_edu'], batch['num_edus_post_trunc']
+            batch['source_edu_annotated'], batch['target_edu_annotated'], batch['num_edus_post_trunc']
     ):
         source_edus = edus_from_html(source_annot)[:max_num]
         target_edus = edus_from_html(target_annot)
@@ -67,8 +67,12 @@ if __name__ == '__main__':
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--hf_model', default=None)
     parser.add_argument('--num_proc', default=64, type=int)
+    parser.add_argument('-debug', default=False, action='store_true')
 
     args = parser.parse_args()
+
+    if args.debug:
+        args.num_proc = 1
 
     infer_hf_model(args, is_abstract=False)
 
