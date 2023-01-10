@@ -62,8 +62,6 @@ def implement_oracle_indicators(batch, has_bos=True):
     ids = []
     batch_size = len(batch['oracle_labels'])
     for batch_idx in range(batch_size):
-        # p = batch['priority'][batch_idx]
-        # trunc_idx = min(len(p), oracle_mask_k)
         cls_locations = batch['cls_mask'][batch_idx].unsqueeze(0)
         prev_mask = batch['attention_mask'][batch_idx].unsqueeze(0)
         idx_to_keep = batch['oracle_labels'][batch_idx]
@@ -83,9 +81,11 @@ def sentence_indicators(cls_mask, sent_idx_to_mask, prev_mask, has_bos=True):
     sent_locs = cls_mask.nonzero()[:, 1]
     max_seq_len = cls_mask.size()[1]
     num_sents = len(sent_locs)
-    for sent_idx, sent_loc in enumerate(sent_locs):
-        sent_loc = sent_loc.item()
-        end_loc = sent_locs[sent_idx + 1].item() if sent_idx + 1 < num_sents else max_seq_len
+    # TODO check this
+    for sent_idx in range(0, num_sents, 2):
+        sent_loc = sent_locs[sent_idx].item()
+        # The end of edu token will come after (add 1 because we want to include it)
+        end_loc = sent_locs[sent_idx + 1].item() + 1 if sent_idx + 1 < num_sents else max_seq_len
         if sent_idx in sent_idx_to_mask:
             sent_mask[0, sent_loc:end_loc] = 2
         else:

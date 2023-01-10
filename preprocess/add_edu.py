@@ -63,7 +63,6 @@ def add_edus_and_ids(args, split, tokenizer, batch_data, max_input_length=1024, 
         'labels': labels,
         # Tokenizer truncates > 1,024 token sources. We just record the pre and post trunc \# of EDUs
         # We will only compute oracle alignments up to truncated
-        'num_edus_pre_trunc': num_source_edus_pre_trunc,
         'num_edus_post_trunc': num_source_edus_post_trunc,
     }
 
