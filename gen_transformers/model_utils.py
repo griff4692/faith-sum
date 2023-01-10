@@ -82,7 +82,7 @@ def sentence_indicators(cls_mask, sent_idx_to_mask, prev_mask, has_bos=True):
     max_seq_len = cls_mask.size()[1]
     num_sents = len(sent_locs)
     assert num_sents % 2 == 0
-    num_sents /= 2
+    num_sents = num_sents // 2
     for sent_idx in range(num_sents):
         # Adjust for offset
         s, e = sent_idx * 2, sent_idx * 2 + 1
