@@ -81,10 +81,13 @@ def sentence_indicators(cls_mask, sent_idx_to_mask, prev_mask, has_bos=True):
     sent_locs = cls_mask.nonzero()[:, 1]
     max_seq_len = cls_mask.size()[1]
     num_sents = len(sent_locs)
-    # TODO check this
-    for sent_idx in range(0, num_sents, 2):
-        sent_loc = sent_locs[sent_idx].item()
-        end_loc = sent_locs[sent_idx + 1].item() + 1 if sent_idx + 1 < num_sents else max_seq_len
+    assert num_sents % 2 == 0
+    num_sents /= 2
+    for sent_idx in range(num_sents):
+        # Adjust for offset
+        s, e = sent_idx * 2, sent_idx * 2 + 1
+        sent_loc = sent_locs[s].item()
+        end_loc = sent_locs[e].item() + 1 if e < num_sents else max_seq_len
         if sent_idx in sent_idx_to_mask:
             sent_mask[0, sent_loc:end_loc] = 2
         else:

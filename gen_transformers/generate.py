@@ -20,16 +20,14 @@ from global_utils import get_free_gpus
 DATASET_KWARGS = {
     'cnn_dailymail': {
         'abstract': {'min_length': 56, 'max_length': 142, 'length_penalty': 2.0},
-        'extract': {'min_length': 3, 'max_length': 10, 'length_penalty': 1.0},
+        'extract': {'min_length': 3, 'max_length': 20, 'length_penalty': 2.0},
     },
     'xsum': {
         'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
-        'extract_bert': {'min_length': 2, 'max_length': 10, 'length_penalty': 1.0},
         'abstract': {'min_length': 11, 'max_length': 62, 'length_penalty': 0.6},
     },
     'samsum': {
         'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
-        'extract_bert': {'min_length': 2, 'max_length': 10, 'length_penalty': 1.0},
         'abstract': {'min_length': 10, 'max_length': 100, 'length_penalty': 0.6}
     }
 }
@@ -91,13 +89,12 @@ if __name__ == '__main__':
                 'abstract is original reference'
     )
     parser.add_argument('--hf_model', default=None)
-    parser.add_argument('--oracle_column', default='oracle_idxs', choices=['oracle_idxs', 'oracle_idxs_bert'])
     parser.add_argument('--split', default='validation')
     parser.add_argument('--chunk', default=None, type=int)
     parser.add_argument('--num_chunks', default=8, type=int)
 
     # Decoding Parameters
-    parser.add_argument('--decode_method', default='diverse', choices=['beam', 'diverse', 'nucleus'])
+    parser.add_argument('--decode_method', default='beam', choices=['beam', 'diverse', 'nucleus'])
     parser.add_argument('--num_return_sequences', default=1, type=int)
     parser.add_argument('--length_penalty', default=None, type=float)
     parser.add_argument('--diversity_penalty', default=None, type=float)
@@ -175,8 +172,7 @@ if __name__ == '__main__':
             )
         outputs = []
 
-        bert_suffix = '_bert' if 'bert' in args.oracle_column else ''
-        gen_kwargs = DATASET_KWARGS[args.dataset][args.summary_style + bert_suffix]
+        gen_kwargs = DATASET_KWARGS[args.dataset][args.summary_style]
         if args.length_penalty is not None:
             default_lp = gen_kwargs['length_penalty']
             print(f'Changing length penalty from default of {default_lp} to {args.length_penalty}')

@@ -1,7 +1,6 @@
 import ujson
 import os
 from string import punctuation
-import regex as re
 
 import numpy as np
 from nltk.corpus import stopwords
@@ -10,8 +9,8 @@ import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import spacy
 STOPWORDS = set(stopwords.words('english'))
-
 from datasets import load_from_disk
+
 from gen_transformers.data_utils import Seq2SeqCollate
 from preprocess.helpers import _get_ngrams
 from sum_constants import summarization_name_mapping
@@ -214,6 +213,12 @@ class SummarizationDataset(Dataset):
             'reference': target,  # Use for evaluation
             'source_ngrams': get_sent_ngrams(source_annotated)
         }
+
+        if self.args.debug:
+            source_edus = edus_from_html(source_annotated)
+            extract = [source_edus[i] for i in oracle_labels]
+            print(extract)
+            print(target)
 
         if self.args.add_brio_loss:
             candidates, scores = self.brio_candidates[dataset_id].copy()  # We modify it in place so let's insert

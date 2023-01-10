@@ -425,7 +425,8 @@ class TransformerSummarizer(pl.LightningModule):
             # Also don't include the dummy STOP token at position -1
             # [DOC, EDU 1, EDU 2, ... EDU n, STOP]
             sal_scores = self.sent_bart.salience_classifier(output.encoder_last_hidden_state[0, 1:-1]).squeeze(-1)
-            kl_loss = kld_loss(torch.log_softmax(sal_scores, dim=0), torch.softmax(soft_labels.half(), dim=0)).sum()
+            target_dist = torch.softmax(soft_labels.half() * self.hparams.salience_temp, dim=0)
+            kl_loss = kld_loss(torch.log_softmax(sal_scores, dim=0), target_dist).sum()
             soft_losses.append(kl_loss)
 
             losses.append(loss)
