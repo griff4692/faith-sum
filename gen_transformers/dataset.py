@@ -41,6 +41,33 @@ def remove_non_oracle(input_ids, oracle_labels, special_token_ids):
     return [input_ids[i] for i in keep_idxs]
 
 
+def corrupt_indicators(input_ids, oracle_idxs, special_token_ids, corrupt_strategy):
+    s, e = special_token_ids
+    start_locs = np.where(np.array(input_ids) == s)[0]
+    end_locs = np.where(np.array(input_ids) == e)[0]
+
+    n = len(start_locs)
+    oracle_n = len(oracle_idxs)
+    assert n == len(end_locs)
+
+    non_oracle_idxs = [i for i in range(n) if i not in oracle_idxs]
+    non_oracle_n = len(non_oracle_idxs)
+
+    if corrupt_strategy == 'random':
+        num_to_replace = min(non_oracle_n, oracle_n)
+        idx_to_keep = np.sort(np.random.choice(non_oracle_idxs, size=(num_to_replace,), replace=False))
+    else:
+        assert corrupt_strategy == 'swap'
+        idx_to_keep = oracle_idxs.copy()
+        if non_oracle_n >= 1:
+            other_sent = int(np.random.choice(non_oracle_idxs))
+            idx_to_keep[np.random.randint(oracle_n)] = other_sent
+            idx_to_keep = list(np.sort(idx_to_keep))
+        else:
+            idx_to_keep = idx_to_keep[:-1]
+    return remove_non_oracle(input_ids, idx_to_keep, special_token_ids)
+
+
 def get_sent_ngrams(source_annotated):
     source_edus = edus_from_html(source_annotated)
     def get_ngrams(edu):
@@ -209,6 +236,7 @@ class SummarizationDataset(Dataset):
         # Make sure you use same sentence tokenizer as in extract_oracles.py (otherwise oracle idxs may not align)
         source_annotated = example['source_edu_annotated']
         input_ids = example['input_ids']
+        corrupt_input_ids = None
         if not self.args.add_sent_toks:
             # Use tokenizer min
             first_sent_idx = 0 if 'pegasus' in self.args.hf_model else 1
@@ -218,6 +246,10 @@ class SummarizationDataset(Dataset):
             input_ids = [x for x in input_ids if x < min_sent_id]
         elif self.args.extract_indicators:
             # Remove Non-Oracle Markers
+            corrupt_input_ids = corrupt_indicators(
+                input_ids.copy(), oracle_labels.copy(), self.tokenizer.additional_special_tokens_ids,
+                self.args.corrupt_strategy
+            )
             input_ids = remove_non_oracle(input_ids, oracle_labels, self.tokenizer.additional_special_tokens_ids)
 
         row = {
@@ -229,6 +261,9 @@ class SummarizationDataset(Dataset):
             'reference': target,  # Use for evaluation
             'source_ngrams': get_sent_ngrams(source_annotated)
         }
+
+        if corrupt_input_ids is not None:
+            row['corrupt_input_ids'] = corrupt_input_ids
 
         if self.args.debug:
             source_edus = edus_from_html(source_annotated)

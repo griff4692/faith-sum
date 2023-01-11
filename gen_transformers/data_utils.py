@@ -41,8 +41,9 @@ class Seq2SeqCollate:
 
     def __call__(self, batch_list):
         # Pad input_ids
-        input_ids = [x['input_ids'] for x in batch_list]
         labels = [x['labels'] for x in batch_list]
+
+        input_ids = [x['input_ids'] for x in batch_list]
         input_seq_lens = [len(x) for x in input_ids]
         max_input_len = max(input_seq_lens)
 
@@ -80,6 +81,17 @@ class Seq2SeqCollate:
             'oracle_soft_labels': oracle_soft_labels,
             'references': references,
         }
+
+        if 'corrupt_input_ids' in batch_list[0]:
+            corrupt_input_ids = [x['corrupt_input_ids'] for x in batch_list]
+            corrupt_input_seq_lens = [len(x) for x in corrupt_input_ids]
+            corrupt_input_ids_pad = torch.from_numpy(np.array([
+                x + [self.tokenizer.pad_token_id] * (max(corrupt_input_seq_lens) - corrupt_input_seq_lens[i])
+                for i, x in enumerate(corrupt_input_ids)
+            ], dtype=np.int64))
+            corrupt_attention_mask = (corrupt_input_ids_pad != self.tokenizer.pad_token_id).float()
+            row['corrupt_input_ids'] = corrupt_input_ids_pad
+            row['corrupt_attention_mask'] = corrupt_attention_mask
 
         if 'brio_sent_labels' in batch_list[0]:
             row['brio_sent_labels'] = [x['brio_sent_labels'] for x in batch_list]

@@ -22,7 +22,6 @@ from transformers.models.bart.modeling_bart import BartForConditionalCopy
 from preprocess.align_edu import edus_from_html
 from preprocess.extract_oracles import convert_to_sents
 from gen_transformers.objectives import label_smoothed_unlikelihood
-from gen_transformers.model_utils import implement_oracle_indicators, corrupt_oracle_indicators
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from eval.rouge_metric import RougeMetric
 from eval.diversity import diversity_score
@@ -85,23 +84,18 @@ class TransformerSummarizer(pl.LightningModule):
                 self.sent_loss = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     def shared_step(self, batch, source=None, build_extracts=True):
-        brio_word_labels = batch.pop('brio_word_labels', None)
         metrics = {}
         extracts = None
         return_loss = 0
 
         encoder_inputs = {'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask']}
-        # if self.hparams.extract_indicators:
-        #     has_bos = 'pegasus' not in self.hparams.hf_model
-        #     encoder_inputs['extract_indicators'] = implement_oracle_indicators(batch, has_bos=has_bos)
         encoder_outputs = self.get_encoder_h(encoder_inputs)
         encoder_h = encoder_outputs.last_hidden_state
-        sent_decoder_h = None
 
         if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
             if self.hparams.extract_method == 'generate':
-                extract_loss, salience_loss, extracts, brio_info, sent_decoder_h = self.generate_extracts(
+                extract_loss, salience_loss, extracts, brio_info = self.generate_extracts(
                     batch, source, encoder_h
                 )
                 if brio_info is not None:
@@ -123,10 +117,6 @@ class TransformerSummarizer(pl.LightningModule):
 
         # score is just extraction (no word-level generation)
         if 'abstract' in self.hparams.summary_style:
-            # sent_decoder_h add to encoder or decoder outputs
-            # sent_decoder_h_pad = torch.nn.utils.rnn.pad_sequence(sent_decoder_h, padding_value=0.0).transpose(1, 0)
-
-            # Model the word-level sentence encoder states with the sentence-level decoder states
             updated_inputs = {
                 'encoder_outputs': encoder_outputs,
                 'attention_mask': batch['attention_mask'],
@@ -140,11 +130,10 @@ class TransformerSummarizer(pl.LightningModule):
             smooth_lm_loss = self.label_smoother(output, batch['labels'])
 
             if self.hparams.extract_indicators:
-                has_bos = 'pegasus' not in self.hparams.hf_model
-                # encoder_inputs['extract_indicators'] = corrupt_oracle_indicators(
-                #     batch, has_bos=has_bos, full_random=self.hparams.corrupt_strategy == 'random'
-                # )
-                corrupt_encoder_outputs = self.get_encoder_h(encoder_inputs)
+                corrupt_encoder_inputs = {
+                    'input_ids': batch['corrupt_input_ids'], 'attention_mask': batch['corrupt_attention_mask']
+                }
+                corrupt_encoder_outputs = self.get_encoder_h(corrupt_encoder_inputs)
                 updated_inputs = {
                     'encoder_outputs': corrupt_encoder_outputs,
                     'attention_mask': batch['attention_mask'],
@@ -400,7 +389,6 @@ class TransformerSummarizer(pl.LightningModule):
         losses = []
         soft_losses = []
         sent_encoder_h = []
-        sent_decoder_h = []
         stop_input_id = torch.LongTensor([0]).to(self.device)
         for batch_idx in range(batch_size):
             row_h = encoder_h[batch_idx]
@@ -419,7 +407,6 @@ class TransformerSummarizer(pl.LightningModule):
             # loss = self.label_smoother(output, labels)
             loss = output.loss
             sent_encoder_h.append(output.encoder_last_hidden_state)
-            sent_decoder_h.append(output.decoder_hidden_states[-1].mean(dim=0))
 
             # Don't include the document token for the salience classifier (first position)
             # Also don't include the dummy STOP token at position -1
@@ -432,7 +419,7 @@ class TransformerSummarizer(pl.LightningModule):
             losses.append(loss)
         avg_losses = torch.stack(losses).mean()
         avg_soft_losses = torch.stack(soft_losses).mean()
-        return avg_losses, avg_soft_losses, sent_encoder_h, sent_decoder_h
+        return avg_losses, avg_soft_losses, sent_encoder_h
 
     def sample_score_extracts(self, batch, source, encoder_h, num_return_sequences=1, topk=10, joint_rank=True):
         batch_size = len(batch['cls_mask'])
@@ -555,12 +542,11 @@ class TransformerSummarizer(pl.LightningModule):
 
     def generate_extracts(self, batch, source, encoder_h):
         cls_mask = batch['cls_mask']
-        # brio_word_labels = batch.pop('brio_word_labels', None)
         brio_sent_labels = batch.pop('brio_sent_labels', None)
         brio_scores = batch.pop('brio_scores', None)
         brio_norm_scores = batch.pop('brio_norm_scores', None)
         source_ngrams = batch.pop('source_ngrams', None)
-        loss, salience_loss, sent_encoder_h, sent_decoder_h = self.compute_gen_extract_loss(
+        loss, salience_loss, sent_encoder_h = self.compute_gen_extract_loss(
             cls_mask, encoder_h, batch['oracle_labels'], batch['oracle_soft_labels'], source_ngrams
         )
         summaries = None
@@ -580,7 +566,6 @@ class TransformerSummarizer(pl.LightningModule):
             rank_corels = []
             for batch_idx in range(len(cls_mask)):
                 margin_loss, pos_neg_gap, pred_idx, win_frac, rank_corel = self.brio_step(
-                    # brio_word_labels[batch_idx],
                     brio_sent_labels[batch_idx],
                     encoder_h[batch_idx].unsqueeze(0),
                     sent_encoder_h[batch_idx],
@@ -610,7 +595,7 @@ class TransformerSummarizer(pl.LightningModule):
                 'brio_win_rate': win_fracs,
                 'rank_corel': rank_corel,
             }
-        return loss, salience_loss, summaries, brio_info, sent_decoder_h
+        return loss, salience_loss, summaries, brio_info
 
     def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
         all_summaries = []
@@ -875,11 +860,6 @@ class TransformerSummarizer(pl.LightningModule):
         else:
             fixed_kwargs['input_ids'] = batch['input_ids']
 
-        # if self.hparams.extract_indicators:
-        #     # Change this from oracle if you want something else
-        #     has_bos = 'pegasus' not in self.hparams.hf_model
-        #     fixed_kwargs['extract_indicators'] = implement_oracle_indicators(batch, has_bos=has_bos)
-
         # Update them with user-specific kwargs
         fixed_kwargs.update(gen_kwargs)
         pred_ids = self.model.generate(**fixed_kwargs)
@@ -1043,7 +1023,7 @@ class TransformerSummarizer(pl.LightningModule):
                     return True
             return False
 
-        high_lr_prefixes = ['extract_indicator_embeddings', 'calibration']
+        high_lr_prefixes = ['calibration']
         ext_embed = [(n, p) for n, p in nps if high_lr(n, high_lr_prefixes)]
         nps = [(n, p) for n, p in nps if not high_lr(n, high_lr_prefixes)]
 
