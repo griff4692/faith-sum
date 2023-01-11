@@ -8,9 +8,9 @@ def infer_hf_model(args, is_abstract=False):
         elif args.dataset == 'nyt':
             args.hf_model = 'facebook/bart-large'
         elif args.dataset == 'xsum':
-            if not is_abstract:
-                args.hf_model = 'facebook/bart-large-xsum'
-            else:
+            if is_abstract:
                 args.hf_model = 'google/pegasus-xsum'
+            else:
+                args.hf_model = 'facebook/bart-large-xsum'
         else:
             raise Exception('Unknown Yet.')

@@ -214,7 +214,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     infer_dataset(args, 'experiment')
-    infer_hf_model(args)
+    infer_hf_model(args, is_abstract=args.summary_style=='abstract')
 
     # Won't held yet for multi-gpu
     args.grad_accum = args.target_batch_size // args.per_device_train_bs
