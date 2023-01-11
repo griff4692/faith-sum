@@ -5,7 +5,6 @@ from copy import deepcopy
 import regex as re
 
 from datasets import load_metric
-import pandas as pd
 import pytorch_lightning as pl
 from nltk import trigrams
 import numpy as np
@@ -136,7 +135,7 @@ class TransformerSummarizer(pl.LightningModule):
                 corrupt_encoder_outputs = self.get_encoder_h(corrupt_encoder_inputs)
                 updated_inputs = {
                     'encoder_outputs': corrupt_encoder_outputs,
-                    'attention_mask': batch['attention_mask'],
+                    'attention_mask': batch['corrupt_attention_mask'],
                     'labels': batch['labels'],
                 }
 

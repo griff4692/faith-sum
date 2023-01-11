@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 from eval.rouge_metric import RougeMetric
 from gen_transformers.data_utils import get_path_from_exp, infer_dataset
 from gen_transformers.model import TransformerSummarizer
-from gen_transformers.model_utils import sentence_indicators, infer_hf_model
+from gen_transformers.model_utils import infer_hf_model
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from gen_transformers.analysis.add_eval_rouge import process_file
@@ -95,12 +95,27 @@ def get_idx(idx_str):
     return list(map(int, idxs))
 
 
-def gen_from_guide(
-        args, nlp, model, tokenizer, source_annotated, reference, idx_to_keep, special_id_min, num_return_sequences=1
-):
-    has_bos = 'pegasus' not in args.hf_model
-    n = len(idx_to_keep)
+def filter_out_extract_tags(text, keep_idxs):
+    new = ''
+    tps = re.split(r'(</?e>)', text)
+    edu_idx = 0
+    for i, tp in enumerate(tps):
+        if tp == '<e>':
+            if edu_idx in keep_idxs:
+                new += tp
+        elif tp == '</e>':
+            if edu_idx in keep_idxs:
+                new += tp
+            edu_idx += 1
+        else:
+            new += tp
+    return new
 
+
+def gen_from_guide(
+        args, nlp, model, tokenizer, source_annotated, reference, idx_to_keep, num_return_sequences=1
+):
+    n = len(idx_to_keep)
     # Remove Duplicates
     # idx_to_keep_no_dup = []
     # seen = set()
@@ -111,10 +126,17 @@ def gen_from_guide(
     #     idx_to_keep_no_dup.append(list(sorted(set(extract))))
     #     seen.add(key)
 
-    source_annotated_rep = [source_annotated for _ in range(len(idx_to_keep))]
+    # No highlights on last beam
+    if args.convert_last_to_unprompted:
+        # Highlights every sentence and lets model choose...
+        idx_to_keep[-1] = []
+
+    source_annotated_tagged = [
+        filter_out_extract_tags(source_annotated, extract_idxs) for extract_idxs in idx_to_keep
+    ]
 
     inputs = tokenizer(
-        source_annotated_rep,
+        source_annotated_tagged,
         padding='longest',
         truncation=True,
         max_length=512 if 'pegasus' in args.hf_model else 1024,
@@ -122,22 +144,9 @@ def gen_from_guide(
     )
     input_ids = inputs['input_ids'].to(args.device)
     attention_mask = inputs['attention_mask'].to(args.device)
-    cls_mask = input_ids >= special_id_min
-    extract_indicators = []
 
-    # No highlights on last beam
-    if args.convert_last_to_unprompted:
-        # Highlights every sentence and lets model choose...
-        idx_to_keep[-1] = list(range(100))
-
-    for cand_idx, extract_idx in enumerate(idx_to_keep):
-        ei = sentence_indicators(
-            cls_mask[cand_idx].unsqueeze(0), extract_idx, attention_mask[cand_idx].unsqueeze(0), has_bos=has_bos
-        )
-        extract_indicators.append(ei)
-    extract_indicators = torch.cat(extract_indicators, dim=0)
     encoder_outputs = model.model.model.encoder(**{
-        'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
+        'input_ids': input_ids, 'attention_mask': attention_mask
     })
 
     shared_kwargs = {
@@ -283,9 +292,6 @@ if __name__ == '__main__':
     print(f'Loading tokenizer from {tokenizer_dir}...')
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
 
-    additional_ids = tokenizer.additional_special_tokens_ids
-    special_id_min = 999999 if len(additional_ids) == 0 else min(tokenizer.additional_special_tokens_ids)
-
     print(f'Loading model from {ckpt_path}...')
     model = TransformerSummarizer.load_from_checkpoint(
         checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False).to(args.device).eval()
@@ -316,7 +322,7 @@ if __name__ == '__main__':
             # Truncate
             extract_idx = [extract_idx[i] for i in order[:args.top_k]]
         gen_output = gen_from_guide(
-            args, nlp, model, tokenizer, source_annotated, reference, extract_idx, special_id_min,
+            args, nlp, model, tokenizer, source_annotated, reference, extract_idx,
             num_return_sequences=args.num_return_sequences
         )
 
