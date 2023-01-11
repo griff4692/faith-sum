@@ -79,6 +79,15 @@ def run(args):
         entity='griffinadams',
     )
 
+    if args.val_monitor_metric is None:
+        if args.summary_style == 'extract':
+            args.val_monitor_metric = 'extract_mean_f1'
+            args.val_metric_mode = 'max'
+        else:
+            args.val_monitor_metric = 'mean_f1'
+            args.val_metric_mode = 'max'
+    else:
+        assert args.val_metric_mode is not None
     monitor_metric = f'validation/{args.val_monitor_metric}'
     mode = args.val_metric_mode
 
@@ -166,8 +175,8 @@ if __name__ == '__main__':
     parser.add_argument('--brio_score_mode', default='likelihood', choices=['score', 'likelihood', 'similarity'])
     parser.add_argument('-include_gold', default=False, action='store_true')
 
-    parser.add_argument('--val_monitor_metric', default='combined')
-    parser.add_argument('--val_metric_mode', default='min')
+    parser.add_argument('--val_monitor_metric', default=None)
+    parser.add_argument('--val_metric_mode', default=None)
     parser.add_argument('--oracle_drop_p', default=0.0, type=float)
 
     # Hyper-Parameters
