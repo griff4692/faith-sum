@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 import numpy as np
 import spacy
+from scipy.stats import spearmanr
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -27,7 +28,7 @@ np.random.seed(1992)
 # TODO: Grid-search
 DATASET_KWARGS = {
     'cnn_dailymail': {
-        'length_penalty': [4.0, 4.0, 3.0, 2.0, 1.0],  # Previously 1.0 (this was tuned for unlikelihood training)
+        'length_penalty': 2.0,  # [4.0, 4.0, 3.0, 2.0, 1.0],  # Previously 1.0 (this was tuned for unlikelihood training)
         'max_length': 142,
         'min_length': 56,
     },
@@ -158,7 +159,7 @@ def gen_from_guide(
     }
     if num_return_sequences == 1:
         gen_kwargs = {
-            'num_beams': 4 if args.dataset == 'cnn_dailymail' else 8,
+            'num_beams': 8 if args.dataset == 'xsum' else 4,
         }
     else:
         gen_kwargs = {
@@ -280,10 +281,11 @@ if __name__ == '__main__':
         outputs = outputs.sample(n=args.max_examples, replace=False, random_state=111)
         n = len(outputs)
 
-    data_dir = os.path.join(args.data_dir, args.dataset)
+    data_dir = os.path.join(args.data_dir, args.dataset + '_edu_annotations')
+    print(f'Loading dataset from {data_dir}')
     dataset = load_from_disk(data_dir)[args.split]
     dataset_idx2id = dataset['id']
-    all_source_annotated = dataset['source_annotated']
+    all_source_annotated = dataset['source_edu_annotated']
 
     records = outputs.to_dict('records')
     weight_dir = os.path.join(args.data_dir, 'weights')
@@ -366,7 +368,6 @@ if __name__ == '__main__':
     updated_df = pd.DataFrame(updated_records)
 
     def compute_corel(xs, ys=None):
-        from scipy.stats import spearmanr
         corels = []
         if ys is None:
             ys = [None for _ in range(len(xs))]
