@@ -23,12 +23,11 @@ DATASET_KWARGS = {
         'extract': {'min_length': 3, 'max_length': 20, 'length_penalty': 1.0},
     },
     'xsum': {
-        'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
+        'extract': {'min_length': 2, 'max_length': 20, 'length_penalty': 2.0},
         'abstract': {'min_length': 11, 'max_length': 62, 'length_penalty': 0.6},
     },
-    'samsum': {
-        'extract': {'min_length': 2, 'max_length': 5, 'length_penalty': 2.0},
-        'abstract': {'min_length': 10, 'max_length': 100, 'length_penalty': 0.6}
+    'nyt': {
+        'extract': {'min_length': 3, 'max_length': 20, 'length_penalty': 1.0},
     }
 }
 
