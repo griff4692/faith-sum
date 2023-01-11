@@ -91,9 +91,9 @@ class TransformerSummarizer(pl.LightningModule):
         return_loss = 0
 
         encoder_inputs = {'input_ids': batch['input_ids'], 'attention_mask': batch['attention_mask']}
-        if self.hparams.extract_indicators:
-            has_bos = 'pegasus' not in self.hparams.hf_model
-            encoder_inputs['extract_indicators'] = implement_oracle_indicators(batch, has_bos=has_bos)
+        # if self.hparams.extract_indicators:
+        #     has_bos = 'pegasus' not in self.hparams.hf_model
+        #     encoder_inputs['extract_indicators'] = implement_oracle_indicators(batch, has_bos=has_bos)
         encoder_outputs = self.get_encoder_h(encoder_inputs)
         encoder_h = encoder_outputs.last_hidden_state
         sent_decoder_h = None
@@ -141,9 +141,9 @@ class TransformerSummarizer(pl.LightningModule):
 
             if self.hparams.extract_indicators:
                 has_bos = 'pegasus' not in self.hparams.hf_model
-                encoder_inputs['extract_indicators'] = corrupt_oracle_indicators(
-                    batch, has_bos=has_bos, full_random=self.hparams.corrupt_strategy == 'random'
-                )
+                # encoder_inputs['extract_indicators'] = corrupt_oracle_indicators(
+                #     batch, has_bos=has_bos, full_random=self.hparams.corrupt_strategy == 'random'
+                # )
                 corrupt_encoder_outputs = self.get_encoder_h(encoder_inputs)
                 updated_inputs = {
                     'encoder_outputs': corrupt_encoder_outputs,
@@ -875,10 +875,10 @@ class TransformerSummarizer(pl.LightningModule):
         else:
             fixed_kwargs['input_ids'] = batch['input_ids']
 
-        if self.hparams.extract_indicators:
-            # Change this from oracle if you want something else
-            has_bos = 'pegasus' not in self.hparams.hf_model
-            fixed_kwargs['extract_indicators'] = implement_oracle_indicators(batch, has_bos=has_bos)
+        # if self.hparams.extract_indicators:
+        #     # Change this from oracle if you want something else
+        #     has_bos = 'pegasus' not in self.hparams.hf_model
+        #     fixed_kwargs['extract_indicators'] = implement_oracle_indicators(batch, has_bos=has_bos)
 
         # Update them with user-specific kwargs
         fixed_kwargs.update(gen_kwargs)

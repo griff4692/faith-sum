@@ -108,15 +108,21 @@ if __name__ == '__main__':
     parser.add_argument('--hf_model', default=None)
     parser.add_argument('--num_proc', default=64, type=int)
     parser.add_argument('-debug', default=False, action='store_true')
+    parser.add_argument('-use_pegasus', default=False, action='store_true')
 
     args = parser.parse_args()
 
     if args.debug:
         args.num_proc = 1
 
-    infer_hf_model(args, is_abstract=False)
+    if args.use_pegasus:
+        pegasus_suffix = '_pegasus'
+        args.hf_model = 'google/pegasus-xsum'
+    else:
+        pegasus_suffix = ''
+        infer_hf_model(args, is_abstract=False)
 
-    out_dir = os.path.join(args.data_dir, args.dataset + '_edus')
+    out_dir = os.path.join(args.data_dir, args.dataset + f'_edus{pegasus_suffix}')
     print(f'Saving to {out_dir}')
 
     if args.dataset == 'xsum':

@@ -26,6 +26,21 @@ def remove_stopwords(tokens):
     return [w for w in tokens if not w.lower() in STOPWORDS and w not in punctuation and len(w.strip()) > 0]
 
 
+def remove_non_oracle(input_ids, oracle_labels, special_token_ids):
+    s, e = special_token_ids
+    start_locs = np.where(np.array(input_ids) == s)[0]
+    end_locs = np.where(np.array(input_ids) == e)[0]
+
+    n = len(start_locs)
+    remove_idxs = []
+    for idx in range(n):
+        if idx not in oracle_labels:
+            remove_idxs += [start_locs[idx], end_locs[idx]]
+
+    keep_idxs = np.sort(list(set(list(range(len(input_ids)))) - set(remove_idxs)))
+    return [input_ids[i] for i in keep_idxs]
+
+
 def get_sent_ngrams(source_annotated):
     source_edus = edus_from_html(source_annotated)
     def get_ngrams(edu):
@@ -40,10 +55,8 @@ class SummaryDataModule(pl.LightningDataModule):
         super().__init__()
 
         self.args = args
-        if 'pegasus' in args.hf_model:
-            data_dir = os.path.join(args.data_dir, args.dataset + '_pegasus')
-        else:
-            data_dir = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
+        pegasus_suffix = '_pegasus' if 'pegasus' in args.hf_model else ''
+        data_dir = os.path.join(args.data_dir, args.dataset + f'_edu_alignments{pegasus_suffix}')
         print(f'Loading data from {data_dir}')
         self.dataset = load_from_disk(data_dir)
         self.tokenizer = tokenizer
@@ -203,6 +216,9 @@ class SummarizationDataset(Dataset):
                 assert example['input_ids'][0] == 96103
             min_sent_id = input_ids[first_sent_idx]
             input_ids = [x for x in input_ids if x < min_sent_id]
+        elif self.args.extract_indicators:
+            # Remove Non-Oracle Markers
+            input_ids = remove_non_oracle(input_ids, oracle_labels, self.tokenizer.additional_special_tokens_ids)
 
         row = {
             'input_ids': input_ids,

@@ -6,7 +6,6 @@ import spacy
 import numpy as np
 from datasets import load_from_disk
 
-from gen_transformers.model_utils import infer_hf_model
 from preprocess.convert_abstractive_to_extractive import _calc_rouge
 from preprocess.convert_abstractive_to_extractive import gain_selection
 
@@ -121,21 +120,22 @@ if __name__ == '__main__':
     parser.add_argument('--hf_model', default=None)
     parser.add_argument('--num_proc', default=64, type=int)
     parser.add_argument('-debug', default=False, action='store_true')
+    parser.add_argument('-use_pegasus', default=False, action='store_true')
 
     args = parser.parse_args()
 
     if args.debug:
         args.num_proc = 1
 
-    infer_hf_model(args, is_abstract=False)
+    pegasus_suffix = '_pegasus' if args.use_pegasus else ''
 
     nlp = spacy.load('en_core_web_sm')
 
-    out_dir = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
+    out_dir = os.path.join(args.data_dir, args.dataset + f'_edu_alignments{pegasus_suffix}')
     print(f'Saving to {out_dir}')
 
     print(f'Loading {args.dataset}...')
-    edu_dir = os.path.join(args.data_dir, args.dataset + '_edus')
+    edu_dir = os.path.join(args.data_dir, args.dataset + f'_edus{pegasus_suffix}')
     dataset = load_from_disk(edu_dir)
 
     metrics = [
