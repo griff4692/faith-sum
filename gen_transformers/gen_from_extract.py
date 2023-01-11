@@ -281,7 +281,7 @@ if __name__ == '__main__':
         outputs = outputs.sample(n=args.max_examples, replace=False, random_state=111)
         n = len(outputs)
 
-    data_dir = os.path.join(args.data_dir, args.dataset + '_edu_annotations')
+    data_dir = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
     print(f'Loading dataset from {data_dir}')
     dataset = load_from_disk(data_dir)[args.split]
     dataset_idx2id = dataset['id']
