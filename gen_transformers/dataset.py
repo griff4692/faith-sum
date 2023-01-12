@@ -236,7 +236,6 @@ class SummarizationDataset(Dataset):
         input_ids = example['input_ids']
         corrupt_input_ids = None
         if not self.args.add_sent_toks:
-            assert 'pegasus' not in self.hparams.hf_model  # TODO for pegasus need to see if this holds
             input_ids = [x for x in input_ids if x not in self.tokenizer.additional_special_tokens_ids]
         elif self.args.extract_indicators:
             # Remove Non-Oracle Markers

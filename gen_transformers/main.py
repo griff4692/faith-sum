@@ -16,6 +16,12 @@ from gen_transformers.model_utils import infer_hf_model
 from gen_transformers.data_utils import infer_dataset
 
 
+def add_edus_to_tokenizer(tokenizer):
+    add_tokens = ['<e>', '</e>']
+    special_tokens_dict = {'additional_special_tokens': add_tokens}
+    tokenizer.add_special_tokens(special_tokens_dict)
+
+
 def run(args):
     if args.gpu_device is not None:
         gpus = [args.gpu_device]
@@ -38,10 +44,7 @@ def run(args):
         precision = 32
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
-    if args.add_sent_toks:
-        add_tokens = ['<e>', '</e>']
-        special_tokens_dict = {'additional_special_tokens': add_tokens}
-        tokenizer.add_special_tokens(special_tokens_dict)
+    add_edus_to_tokenizer(tokenizer)
 
     tokenizer_dir = os.path.join(experiment_dir, 'tokenizer')
     if not args.debug:

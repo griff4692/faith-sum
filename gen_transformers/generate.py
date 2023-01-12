@@ -10,6 +10,7 @@ from transformers import AutoTokenizer, BartTokenizer
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 from data_utils import get_path_from_exp, infer_dataset
+from gen_transformers.main import add_edus_to_tokenizer
 from gen_transformers.dataset import SummaryDataModule
 from gen_transformers.model import TransformerSummarizer
 from gen_transformers.model_utils import infer_hf_model
@@ -136,6 +137,7 @@ if __name__ == '__main__':
         assert args.summary_style == 'abstract'
         args.lr = 1.0   # Needed to load
         tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
+        add_edus_to_tokenizer(tokenizer)
         model = TransformerSummarizer(args, tokenizer=tokenizer, hf_model=args.hf_model).to(gpu).eval()
     else:
         ckpt_path = get_path_from_exp(weight_dir, args.wandb_name)
