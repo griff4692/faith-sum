@@ -40,7 +40,7 @@ DATASET_KWARGS = {
     'xsum': {
         'min_length': 11,
         'max_length': 62,
-        'length_penalty': [0.6, 0.9, 0.5]
+        'length_penalty': 0.6  # [0.6, 0.9, 0.5]
     }
 }
 
