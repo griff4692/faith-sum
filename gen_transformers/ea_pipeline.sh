@@ -30,7 +30,7 @@ fi
 
 SHARED_ARGS="--device $DEVICE --split $SPLIT --decode_method beam"
 
-GEN_ARGS="--num_return_sequences $N_CAND --wandb_name $EXTRACT_EXPERIMENT --batch_size $BATCH_SIZE --summary_style extract --summary_style extract -use_hf_rouge --chunk ${CHUNK} --num_chunks ${NUM_CHUNKS}"
+GEN_ARGS="--num_return_sequences $N_CAND --wandb_name $EXTRACT_EXPERIMENT --batch_size $BATCH_SIZE --summary_style extract -use_hf_rouge --chunk ${CHUNK} --num_chunks ${NUM_CHUNKS}"
 python generate.py $SHARED_ARGS $GEN_ARGS --max_examples $MAX_EXAMPLES
 
 echo "Now generating abstracts from these extracts"

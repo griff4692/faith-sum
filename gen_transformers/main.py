@@ -215,7 +215,6 @@ if __name__ == '__main__':
     else:
         args.max_input_length = 1024
 
-
     # Won't held yet for multi-gpu
     args.grad_accum = args.target_batch_size // args.per_device_train_bs
 

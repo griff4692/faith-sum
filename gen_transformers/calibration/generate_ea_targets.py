@@ -26,6 +26,8 @@ if __name__ == '__main__':
     parser.add_argument('--hf_model', default=None)
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--max_targets', default=8, type=int)
+    parser.add_argument('--chunk', default=None, type=int)
+    parser.add_argument('--num_chunks', default=8, type=int)
 
     args = parser.parse_args()
     rouge = load_metric('rouge')
@@ -33,6 +35,8 @@ if __name__ == '__main__':
 
     infer_dataset(args, 'abstract_experiment')
     infer_hf_model(args, is_abstract=True)
+
+    chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'
 
     print(f'Loading {args.dataset}...')
     data_dir = os.path.join(args.data_dir, args.dataset)
@@ -62,11 +66,17 @@ if __name__ == '__main__':
         all_references = data_split[target_col]
 
         in_fn = os.path.join(oracle_dir, f'{split}_candidates.json')
+        out_fn = os.path.join(oracle_dir, f'{split}_candidates{chunk_suffix}.json')
         print(f'Loading examples from {in_fn}')
         with open(in_fn, 'r') as fd:
             all_oracles = ujson.load(fd)
 
-        for dataset_id, oracles in tqdm(all_oracles.items(), total=len(all_oracles)):
+        dataset_ids = list(sorted(list(all_oracles.keys())))
+        if args.chunk is not None:
+            dataset_ids = np.array_split(dataset_ids, args.num_chunks)[args.chunk]
+
+        for dataset_id in tqdm(dataset_ids):
+            oracles = all_oracles[dataset_id]
             dataset_idx = dataset_idx2id.index(dataset_id)
             source_annotated = all_source_annotated[dataset_idx]
             # Get source tokens
@@ -83,7 +93,7 @@ if __name__ == '__main__':
             )
 
             all_oracles[dataset_id] = {'ea': gen_outputs, 'oracles': oracle_sample}
-        print(f'Dumping examples with EA information to provide calibration targets to {in_fn}')
+        print(f'Dumping examples with EA information to provide calibration targets to {out_fn}')
         print('Can now re-train Extract model with -add_brio_loss')
-        with open(in_fn, 'w') as fd:
+        with open(out_fn, 'w') as fd:
             ujson.dump(all_oracles, fd)

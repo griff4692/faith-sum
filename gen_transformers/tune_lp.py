@@ -15,7 +15,8 @@ from transformers import AutoTokenizer
 from data_utils import get_path_from_exp, infer_dataset
 from eval.rouge_metric import RougeMetric
 from gen_transformers.model import TransformerSummarizer
-from gen_transformers.model_utils import sentence_indicators, infer_hf_model
+from gen_transformers.model_utils import infer_hf_model
+from gen_transformers.gen_from_extract import filter_out_extract_tags
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
 
@@ -24,15 +25,14 @@ os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 np.random.seed(1992)
 
 
-# TODO: Grid-search
 DATASET_KWARGS = {
     'cnn_dailymail': {
-        'max_length': 142,
         'min_length': 56,
+        'max_length': 142,
     },
-    'samsum': {  # TODO idk
-        'min_length': 10,
-        'max_length': 100,
+    'nyt': {
+        'min_length': 56,
+        'max_length': 256,
     },
     'xsum': {
         'min_length': 11,
@@ -93,13 +93,13 @@ def get_idx(idx_str):
 
 
 def gen_from_guide(
-        args, model, tokenizer, source_annotated, idx_to_keep, special_id_min, fixed_length_penalty):
-    has_bos = 'pegasus' not in args.hf_model
-
-    source_annotated_rep = [source_annotated for _ in range(len(idx_to_keep))]
+        args, model, tokenizer, source_annotated, idx_to_keep, fixed_length_penalty):
+    source_annotated_tagged = [
+        filter_out_extract_tags(source_annotated, extract_idxs) for extract_idxs in idx_to_keep
+    ]
 
     inputs = tokenizer(
-        source_annotated_rep,
+        source_annotated_tagged,
         padding='longest',
         truncation=True,
         max_length=512 if 'pegasus' in args.hf_model else 1024,
@@ -107,16 +107,8 @@ def gen_from_guide(
     )
     input_ids = inputs['input_ids'].to(args.device)
     attention_mask = inputs['attention_mask'].to(args.device)
-    cls_mask = input_ids >= special_id_min
-    extract_indicators = []
-    for cand_idx, extract_idx in enumerate(idx_to_keep):
-        ei = sentence_indicators(
-            cls_mask[cand_idx].unsqueeze(0), extract_idx, attention_mask[cand_idx].unsqueeze(0), has_bos=has_bos
-        )
-        extract_indicators.append(ei)
-    extract_indicators = torch.cat(extract_indicators, dim=0)
     encoder_outputs = model.model.model.encoder(**{
-        'input_ids': input_ids, 'attention_mask': attention_mask, 'extract_indicators': extract_indicators,
+        'input_ids': input_ids, 'attention_mask': attention_mask,
     })
 
     shared_kwargs = {
@@ -160,8 +152,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--device', default=0, type=int)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--abstract_experiment', default='samsum_from_bert_red_extract_w_unlike')
-    parser.add_argument('--extract_experiment', default='samsum_bert_red_extract_generator_3e5lr')
+    parser.add_argument('--abstract_experiment', default=None)
+    parser.add_argument('--extract_experiment', default=None)
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-do_not_save', default=False, action='store_true')
     parser.add_argument('--hf_model', default=None)
@@ -170,7 +162,6 @@ if __name__ == '__main__':
     parser.add_argument('--decode_method', default='beam', choices=['diverse', 'beam', 'nucleus'])
     parser.add_argument('--num_candidates', default=16, type=int)
     parser.add_argument('--split', default='validation')
-    parser.add_argument('--chunk', default=None)
 
     args = parser.parse_args()
 
@@ -179,8 +170,7 @@ if __name__ == '__main__':
 
     results_dir = os.path.join(args.data_dir, 'results', args.extract_experiment)
     decode_suffix = args.decode_method + '_' + str(args.num_candidates)
-    chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'
-    in_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs{chunk_suffix}.csv')
+    in_fn = os.path.join(results_dir, f'{args.split}_{decode_suffix}_outputs.csv')
 
     print(f'Reading in extracts from {in_fn}')
     outputs = pd.read_csv(in_fn)
@@ -204,9 +194,6 @@ if __name__ == '__main__':
     tokenizer_dir = os.path.join(weight_dir, args.abstract_experiment, 'tokenizer')
     print(f'Loading tokenizer from {tokenizer_dir}...')
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
-
-    additional_ids = tokenizer.additional_special_tokens_ids
-    special_id_min = 999999 if len(additional_ids) == 0 else min(tokenizer.additional_special_tokens_ids)
 
     print(f'Loading model from {ckpt_path}...')
     model = TransformerSummarizer.load_from_checkpoint(
@@ -232,7 +219,7 @@ if __name__ == '__main__':
             extract_idx = [get_extract_idxs_from_str(x) for x in record['extract_idx'].split('<cand>')]
             extract_lens = [len(set(x)) for x in extract_idx]
             rouge1_f1s = gen_from_guide(
-                args, model, tokenizer, source_annotated, extract_idx, special_id_min,
+                args, model, tokenizer, source_annotated, extract_idx,
                 fixed_length_penalty=lp
             )
 
