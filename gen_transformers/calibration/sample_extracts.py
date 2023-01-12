@@ -64,7 +64,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--oracle_col', default='oracle_idxs')
-    parser.add_argument('--max_strategy_types', default=10, type=int)
+    parser.add_argument('--max_strategy_types', default=8, type=int)
 
     args = parser.parse_args()
 

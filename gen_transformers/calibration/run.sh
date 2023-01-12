@@ -6,4 +6,4 @@ DATASET=$2
 ABSTRACT_EXPERIMENT=$3
 
 python sample_extracts.py --dataset $DATASET
-python generate_ea_targets.py --dataset $DATASET --device $DEVICE --
+python generate_ea_targets.py --dataset $DATASET --device $DEVICE --abstract_experiment $ABSTRACT_EXPERIMENT
