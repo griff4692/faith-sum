@@ -12,10 +12,10 @@ SPLIT=$5
 
 SHARED="--device $DEVICE --dataset $DATASET --experiment $EXP --summary_style abstract --num_return_sequences $NCANDS --decode_method $METHOD --batch_size ${BSIZE}"
 
-if [ $5 -eq 0 ]; then
+if [ $6 -eq 0 ]; then
   python generate.py $SHARED --split $SPLIT
 else
   NUM_CHUNKS=8
-  echo "Running chunk $5 / ${NUM_CHUNKS}"
-  python generate.py $SHARED --split $SPLIT --chunk $5 --num_chunks $NUM_CHUNKS
+  echo "Running chunk $6 / ${NUM_CHUNKS}"
+  python generate.py $SHARED --split $SPLIT --chunk $6 --num_chunks $NUM_CHUNKS
 fi
