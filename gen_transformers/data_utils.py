@@ -15,6 +15,8 @@ def infer_dataset(args, col):
         rel_name = getattr(args, col)
         if 'samsum' in rel_name:
             args.dataset = 'samsum'
+        elif 'nyt' in rel_name:
+            args.dataset = 'nyt'
         elif 'cnn' in rel_name:
             args.dataset = 'cnn_dailymail'
         elif 'xsum' in rel_name:
@@ -25,12 +27,11 @@ def infer_dataset(args, col):
 
 class Seq2SeqCollate:
     def __init__(
-            self, tokenizer, max_input_length=1024, max_output_length=512, split=None, verbose=False,
+            self, tokenizer, max_input_length=1024, split=None, verbose=False,
     ):
         self.tokenizer = tokenizer
         self.max_input_length = max_input_length
         assert self.max_input_length <= tokenizer.model_max_length
-        self.max_output_length = max_output_length
         self.pad_id = tokenizer.pad_token_id
         self.cls_token_id = tokenizer.cls_token_id
         self.eos_token_id = tokenizer.eos_token_id

@@ -58,6 +58,7 @@ def align_example_edus(batch, nlp):
         source_edu_toks = [[x.text.strip() for x in nlp(edu) if len(x.text.strip()) > 0] for edu in source_edus]
         target_toks = [[x.text.strip() for x in nlp(edu) if len(x.text.strip()) > 0] for edu in target_edus]
 
+        # Should 20 be higher for NYT?
         gain_idxs, gain_rouges, _, _, _ = gain_selection(
             source_edu_toks, target_toks, 20, lower=True, sort=True
         )

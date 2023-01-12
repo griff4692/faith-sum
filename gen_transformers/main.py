@@ -7,7 +7,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.plugins import DDPPlugin
 import torch
-from transformers import AutoTokenizer, BartTokenizer
+from transformers import AutoTokenizer
 
 from gen_transformers.dataset import SummaryDataModule
 from gen_transformers.model import TransformerSummarizer
@@ -37,11 +37,7 @@ def run(args):
         print('Using full precision for PEGASUS.')
         precision = 32
 
-    if 'brio' in args.hf_model:
-        tokenizer = BartTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
-
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.hf_model)
     if args.add_sent_toks:
         add_tokens = ['<e>', '</e>']
         special_tokens_dict = {'additional_special_tokens': add_tokens}
@@ -188,8 +184,6 @@ if __name__ == '__main__':
     parser.add_argument('--warmup_steps', type=int, default=200)
     parser.add_argument('--max_steps', default=150000, type=int)
     parser.add_argument('--max_epochs', default=20, type=int)
-    parser.add_argument('--max_output_length', type=int, default=256)  # For training only
-    parser.add_argument('--max_input_length', type=int, default=1024)
     parser.add_argument('--save_top_k', type=int, default=1)
     parser.add_argument('-skip_if_present', default=False, action='store_true')
     parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
@@ -215,6 +209,12 @@ if __name__ == '__main__':
 
     infer_dataset(args, 'experiment')
     infer_hf_model(args, is_abstract=args.summary_style=='abstract')
+
+    if args.dataset == 'xsum':
+        args.max_input_length = 512
+    else:
+        args.max_input_length = 1024
+
 
     # Won't held yet for multi-gpu
     args.grad_accum = args.target_batch_size // args.per_device_train_bs

@@ -34,7 +34,7 @@ DATASET_KWARGS = {
     },
     'nyt': {
         'min_length': 56,
-        'max_length': 142,
+        'max_length': 256,
         'length_penalty': 2.0
     },
     'xsum': {
@@ -281,7 +281,8 @@ if __name__ == '__main__':
         outputs = outputs.sample(n=args.max_examples, replace=False, random_state=111)
         n = len(outputs)
 
-    data_dir = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
+    pegasus_suffix = '_pegasus' if 'pegasus' in args.hf_model else ''
+    data_dir = os.path.join(args.data_dir, args.dataset + f'_edu_alignments{pegasus_suffix}')
     print(f'Loading dataset from {data_dir}')
     dataset = load_from_disk(data_dir)[args.split]
     dataset_idx2id = dataset['id']

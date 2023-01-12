@@ -2,6 +2,7 @@ import os
 import ujson
 
 import argparse
+import numpy as np
 from datasets import load_metric
 from datasets import load_from_disk
 from transformers import AutoTokenizer
@@ -20,19 +21,18 @@ if __name__ == '__main__':
 
     parser.add_argument('--dataset', default=None)
     parser.add_argument('--splits', default='validation,test,train')
-    parser.add_argument('--abstract_experiment', default='samsum_from_bert_red_extract_w_unlike')
+    parser.add_argument('--abstract_experiment', default=None)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--oracle_col', default='oracle_idxs_bert')
     parser.add_argument('--hf_model', default=None)
     parser.add_argument('--device', default=0, type=int)
+    parser.add_argument('--max_targets', default=8, type=int)
 
     args = parser.parse_args()
-    args.convert_last_to_unprompted = False
     rouge = load_metric('rouge')
     nlp = spacy.load('en_core_web_sm')
 
     infer_dataset(args, 'abstract_experiment')
-    infer_hf_model(args)
+    infer_hf_model(args, is_abstract=True)
 
     print(f'Loading {args.dataset}...')
     data_dir = os.path.join(args.data_dir, args.dataset)
@@ -47,9 +47,6 @@ if __name__ == '__main__':
     print(f'Loading tokenizer from {tokenizer_dir}...')
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=tokenizer_dir)
 
-    additional_ids = tokenizer.additional_special_tokens_ids
-    special_id_min = 999999 if len(additional_ids) == 0 else min(tokenizer.additional_special_tokens_ids)
-
     print(f'Loading model from {ckpt_path}...')
     model = TransformerSummarizer.load_from_checkpoint(
         checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False
@@ -61,27 +58,32 @@ if __name__ == '__main__':
     for split in args.splits.split(','):
         data_split = dataset[split]
         dataset_idx2id = data_split['id']
-        all_source_annotated = data_split['source_annotated']
+        all_source_annotated = data_split['source_edu_annotated']
         all_references = data_split[target_col]
 
-        bert_suffix = '_bert' if 'bert' in args.oracle_col else ''
-        in_fn = os.path.join(oracle_dir, f'{split}_candidates{bert_suffix}.json')
+        in_fn = os.path.join(oracle_dir, f'{split}_candidates.json')
         print(f'Loading examples from {in_fn}')
         with open(in_fn, 'r') as fd:
-            sampled_oracles = ujson.load(fd)
+            all_oracles = ujson.load(fd)
 
-        for dataset_id, oracles in tqdm(sampled_oracles.items(), total=len(sampled_oracles)):
+        for dataset_id, oracles in tqdm(all_oracles.items(), total=len(all_oracles)):
             dataset_idx = dataset_idx2id.index(dataset_id)
             source_annotated = all_source_annotated[dataset_idx]
             # Get source tokens
             reference = all_references[dataset_idx]
-            extract_idx = [x['extract_idx'] for x in oracles]
+
+            oracle_sample = oracles
+            if len(oracles) > args.max_targets:
+                oracle_sample = list(np.random.choice(oracles, size=(args.max_targets), replace=False))
+
+            extract_idx = [x['extract_idx'] for x in oracle_sample]
             gen_outputs = gen_from_guide(
                 args, nlp, model, tokenizer, source_annotated, reference,
-                extract_idx, special_id_min, num_return_sequences=1
+                extract_idx, num_return_sequences=1
             )
 
-            sampled_oracles[dataset_id] = {'ea': gen_outputs, 'oracles': oracles}
-        print(f'Dumping examples with ea information to {in_fn}')
+            all_oracles[dataset_id] = {'ea': gen_outputs, 'oracles': oracle_sample}
+        print(f'Dumping examples with EA information to provide calibration targets to {in_fn}')
+        print('Can now re-train Extract model with -add_brio_loss')
         with open(in_fn, 'w') as fd:
-            ujson.dump(sampled_oracles, fd)
+            ujson.dump(all_oracles, fd)

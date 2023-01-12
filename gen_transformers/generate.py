@@ -27,7 +27,8 @@ DATASET_KWARGS = {
         'abstract': {'min_length': 11, 'max_length': 62, 'length_penalty': 0.6},
     },
     'nyt': {
-        'extract': {'min_length': 3, 'max_length': 20, 'length_penalty': 1.0},
+        'abstract': {'min_length': 56, 'max_length': 256, 'length_penalty': 2.0},
+        'extract': {'min_length': 3, 'max_length': 25, 'length_penalty': 1.0},
     }
 }
 
@@ -62,9 +63,7 @@ if __name__ == '__main__':
     parser.add_argument('-cpu', default=False, action='store_true')
     parser.add_argument('--device', default=None, type=int)
     parser.add_argument('--max_examples', default=None, type=int)
-    parser.add_argument('--max_output_length', type=int, default=256)
     parser.add_argument('--per_device_eval_bs', type=int, default=1)
-    parser.add_argument('--max_input_length', type=int, default=1024)
     # Beam Search or Nucleus Sampling (more diverse)
     parser.add_argument('-add_sent_toks', default=False, action='store_true')
     parser.add_argument('--batch_size', default=8, type=int)
@@ -117,6 +116,11 @@ if __name__ == '__main__':
 
     infer_dataset(args, 'wandb_name')
     infer_hf_model(args)
+
+    if args.dataset == 'xsum':
+        args.max_input_length = 512
+    else:
+        args.max_input_length = 1024
 
     weight_dir = os.path.join(args.data_dir, 'weights')
     results_dir = os.path.join(args.data_dir, 'results', args.experiment)

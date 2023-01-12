@@ -104,7 +104,6 @@ class SummaryDataModule(pl.LightningDataModule):
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
-            max_output_length=self.args.max_output_length,
             split='train',
         )
         kwargs = {
@@ -187,7 +186,6 @@ class SummaryDataModule(pl.LightningDataModule):
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
             max_input_length=self.args.max_input_length,
-            max_output_length=self.args.max_output_length,
             split=split,
         )
         batch_size = self.args.per_device_train_bs if split == 'train' else self.args.per_device_eval_bs
@@ -238,12 +236,8 @@ class SummarizationDataset(Dataset):
         input_ids = example['input_ids']
         corrupt_input_ids = None
         if not self.args.add_sent_toks:
-            # Use tokenizer min
-            first_sent_idx = 0 if 'pegasus' in self.args.hf_model else 1
-            if 'pegasus' in self.args.hf_model:  # Can remove once this clears.
-                assert example['input_ids'][0] == 96103
-            min_sent_id = input_ids[first_sent_idx]
-            input_ids = [x for x in input_ids if x < min_sent_id]
+            assert 'pegasus' not in self.hparams.hf_model  # TODO for pegasus need to see if this holds
+            input_ids = [x for x in input_ids if x not in self.tokenizer.additional_special_tokens_ids]
         elif self.args.extract_indicators:
             # Remove Non-Oracle Markers
             corrupt_input_ids = corrupt_indicators(
