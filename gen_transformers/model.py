@@ -935,6 +935,14 @@ class TransformerSummarizer(pl.LightningModule):
         return summary_idx[1: end_idx]
 
     def compute_rouge(self, generated, gold, prefix='', eval=False, rouge_types=['rouge1', 'rouge2', 'rougeL']):
+        for i in range(len(generated)):
+            if len(generated[i]) == 0:
+                generated[i] = 'empty'
+                print('Warning: Empty generated sequence. Setting to string empty for ROUGE scoring.')
+            if len(gold[i]) == 0:
+                gold[i] = 'empty'
+                print('Warning: Empty reference sequence. Setting to string empty for ROUGE scoring.')
+
         if eval:  # Use SummEval PERL script
             outputs = self.rouge_metric.evaluate_batch(generated, gold, aggregate=True)['rouge']
             f1s = []
