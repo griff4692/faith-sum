@@ -12,7 +12,7 @@ SPLIT=$5
 
 SHARED="--device $DEVICE --dataset $DATASET --experiment $EXP --summary_style abstract --num_return_sequences $NCANDS --decode_method $METHOD --batch_size ${BSIZE}"
 
-if [ $6 -eq 0 ]; then
+if [ -z "$6" ]; then
   python generate.py $SHARED --split $SPLIT
 else
   NUM_CHUNKS=8

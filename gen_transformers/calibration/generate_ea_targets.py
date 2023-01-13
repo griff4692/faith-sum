@@ -17,7 +17,7 @@ from sum_constants import summarization_name_mapping
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Extract Oracles for dataset')
+    parser = argparse.ArgumentParser('Extract EA scores for calibration')
 
     parser.add_argument('--dataset', default=None)
     parser.add_argument('--splits', default='validation,test,train')
