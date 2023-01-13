@@ -39,7 +39,7 @@ if __name__ == '__main__':
     chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'
 
     print(f'Loading {args.dataset}...')
-    data_dir = os.path.join(args.data_dir, args.dataset)
+    data_dir = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
     dataset = load_from_disk(data_dir)
     _, target_col = summarization_name_mapping[args.dataset]
 
@@ -66,15 +66,16 @@ if __name__ == '__main__':
         all_references = data_split[target_col]
 
         in_fn = os.path.join(oracle_dir, f'{split}_candidates.json')
-        out_fn = os.path.join(oracle_dir, f'{split}_candidates{chunk_suffix}.json')
+        out_fn = os.path.join(oracle_dir, f'{split}_candidates_targets{chunk_suffix}.json')
         print(f'Loading examples from {in_fn}')
         with open(in_fn, 'r') as fd:
             all_oracles = ujson.load(fd)
 
         dataset_ids = list(sorted(list(all_oracles.keys())))
         if args.chunk is not None:
-            dataset_ids = np.array_split(dataset_ids, args.num_chunks)[args.chunk]
+            dataset_ids = np.array_split(dataset_ids, args.num_chunks)[args.chunk][:4]
 
+        out_dict = {}
         for dataset_id in tqdm(dataset_ids):
             oracles = all_oracles[dataset_id]
             dataset_idx = dataset_idx2id.index(dataset_id)
@@ -86,14 +87,14 @@ if __name__ == '__main__':
             if len(oracles) > args.max_targets:
                 oracle_sample = list(np.random.choice(oracles, size=(args.max_targets), replace=False))
 
-            extract_idx = [x['extract_idx'] for x in oracle_sample]
+            extract_idx = [x['idxs'] for x in oracle_sample]
             gen_outputs = gen_from_guide(
                 args, nlp, model, tokenizer, source_annotated, reference,
                 extract_idx, num_return_sequences=1
             )
 
-            all_oracles[dataset_id] = {'ea': gen_outputs, 'oracles': oracle_sample}
+            out_dict[dataset_id] = {'ea': gen_outputs, 'oracles': oracle_sample}
         print(f'Dumping examples with EA information to provide calibration targets to {out_fn}')
         print('Can now re-train Extract model with -add_brio_loss')
         with open(out_fn, 'w') as fd:
-            ujson.dump(all_oracles, fd)
+            ujson.dump(out_dict, fd)

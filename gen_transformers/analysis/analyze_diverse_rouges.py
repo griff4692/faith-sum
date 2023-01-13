@@ -190,6 +190,6 @@ def analyze(experiment, output, summary_style=None, max_beams=16, use_calibratio
 
 
 if __name__ == '__main__':
-    experiment = 'cnn_e_v1'  # 'cnn_e_sent'
-    output = 'test_from_beam_16_extract_cnn_ea_rand'
+    experiment = 'cnn_e_sent'  # 'cnn_e_sent'  # 'cnn_e_v1'
+    output = 'test_from_beam_16_extract'  # _cnn_ea_rand'
     analyze(experiment, output)

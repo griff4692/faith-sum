@@ -127,11 +127,6 @@ def gen_from_guide(
     #     idx_to_keep_no_dup.append(list(sorted(set(extract))))
     #     seen.add(key)
 
-    # No highlights on last beam
-    if args.convert_last_to_unprompted:
-        # Highlights every sentence and lets model choose...
-        idx_to_keep[-1] = []
-
     source_annotated_tagged = [
         filter_out_extract_tags(source_annotated, extract_idxs) for extract_idxs in idx_to_keep
     ]
@@ -187,10 +182,6 @@ def gen_from_guide(
 
     ps, rs, f1s = [], [], []
     for extract_idx, implied in zip(idx_to_keep, implied_extracts):
-        if len(extract_idx) == 0 or len(extract_idx) == 100:
-            assert args.convert_last_to_unprompted
-            continue
-
         implied_idx = implied['idxs']
         agreement = set(extract_idx).intersection(implied_idx)
         n = len(agreement)
@@ -256,7 +247,6 @@ if __name__ == '__main__':
     parser.add_argument('--split', default='test')
     parser.add_argument('-verbose', default=False, action='store_true')
     parser.add_argument('-add_abstract_experiment', default=False, action='store_true')
-    parser.add_argument('-convert_last_to_unprompted', default=False, action='store_true')
     parser.add_argument('--chunk', default=None)
     parser.add_argument('-use_calibration', default=False, action='store_true')
 
@@ -410,16 +400,15 @@ if __name__ == '__main__':
     if not args.do_not_save:
         top_k_str = '' if args.top_k is None else f'_{args.top_k}'
         chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'
-        prompt_suffix = '_w_unprompted' if args.convert_last_to_unprompted else ''
         if args.add_abstract_experiment:
             out_fn = os.path.join(
                 results_dir,
-                f'{args.split}_from_{decode_suffix}_extract{top_k_str}_{args.abstract_experiment}{prompt_suffix}{chunk_suffix}.csv'
+                f'{args.split}_from_{decode_suffix}_extract{top_k_str}_{args.abstract_experiment}{chunk_suffix}.csv'
             )
         else:
             out_fn = os.path.join(
                 results_dir,
-                f'{args.split}_from_{decode_suffix}_extract{top_k_str}{prompt_suffix}{chunk_suffix}.csv'
+                f'{args.split}_from_{decode_suffix}_extract{top_k_str}{chunk_suffix}.csv'
             )
         print(f'Saving prompted abstracts to {out_fn}')
         updated_df.to_csv(out_fn, index=False)
