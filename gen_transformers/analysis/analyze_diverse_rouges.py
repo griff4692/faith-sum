@@ -174,8 +174,7 @@ def analyze(experiment, output, summary_style=None, max_beams=16):
 
 
 if __name__ == '__main__':
-    # experiment = 'xsum_extract_generator_512_len'
-    # output = 'test_from_beam_16_extract_pegasus_xsum_indicator_drop_33'
+    # experiment = 'cnn_e_v1'
     experiment = 'cnn_e_v1'
     output = 'test_from_beam_16_extract'
     analyze(experiment, output)
