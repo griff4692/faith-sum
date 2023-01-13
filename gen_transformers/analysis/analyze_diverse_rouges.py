@@ -12,12 +12,12 @@ def get_arr(num_str):
     return [float(y) for y in num_str.split(delim)]
 
 
-def analyze(experiment, output, summary_style=None, max_beams=16):
+def analyze(experiment, output, summary_style=None, max_beams=16, use_calibration=False):
     score_col = 'calibrated_beam_score'
     in_fn = f'/nlp/projects/faithsum/results/{experiment}/{output}.csv'
     print(in_fn)
     df = pd.read_csv(in_fn)
-    reranked = score_col in df.columns
+    reranked = score_col in df.columns and use_calibration
     print(f'Loaded {len(df)} examples')
     if summary_style is None:
         if 'from_extract_abstract' in df.columns:
@@ -44,6 +44,7 @@ def analyze(experiment, output, summary_style=None, max_beams=16):
         diversity_col = f'{summary_style}_diversity'
 
     rouges = [get_arr(x) for x in df[rouge_col].tolist()]
+    cands = df[summary_style].tolist()
 
     try:
         diversities = [float(x) for x in df[diversity_col].dropna()]
@@ -65,10 +66,20 @@ def analyze(experiment, output, summary_style=None, max_beams=16):
     avg_rouges_by_beam = [[] for _ in range(min(max_beams, len(rouges[0])))]
     # avg_bartscores_by_beam = [[] for _ in range(len(rouges[0]))]
 
+    lens_by_beam = [
+        [] for _ in range(max_beams)
+    ]
+
+    avg_lens = []
     for i in range(n):
         rouge_arr = rouges[i]
         # bartscore_arr = bartscores[i]
+        cand_arr = cands[i]
         rouge_arr_sorted = rouge_arr
+        for beam, cand in enumerate(cand_arr.split('<cand>')):
+            avg_lens.append(len(cand.split(' ')))
+            lens_by_beam[beam].append(len(cand.split(' ')))
+
         # bartscore_arr_sorted = bartscore_arr
         if rank_scores is not None:
             scores = rank_scores[i]
@@ -87,6 +98,7 @@ def analyze(experiment, output, summary_style=None, max_beams=16):
             # cum_bartscore = bartscore_arr_sorted[:beam + 1]
             # avg_bartscores_by_beam[beam].append(np.mean(cum_bartscore))
 
+    print(f'Mean Summary Length: {np.mean(avg_lens)}')
     print(f'Mean Avg inverse SELF-BLEU: {np.mean(diversities)}')
     print(f'Mean Avg ROUGE-1 F1: {np.mean(avg_rouges)}')
     print(f'Mean Max ROUGE-1 F1: {np.mean(max_rouges)}')
@@ -102,6 +114,10 @@ def analyze(experiment, output, summary_style=None, max_beams=16):
     for beam in range(len(max_rouges_by_beam)):
         out.append(str(np.mean(max_rouges_by_beam[beam])))
     print('\t'.join(out))
+
+    print('Summary Length by Beam')
+    for beam in range(len(lens_by_beam)):
+        print(beam, np.mean(lens_by_beam[beam]))
 
     # for bin in range(4):
     #     df = orig_df[orig_df['bin'] == bin]
@@ -174,7 +190,6 @@ def analyze(experiment, output, summary_style=None, max_beams=16):
 
 
 if __name__ == '__main__':
-    # experiment = 'cnn_e_v1'
-    experiment = 'cnn_e_v1'
-    output = 'test_from_beam_16_extract'
+    experiment = 'cnn_e_v1'  # 'cnn_e_sent'
+    output = 'test_from_beam_16_extract_cnn_ea_rand'
     analyze(experiment, output)
