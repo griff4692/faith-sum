@@ -40,9 +40,9 @@ BEAM_KWARGS = {
 }
 
 DIVERSE_KWARGS = {
-    # 'num_beam_groups': 16,  # Over-ridden by the number in generation
-    # 'num_beams': 16,
-    'diversity_penalty': 1.0,
+    'cnn_dailymail': {'diversity_penalty': 1.0,},
+    'nyt': {'diversity_penalty': 1.0},
+    'xsum': {'diversity_penalty': 0.1},
 }
 
 NUCLEUS_KWARGS = {
@@ -192,7 +192,7 @@ if __name__ == '__main__':
                 if args.num_return_sequences > gen_kwargs['num_beams']:
                     gen_kwargs['num_beams'] = args.num_return_sequences
             elif args.decode_method == 'diverse':
-                gen_kwargs.update(DIVERSE_KWARGS)
+                gen_kwargs.update(DIVERSE_KWARGS[args.dataset])
                 if args.diversity_penalty is not None:
                     default_dp = gen_kwargs['diversity_penalty']
                     print(f'Changing diversity penalty from default of {default_dp} to {args.diversity_penalty}')

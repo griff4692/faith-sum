@@ -59,9 +59,9 @@ if __name__ == '__main__':
         args.fn += '.csv'
 
     nlp = spacy.load('en_core_web_sm')
-    data_fn = os.path.join(args.data_dir, args.dataset)
+    data_fn = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
     dataset = load_from_disk(data_fn)
-    input_col, target_col = summarization_name_mapping[args.dataset]
+    input_col, _ = summarization_name_mapping[args.dataset]
     for split in args.splits.split(','):
         if '{}' in args.fn:
             fn = os.path.join(args.data_dir, 'results', args.experiment, args.fn.format(split))

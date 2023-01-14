@@ -1,5 +1,6 @@
 import json
 
+import argparse
 import numpy as np
 import pandas as pd
 
@@ -190,6 +191,10 @@ def analyze(experiment, output, summary_style=None, max_beams=16, use_calibratio
 
 
 if __name__ == '__main__':
-    experiment = 'cnn_e_sent'  # 'cnn_e_sent'  # 'cnn_e_v1'
-    output = 'test_from_beam_16_extract'  # _cnn_ea_rand'
-    analyze(experiment, output)
+    parser = argparse.ArgumentParser('Analyze ROUGE candidates.')
+    parser.add_argument('--experiment', default=None)
+    parser.add_argument('--fn', default=None)
+
+    args = parser.parse_args()
+
+    analyze(args.experiment, args.fn)
