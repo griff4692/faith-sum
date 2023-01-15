@@ -110,12 +110,14 @@ if __name__ == '__main__':
             if num_cand == -1:
                 num_cand = len(candidates)
             try:
+                num_repeated = 0
                 assert num_cand == len(candidates) == args.num_candidates
             except:
                 print(num_cand, len(candidates), args.num_candidates)
                 print(f'Dataset Idx={dataset_idx} does not have enough unique candidates. Duplicating for now.')
                 last_cand = candidates[-1]
                 gap = num_cand - len(candidates)
+                num_repeated = gap
                 for _ in range(gap):
                     candidates.append(last_cand)
 
@@ -132,6 +134,10 @@ if __name__ == '__main__':
                     rouges = get_arr(record['eval_abstract_rouge1_f1'])
                 else:
                     rouges = get_arr(record['abstract_rouges'])
+
+            last = rouges[-1]
+            for _ in range(num_repeated):
+                rouges.append(last)
 
             if args.dataset == 'samsum':
                 article_untok, article_tok = brio_samsum_tokenize(article_untok, nlp)
