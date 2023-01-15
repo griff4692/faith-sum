@@ -15,7 +15,11 @@ def get_arr(num_str):
 
 def analyze(experiment, output, summary_style=None, max_beams=16, use_calibration=False):
     score_col = 'calibrated_beam_score'
-    in_fn = f'/nlp/projects/faithsum/results/{experiment}/{output}.csv'
+    if output.endswith('.csv'):
+        suffix = ''
+    else:
+        suffix = '.csv'
+    in_fn = f'/nlp/projects/faithsum/results/{experiment}/{output}{suffix}'
     print(in_fn)
     df = pd.read_csv(in_fn)
     reranked = score_col in df.columns and use_calibration
@@ -192,8 +196,8 @@ def analyze(experiment, output, summary_style=None, max_beams=16, use_calibratio
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Analyze ROUGE candidates.')
-    parser.add_argument('--experiment', default=None)
-    parser.add_argument('--fn', default=None)
+    parser.add_argument('--experiment', default='bart_large_cnn')
+    parser.add_argument('--fn', default='test_beam_16_outputs_lambda')
 
     args = parser.parse_args()
 

@@ -109,7 +109,15 @@ if __name__ == '__main__':
 
             if num_cand == -1:
                 num_cand = len(candidates)
-            assert num_cand == len(candidates) == args.num_candidates
+            try:
+                assert num_cand == len(candidates) == args.num_candidates
+            except:
+                print(num_cand, len(candidates), args.num_candidates)
+                print(f'Dataset Idx={dataset_idx} does not have enough unique candidates. Duplicating for now.')
+                last_cand = candidates[-1]
+                gap = num_cand - len(candidates)
+                for _ in range(gap):
+                    candidates.append(last_cand)
 
             candidates_no_new_lower = [ptb_prepare(c) for c in candidates]
             ref_no_new_lower = ptb_prepare(record['reference'])
@@ -120,7 +128,10 @@ if __name__ == '__main__':
             if prediction_col == 'from_extract_abstract':
                 rouges = get_arr(record['eval_from_extract_abstract_rouge1_f1'])
             else:
-                rouges = get_arr(record['eval_abstract_rouge1_f1'])
+                if 'eval_abstract_rouge1_f1' in record:
+                    rouges = get_arr(record['eval_abstract_rouge1_f1'])
+                else:
+                    rouges = get_arr(record['abstract_rouge1_f1'])
 
             if args.dataset == 'samsum':
                 article_untok, article_tok = brio_samsum_tokenize(article_untok, nlp)
