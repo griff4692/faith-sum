@@ -131,7 +131,7 @@ if __name__ == '__main__':
                 if 'eval_abstract_rouge1_f1' in record:
                     rouges = get_arr(record['eval_abstract_rouge1_f1'])
                 else:
-                    rouges = get_arr(record['rouge1_f1'])
+                    rouges = get_arr(record['abstract_rouges'])
 
             if args.dataset == 'samsum':
                 article_untok, article_tok = brio_samsum_tokenize(article_untok, nlp)
