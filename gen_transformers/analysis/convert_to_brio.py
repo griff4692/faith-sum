@@ -134,10 +134,10 @@ if __name__ == '__main__':
                     rouges = get_arr(record['eval_abstract_rouge1_f1'])
                 else:
                     rouges = get_arr(record['abstract_rouges'])
-
-            last = rouges[-1]
-            for _ in range(num_repeated):
-                rouges.append(last)
+            if num_repeated > 0:
+                last = rouges[-1]
+                extra = np.array([last for _ in range(num_repeated)])
+                rouges = np.concatenate((rouges, extra))
 
             if args.dataset == 'samsum':
                 article_untok, article_tok = brio_samsum_tokenize(article_untok, nlp)
