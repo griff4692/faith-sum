@@ -94,6 +94,17 @@ class Seq2SeqCollate:
             row['corrupt_input_ids'] = corrupt_input_ids_pad
             row['corrupt_attention_mask'] = corrupt_attention_mask
 
+        if 'plan_input_ids' in batch_list[0]:
+            plan_input_ids = [x['plan_input_ids'] for x in batch_list]
+            plan_input_seq_lens = [len(x) for x in plan_input_ids]
+            plan_input_ids_pad = torch.from_numpy(np.array([
+                x + [self.tokenizer.pad_token_id] * (max(plan_input_seq_lens) - plan_input_seq_lens[i])
+                for i, x in enumerate(plan_input_ids)
+            ], dtype=np.int64))
+            plan_attention_mask = (plan_input_ids_pad != self.tokenizer.pad_token_id).float()
+            row['plan_input_ids'] = plan_input_ids_pad
+            row['plan_attention_mask'] = plan_attention_mask
+
         if 'brio_sent_labels' in batch_list[0]:
             row['brio_sent_labels'] = [x['brio_sent_labels'] for x in batch_list]
     

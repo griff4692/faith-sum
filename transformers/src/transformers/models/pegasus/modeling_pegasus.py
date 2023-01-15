@@ -634,7 +634,7 @@ class PegasusEncoder(PegasusPreTrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: PegasusConfig, embed_tokens: Optional[nn.Embedding] = None, extract_indicators=True):
+    def __init__(self, config: PegasusConfig, embed_tokens: Optional[nn.Embedding] = None):
         super().__init__(config)
 
         self.dropout = config.dropout
@@ -644,10 +644,6 @@ class PegasusEncoder(PegasusPreTrainedModel):
         self.padding_idx = config.pad_token_id
         self.max_source_positions = config.max_position_embeddings
         self.embed_scale = math.sqrt(embed_dim) if config.scale_embedding else 1.0
-
-        if extract_indicators:
-            print('Initializing extractor indicator embeddings.')
-            self.extract_indicator_embeddings = nn.Embedding(3, config.d_model, padding_idx=0)
 
         if embed_tokens is not None:
             self.embed_tokens = embed_tokens
@@ -699,7 +695,6 @@ class PegasusEncoder(PegasusPreTrainedModel):
         self,
         input_ids=None,
         attention_mask=None,
-        extract_indicators=None,
         head_mask=None,
         inputs_embeds=None,
         output_attentions=None,
@@ -765,10 +760,6 @@ class PegasusEncoder(PegasusPreTrainedModel):
         embed_pos = self.embed_positions(input_shape)
         hidden_states = inputs_embeds + embed_pos
 
-        if extract_indicators is not None:
-            extract_embeds = self.extract_indicator_embeddings(extract_indicators)
-            hidden_states += extract_embeds
-
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         # expand attention_mask
@@ -819,10 +810,6 @@ class PegasusEncoder(PegasusPreTrainedModel):
 
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
-
-        # if extract_indicators is not None:
-        #     extract_embeds = self.extract_indicator_embeddings(extract_indicators)
-        #     hidden_states += extract_embeds
 
         hidden_states = self.layer_norm(hidden_states)
 
@@ -1199,7 +1186,6 @@ class PegasusModel(PegasusPreTrainedModel):
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
-        extract_indicators: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.Tensor] = None,
         decoder_attention_mask: Optional[torch.Tensor] = None,
@@ -1245,7 +1231,6 @@ class PegasusModel(PegasusPreTrainedModel):
         if encoder_outputs is None:
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
-                extract_indicators=extract_indicators,
                 attention_mask=attention_mask,
                 head_mask=head_mask,
                 inputs_embeds=inputs_embeds,
@@ -1370,7 +1355,6 @@ class PegasusForConditionalGeneration(PegasusPreTrainedModel):
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        extract_indicators: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.Tensor] = None,
         decoder_attention_mask: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.Tensor] = None,
@@ -1408,7 +1392,6 @@ class PegasusForConditionalGeneration(PegasusPreTrainedModel):
 
         outputs = self.model(
             input_ids,
-            extract_indicators=extract_indicators,
             attention_mask=attention_mask,
             decoder_input_ids=decoder_input_ids,
             encoder_outputs=encoder_outputs,

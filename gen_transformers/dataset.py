@@ -235,15 +235,17 @@ class SummarizationDataset(Dataset):
         source_annotated = example['source_edu_annotated']
         input_ids = example['input_ids']
         corrupt_input_ids = None
+        plan_input_ids = None
         if not self.args.add_sent_toks:
             input_ids = [x for x in input_ids if x not in self.tokenizer.additional_special_tokens_ids]
         elif self.args.extract_indicators:
+            input_ids = [x for x in input_ids if x not in self.tokenizer.additional_special_tokens_ids]
             # Remove Non-Oracle Markers
             corrupt_input_ids = corrupt_indicators(
                 input_ids.copy(), oracle_labels.copy(), self.tokenizer.additional_special_tokens_ids,
                 self.args.corrupt_strategy
             )
-            input_ids = remove_non_oracle(input_ids, oracle_labels, self.tokenizer.additional_special_tokens_ids)
+            plan_input_ids = remove_non_oracle(input_ids, oracle_labels, self.tokenizer.additional_special_tokens_ids)
 
         row = {
             'input_ids': input_ids,
@@ -257,6 +259,7 @@ class SummarizationDataset(Dataset):
 
         if corrupt_input_ids is not None:
             row['corrupt_input_ids'] = corrupt_input_ids
+            row['plan_input_ids'] = plan_input_ids
 
         if self.args.debug:
             source_edus = edus_from_html(source_annotated)

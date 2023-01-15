@@ -129,6 +129,21 @@ class TransformerSummarizer(pl.LightningModule):
             smooth_lm_loss = self.label_smoother(output, batch['labels'])
 
             if self.hparams.extract_indicators:
+                plan_encoder_inputs = {
+                    'input_ids': batch['plan_input_ids'], 'attention_mask': batch['plan_attention_mask']
+                }
+                plan_encoder_outputs = self.get_encoder_h(plan_encoder_inputs)
+                updated_inputs = {
+                    'encoder_outputs': plan_encoder_outputs,
+                    'attention_mask': batch['plan_attention_mask'],
+                    'labels': batch['labels'],
+                }
+
+                output = self.model(**updated_inputs, use_cache=False)
+                like_smooth = self.label_smoother(output, batch['labels'])
+                metrics['likelihood'] = like_smooth
+                return_loss += self.hparams.like_coef * like_smooth
+
                 corrupt_encoder_inputs = {
                     'input_ids': batch['corrupt_input_ids'], 'attention_mask': batch['corrupt_attention_mask']
                 }
