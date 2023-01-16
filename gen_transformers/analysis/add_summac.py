@@ -84,4 +84,3 @@ if __name__ == '__main__':
         print(f'SummaC for {fn}')
         for beam in range(len(scores_by_beam)):
             print(str(np.mean(scores_by_beam[beam])))
-

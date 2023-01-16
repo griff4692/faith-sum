@@ -163,16 +163,10 @@ class TransformerSummarizer(pl.LightningModule):
                 return_loss += self.hparams.unlike_coef * unlike_smooth
 
             return_loss += self.hparams.mle_weight * smooth_lm_loss
-        if self.hparams.extract_indicators:
-            assert plan_encoder_outputs is not None
-            return {
-                'metrics': metrics, 'return_loss': return_loss, 'encoder_outputs': plan_encoder_outputs,
-                'extracts': extracts
-            }
-        else:
-            return {
-                'metrics': metrics, 'return_loss': return_loss, 'encoder_outputs': encoder_outputs, 'extracts': extracts
-            }
+        return {
+            'metrics': metrics, 'return_loss': return_loss, 'encoder_outputs': encoder_outputs, 'extracts': extracts,
+            'plan_encoder_outputs': plan_encoder_outputs,
+        }
 
     def training_step(self, batch, batch_idx):
         if self.hparams.summary_style == 'extract':
@@ -231,7 +225,8 @@ class TransformerSummarizer(pl.LightningModule):
         }
         if self.hparams.summary_style != 'extract':
             gen_outputs = self.shared_generate(
-                batch, source, **validation_kwargs, encoder_outputs=shared_output['encoder_outputs']
+                batch, source, **validation_kwargs, encoder_outputs=shared_output['encoder_outputs'],
+                plan_encoder_outputs=shared_output['plan_encoder_outputs']
             )
 
         # Merge the two if needed (score_abstract only)
@@ -870,13 +865,16 @@ class TransformerSummarizer(pl.LightningModule):
         score_idx = int(torch.argmax(model_scores).item()) / len(model_scores)
         return contrast_loss, avg_gap, score_idx, win_frac, corel
 
-    def shared_generate(self, batch, source, references, encoder_outputs=None, **gen_kwargs):
+    def shared_generate(self, batch, source, references, encoder_outputs=None, plan_encoder_outputs=None, **gen_kwargs):
         fixed_kwargs = {  # Some of these values may get overridden by gen_kwargs
             'attention_mask': batch['attention_mask'],
             'no_repeat_ngram_size': 3,
             'early_stopping': True,
             'output_scores': True
         }
+        if plan_encoder_outputs is not None:
+            fixed_kwargs['attention_mask'] = batch['plan_attention_mask']
+            fixed_kwargs['encoder_outputs'] = encoder_outputs
         if encoder_outputs is not None:
             fixed_kwargs['encoder_outputs'] = encoder_outputs
         else:
