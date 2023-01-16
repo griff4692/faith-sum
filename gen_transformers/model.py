@@ -874,7 +874,7 @@ class TransformerSummarizer(pl.LightningModule):
         }
         if plan_encoder_outputs is not None:
             fixed_kwargs['attention_mask'] = batch['plan_attention_mask']
-            fixed_kwargs['encoder_outputs'] = encoder_outputs
+            fixed_kwargs['encoder_outputs'] = plan_encoder_outputs
         if encoder_outputs is not None:
             fixed_kwargs['encoder_outputs'] = encoder_outputs
         else:
