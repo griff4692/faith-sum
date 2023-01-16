@@ -1,6 +1,5 @@
 import os
 from summac.model_summac import SummaCConv
-from bert_score.scorer import BERTScorer
 
 import pandas as pd
 import argparse
@@ -73,22 +72,16 @@ if __name__ == '__main__':
         ))
         augmented_df = pd.DataFrame(augmented_records).sort_values(by='dataset_idx').reset_index(drop=True)
 
-        print(f'Saving with SummaC/BertScore added back to {out_fn}')
+        print(f'Saving with SummaC added back to {out_fn}')
         augmented_df.to_csv(out_fn, index=False)
 
         scores_by_beam = [[] for _ in range(16)]
-        bs_by_beam = [[] for _ in range(16)]
         for record in augmented_records:
             v = list(map(float, record['summac'].split(',')))
-            b = list(map(float, record['bertscore_p'].split(',')))
             for beam, v in enumerate(v):
                 scores_by_beam[beam].append(v)
-                bs_by_beam[beam].append(b[beam])
 
         print(f'SummaC for {fn}')
         for beam in range(len(scores_by_beam)):
             print(str(np.mean(scores_by_beam[beam])))
 
-        print(f'BertScore Source Precision for {fn}')
-        for beam in range(len(scores_by_beam)):
-            print(str(np.mean(bs_by_beam[beam])))
