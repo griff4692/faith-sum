@@ -36,9 +36,13 @@ def process_example(record, model_conv):
     n = len(summaries)
     source = record['source']
     source_rep = [source for _ in range(n)]
-    beam_scores = model_conv.score(source_rep, summaries)['scores']
-    metric_str = ','.join(list(map(str, beam_scores)))
-    record['summac'] = metric_str
+    try:
+        beam_scores = model_conv.score(source_rep, summaries)['scores']
+        metric_str = ','.join(list(map(str, beam_scores)))
+        record['summac'] = metric_str
+    except Exception as e:
+        print(str(e))
+        print('Catching error and returning None for summac score for this example.')
     return record
 
 
