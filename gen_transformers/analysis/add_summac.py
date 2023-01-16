@@ -21,9 +21,9 @@ FNS_BY_DATASET = {
     ],
     'nyt': [
         'nyt_e_v1_ft/test_from_beam_16_extract_nyt_ea_rand_tarbs2_trnbs2_maxgpu8.csv',
-        'nyt_bart_large/test_diverse_16_outputs.csv',
-        'nyt_bart_large/test_nucleus_16_outputs.csv',
-        'nyt_bart_large/test_beam_16_outputs.csv',
+        'bart_large_nyt/test_diverse_16_outputs.csv',
+        'bart_large_nyt/test_nucleus_16_outputs.csv',
+        'bart_large_nyt/test_beam_16_outputs.csv',
     ]
 }
 
