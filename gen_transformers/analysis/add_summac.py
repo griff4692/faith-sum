@@ -17,7 +17,13 @@ FNS_BY_DATASET = {
     'xsum': [
         'pegasus_xsum/test_diverse_16_outputs_1dp.csv',
         'pegasus_xsum/test_beam_16_outputs.csv',
-        'test_nucleus_16_outputs',
+        'pegasus_xsum/test_nucleus_16_outputs.csv',
+    ],
+    'nyt': [
+        'nyt_e_v1_ft/test_from_beam_16_extract_nyt_ea_rand_tarbs2_trnbs2_maxgpu8.csv',
+        'nyt_bart_large/test_diverse_16_outputs.csv',
+        'nyt_bart_large/test_nucleus_16_outputs.csv',
+        'nyt_bart_large/test_beam_16_outputs.csv',
     ]
 }
 

@@ -264,11 +264,11 @@ class SummarizationDataset(Dataset):
             row['corrupt_input_ids'] = corrupt_input_ids
             row['plan_input_ids'] = plan_input_ids
 
-        if self.args.debug:
-            source_edus = edus_from_html(source_annotated)
-            extract = [source_edus[i] for i in oracle_labels]
-            print(extract)
-            print(target)
+        # if self.args.debug:
+        #     source_edus = edus_from_html(source_annotated)
+        #     extract = [source_edus[i] for i in oracle_labels]
+        #     print(extract)
+        #     print(target)
 
         if self.args.add_brio_loss:
             candidates, scores = self.brio_candidates[dataset_id].copy()  # We modify it in place so let's insert
