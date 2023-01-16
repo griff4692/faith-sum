@@ -10,6 +10,7 @@ from preprocess.convert_abstractive_to_extractive import gain_selection
 import spacy
 import matplotlib.pyplot as plt
 import seaborn as sns
+from preprocess.align_edu import edus_from_html
 
 
 def get_arr(num_str):
@@ -41,11 +42,7 @@ def process(record, nlp, source_annotated):
     ):
         beam += 1
         extract_idx = list(map(int, get_arr(extract_idx)))
-        tps = re.split(r'(<s\d+>)', source_annotated[record['dataset_idx']])
-        source_sents = []
-        for tp_idx, tp in enumerate(tps):
-            if re.match(r'(<s\d+>)', tp) is not None:
-                source_sents.append(tps[tp_idx + 1].strip())
+        source_sents = edus_from_html(source_annotated[record['dataset_idx']])
 
         source_sents_tok = [[str(token.text) for token in nlp(sentence)] for sentence in source_sents]
         target_sents = [x for x in list(nlp(abstract.strip()).sents) if len(x.text.strip()) > 0]
@@ -59,7 +56,7 @@ def process(record, nlp, source_annotated):
         tok_agreement = extract_toks.intersection(target_toks)
         tok_coverage = len(tok_agreement) / len(target_toks)
 
-        implied_extract_obj = gain_selection(source_sents_tok, target_sents_tok, 5, lower=True, sort=True)
+        implied_extract_obj = gain_selection(source_sents_tok, target_sents_tok, 20, lower=True, sort=True)
 
         implied_idx = implied_extract_obj[0]
         agreement = set(extract_idx).intersection(implied_idx)

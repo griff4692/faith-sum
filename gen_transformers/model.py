@@ -212,7 +212,7 @@ class TransformerSummarizer(pl.LightningModule):
             for batch_idx in range(batch_size):
                 extract_outputs[batch_idx] = {
                     'source': source[batch_idx],
-                    'abstracts': None, 'implied_extracts': None,
+                    'abstracts': None,
                     'extracts': extracts[batch_idx],
                     'reference': batch['references'][batch_idx],
                 }
@@ -244,8 +244,6 @@ class TransformerSummarizer(pl.LightningModule):
         eval_metrics = {}
         if len(output_dict['abstracts']) > 0:
             eval_metrics.update(self.compute_rouge(output_dict['abstracts'], batch['references']))
-            implied_extracts = [x['summary'] for x in output_dict['implied_extracts']]
-            eval_metrics.update(self.compute_rouge(implied_extracts, batch['references'], prefix='implied_'))
 
         if len(output_dict['extracts']) > 0:
             extracts = [x['summary'] for x in output_dict['extracts']]
@@ -283,7 +281,7 @@ class TransformerSummarizer(pl.LightningModule):
             for batch_idx in range(batch_size):
                 extract_outputs[batch_idx] = {
                     'source': source[batch_idx],
-                    'abstracts': None, 'implied_extracts': None,
+                    'abstracts': None,
                     'extracts': extractive_summaries[batch_idx],
                     'reference': references[batch_idx],
                 }
@@ -305,15 +303,10 @@ class TransformerSummarizer(pl.LightningModule):
                 [x['summary'] for x in gen_output['extracts']])
             extract_idx_flat = '' if gen_output['extracts'] is None else '<cand>'.join(
                 [','.join(map(str, x['idxs'])) for x in gen_output['extracts']])
-            implied_extract_flat = '' if gen_output['implied_extracts'] is None else '<cand>'.join(
-                [x['summary'] for x in gen_output['implied_extracts']])
-            implied_extract_idx_flat = '' if gen_output['implied_extracts'] is None else '<cand>'.join(
-                [','.join(map(str, x['idxs'])) for x in gen_output['implied_extracts']])
-
             save_out = {
-                'abstract': abstract_flat, 'extract': extract_flat, 'implied_extract': implied_extract_flat,
+                'abstract': abstract_flat, 'extract': extract_flat,
                 'reference': reference, 'source': gen_output['source']['text'],
-                'extract_idx': extract_idx_flat, 'implied_extract_idx': implied_extract_idx_flat,
+                'extract_idx': extract_idx_flat,
             }
 
             if (
@@ -343,11 +336,6 @@ class TransformerSummarizer(pl.LightningModule):
             # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
             if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
                 save_out.update(self.compute_rouge(gen_output['abstracts'][:1], [reference], eval=eval))
-                implied_extracts = [x['summary'] for x in gen_output['implied_extracts']]
-                save_out.update(self.compute_rouge(
-                    implied_extracts[:1], [reference], prefix='implied_', eval=eval
-                ))
-
                 if len(gen_output['abstracts']) > 1:
                     # Get all the ROUGE abstracts (average ROUGE-1, ROUGE-2)
                     abstract_cand_metrics, best_abstract_metric, avg_abstract_r1, diversity = self.score_candidates(
@@ -358,16 +346,6 @@ class TransformerSummarizer(pl.LightningModule):
                     save_out.update({'diversity': diversity})
                     save_out['abstract_rouges'] = ','.join(
                         [str(x['best_abstract_mean_f1']) for x in abstract_cand_metrics]
-                    )
-
-                    implied_cand_metrics, best_implied_metric, avg_implied_r1, implied_diversity = self.score_candidates(
-                        [reference], implied_extracts, 'implied', eval=eval
-                    )
-                    save_out.update(best_implied_metric)
-                    save_out.update({'avg_implied_rouge1_f1': avg_implied_r1})
-                    save_out.update({'implied_diversity': implied_diversity})
-                    save_out['implied_extract_rouges'] = ','.join(
-                        [str(x['best_implied_mean_f1']) for x in implied_cand_metrics]
                     )
 
             if gen_output['extracts'] is not None:
@@ -917,32 +895,11 @@ class TransformerSummarizer(pl.LightningModule):
         else:
             raise Exception(f'Unrecognized summary style -> {self.hparams.summary_style}')
 
-        implied_extracts = None
-        if abstracts is not None:
-            implied_extracts = []
-            abstract_sents = [
-                convert_to_sents(x, self.nlp, is_dialogue=self.hparams.dataset == 'samsum') for x in abstracts
-            ]
-            abstract_sents_tok = [[[
-                str(token.text) for token in sentence] for sentence in abstract_sent] for abstract_sent in
-                abstract_sents]
-
-            for idx in range(num_pred):
-                implied_oracle_idx = gain_selection(
-                    source['sent_toks'], abstract_sents_tok[idx], 5, lower=True, sort=True
-                )[0]
-                implied_oracle = ' '.join([str(source['sents'][i]) for i in implied_oracle_idx])
-                implied_extracts.append({
-                    'idxs': implied_oracle_idx,
-                    'summary': implied_oracle,
-                })
-
         return {
             'source': source,
             'reference': reference,
             'abstracts': abstracts,
             'extracts': extracts,
-            'implied_extracts': implied_extracts,
         }
 
     def remove_special_tokens_from_sent_bart(self, summary_idx, dynamic_eos_token_id):
