@@ -32,9 +32,6 @@ if __name__ == '__main__':
     parser.add_argument('--experiment', default='add_doc')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--fn', default=DEFAULT_FN)
-    parser.add_argument('--column', default='from_extract_abstract', choices=[
-        'from_extract_abstract', 'abstract',
-    ])
     parser.add_argument('--device', default=0, type=int)
 
     args = parser.parse_args()
@@ -43,11 +40,10 @@ if __name__ == '__main__':
 
     print(f'Reading in records from {args.fn}')
     outputs = pd.read_csv(args.fn)
-    # outputs = outputs.sample(n=100, replace=False)
     records = outputs.to_dict('records')
 
     augmented_records = list(tqdm(map(
-        lambda record: process_example(record, model_conv), records), total=len(records)
+        lambda record: process_example(record, bs), records), total=len(records)
     ))
     augmented_df = pd.DataFrame(augmented_records).sort_values(by='dataset_idx').reset_index(drop=True)
 

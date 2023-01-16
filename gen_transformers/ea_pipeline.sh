@@ -17,6 +17,6 @@ python generate.py $SHARED_ARGS $GEN_ARGS --max_examples $MAX_EXAMPLES
 
 echo "Now generating abstracts from these extracts"
 FROM_EXTRACT_ARGS="--extract_experiment $EXTRACT_EXPERIMENT --abstract_experiment $ABSTRACT_EXPERIMENT --num_candidates $N_CAND --num_return_sequences 1"
-python gen_from_extract.py $SHARED_ARGS $FROM_EXTRACT_ARGS -add_abstract_experiment
+python gen_from_extract.py $SHARED_ARGS $FROM_EXTRACT_ARGS -add_abstract_experiment --max_examples $MAX_EXAMPLES
 
 echo "Fini!"

@@ -116,9 +116,8 @@ if __name__ == '__main__':
                 print(num_cand, len(candidates), args.num_candidates)
                 print(f'Dataset Idx={dataset_idx} does not have enough unique candidates. Duplicating for now.')
                 last_cand = candidates[-1]
-                gap = num_cand - len(candidates)
-                num_repeated = gap
-                for _ in range(gap):
+                num_repeated = num_cand - len(candidates)
+                for _ in range(num_repeated):
                     candidates.append(last_cand)
 
             candidates_no_new_lower = [ptb_prepare(c) for c in candidates]

@@ -183,10 +183,11 @@ if __name__ == '__main__':
         outputs = outputs.sample(n=args.max_examples, replace=False, random_state=111)
         n = len(outputs)
 
-    data_dir = os.path.join(args.data_dir, args.dataset)
+    data_dir = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
+    print(f'Loading data from {data_dir}')
     dataset = load_from_disk(data_dir)[args.split]
     dataset_idx2id = dataset['id']
-    all_source_annotated = dataset['source_annotated']
+    all_source_annotated = dataset['source_edu_annotated']
 
     records = outputs.to_dict('records')
     weight_dir = os.path.join(args.data_dir, 'weights')
@@ -209,7 +210,7 @@ if __name__ == '__main__':
     elif args.dataset == 'xsum':
         lp_candidates = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     else:
-        lp_candidates = [1.0, 2.0, 3.0, 4.0, 5.0]
+        lp_candidates = [0.6, 1.0, 2.0, 3.0, 4.0]
     for lp in lp_candidates:
         stats_by_extract_len = defaultdict(list)
         for record in tqdm(records, total=len(records)):

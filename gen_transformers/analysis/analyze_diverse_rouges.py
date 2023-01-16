@@ -196,8 +196,8 @@ def analyze(experiment, output, summary_style=None, max_beams=16, use_calibratio
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Analyze ROUGE candidates.')
-    parser.add_argument('--experiment', default='pegasus_xsum')
-    parser.add_argument('--fn', default='test_diverse_16_outputs')
+    parser.add_argument('--experiment', default='cnn_e_v1')
+    parser.add_argument('--fn', default='test_from_beam_16_extract_cnn_ea_rand')
 
     args = parser.parse_args()
 

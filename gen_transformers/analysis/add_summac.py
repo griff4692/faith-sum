@@ -1,18 +1,29 @@
+import os
 from summac.model_summac import SummaCConv
 from bert_score.scorer import BERTScorer
+
 import pandas as pd
 import argparse
 from tqdm import tqdm
 import numpy as np
 
 
-ea_fn = '/nlp/projects/faithsum/results/samsum_extract_generator/test_from_beam_16_extract.csv'
-diverse_fn = '/nlp/projects/faithsum/results/bart_large_samsum/test_diverse_16_outputs.csv'
-beam_fn = '/nlp/projects/faithsum/results/bart_large_samsum/test_beam_16_outputs.csv'
-DEFAULT_FNS = ea_fn + ',' + diverse_fn + ',' + beam_fn
+FNS_BY_DATASET = {
+    'cnn_dailymail': [
+        'bart_large_cnn/test_diverse_16_outputs',
+        'bart_large_cnn/test_nucleus_16_outputs',
+        'bart_large_cnn/test_beam_16_outputs',
+        'cnn_e_v1/test_from_beam_16_extract_cnn_ea_rand',
+    ],
+    'xsum': [
+        'pegasus_xsum/test_diverse_16_outputs_1dp.csv',
+        'pegasus_xsum/test_beam_16_outputs.csv',
+        'test_nucleus_16_outputs',
+    ]
+}
 
 
-def process_example(record, model_conv, bs):
+def process_example(record, model_conv):
     if 'from_extract_abstract' in record:
         summaries = record['from_extract_abstract'].split('<cand>')
     else:
@@ -21,48 +32,49 @@ def process_example(record, model_conv, bs):
     source = record['source']
     source_rep = [source for _ in range(n)]
     beam_scores = model_conv.score(source_rep, summaries)['scores']
-    bert_p, bert_r, bert_f1 = bs.score(cands=summaries, refs=source_rep)
     metric_str = ','.join(list(map(str, beam_scores)))
     record['summac'] = metric_str
-    record['bertscore_p'] = ','.join(list(map(str, bert_p.cpu().numpy())))
-    record['bertscore_r'] = ','.join(list(map(str, bert_r.cpu().numpy())))
-    record['bertscore_f1'] = ','.join(list(map(str, bert_f1.cpu().numpy())))
     return record
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('ADD BartScore')
+    parser = argparse.ArgumentParser('Add SummaC')
 
-    parser.add_argument('--experiment', default='add_doc')
-    parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--fns', default=DEFAULT_FNS)
-    parser.add_argument('--column', default='from_extract_abstract', choices=[
-        'from_extract_abstract', 'abstract',
-    ])
+    parser.add_argument('--dataset', default='cnn_dailymail')
+    parser.add_argument('--data_dir', default='/nlp/projects/faithsum/results')
     parser.add_argument('--device', default=0, type=int)
 
     args = parser.parse_args()
 
     # https://github.com/tingofurro/summac/
     model_conv = SummaCConv(
-        models=['vitc'], bins='percentile', granularity="sentence", nli_labels='e', device=args.device, start_file='default',
-        agg='mean'
+        models=['vitc'], bins='percentile', granularity="sentence", nli_labels='e', device=args.device,
+        start_file='default', agg='mean',
     )
 
-    bs = BERTScorer(lang='en')
+    fns = FNS_BY_DATASET[args.dataset]
+    for fn in fns:
+        fn = os.path.join(args.data_dir, fn)
+        if not fn.endswith('.csv'):
+            fn += '.csv'
 
-    for fn in args.fns.split(','):
+        out_fn = fn.split('.')[0] + '_summac.csv'
+        if os.path.exists(out_fn):
+            print(fn + ' already exists. Skipping. Delete to re-run')
+            continue
+        else:
+            print(f'Will save results to {out_fn}')
         print(f'Reading in records from {fn}')
         outputs = pd.read_csv(fn)
         records = outputs.to_dict('records')
 
         augmented_records = list(tqdm(map(
-            lambda record: process_example(record, model_conv, bs), records), total=len(records)
+            lambda record: process_example(record, model_conv), records), total=len(records)
         ))
         augmented_df = pd.DataFrame(augmented_records).sort_values(by='dataset_idx').reset_index(drop=True)
 
-        print(f'Saving with SummaC/BertScore added back to {fn}')
-        augmented_df.to_csv(fn, index=False)
+        print(f'Saving with SummaC/BertScore added back to {out_fn}')
+        augmented_df.to_csv(out_fn, index=False)
 
         scores_by_beam = [[] for _ in range(16)]
         bs_by_beam = [[] for _ in range(16)]

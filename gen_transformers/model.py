@@ -115,6 +115,7 @@ class TransformerSummarizer(pl.LightningModule):
                 metrics['salience'] = salience_loss
 
         # score is just extraction (no word-level generation)
+        plan_encoder_outputs = None
         if 'abstract' in self.hparams.summary_style:
             updated_inputs = {
                 'encoder_outputs': encoder_outputs,
@@ -162,9 +163,16 @@ class TransformerSummarizer(pl.LightningModule):
                 return_loss += self.hparams.unlike_coef * unlike_smooth
 
             return_loss += self.hparams.mle_weight * smooth_lm_loss
-        return {
-            'metrics': metrics, 'return_loss': return_loss, 'encoder_outputs': encoder_outputs, 'extracts': extracts
-        }
+        if self.hparams.extract_indicators:
+            assert plan_encoder_outputs is not None
+            return {
+                'metrics': metrics, 'return_loss': return_loss, 'encoder_outputs': plan_encoder_outputs,
+                'extracts': extracts
+            }
+        else:
+            return {
+                'metrics': metrics, 'return_loss': return_loss, 'encoder_outputs': encoder_outputs, 'extracts': extracts
+            }
 
     def training_step(self, batch, batch_idx):
         if self.hparams.summary_style == 'extract':
