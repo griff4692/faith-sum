@@ -90,4 +90,4 @@ if __name__ == '__main__':
 
     scores_str = list(map(str, scores))
     with open(out_fn, 'w') as fd:
-        fd.writelines(scores_str)
+        fd.write('\n'.join(scores_str))
