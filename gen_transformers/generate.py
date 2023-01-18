@@ -42,7 +42,7 @@ BEAM_KWARGS = {
 DIVERSE_KWARGS = {
     'cnn_dailymail': {'diversity_penalty': 1.0,},
     'nyt': {'diversity_penalty': 1.0},
-    'xsum': {'diversity_penalty': 0.1},
+    'xsum': {'diversity_penalty': 1.0},  # 0.1 performed worse
 }
 
 NUCLEUS_KWARGS = {
@@ -114,7 +114,7 @@ if __name__ == '__main__':
         args.experiment = args.wandb_name
 
     infer_dataset(args, 'wandb_name')
-    infer_hf_model(args)
+    infer_hf_model(args, is_abstract=args.summary_style == 'abstract')
 
     if args.dataset == 'xsum':
         args.max_input_length = 512
@@ -185,6 +185,8 @@ if __name__ == '__main__':
 
         if args.num_return_sequences == 1:
             assert args.decode_method == 'beam'
+            if args.dataset == 'xsum':
+                BEAM_KWARGS['num_beams'] = 8
             gen_kwargs.update(BEAM_KWARGS)
         else:
             if args.decode_method == 'beam':
