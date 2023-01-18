@@ -16,6 +16,7 @@ FNS_BY_DATASET = {
     ],
     'xsum': [
         # 'pegasus_xsum/test_diverse_16_outputs_1dp.csv',
+        # 'xsum_e_v1/test_from_beam_16_extract_xsum_ea_reg_1.0_0.1_0.1.csv',
         'pegasus_xsum/test_beam_16_outputs.csv',
         'pegasus_xsum/test_nucleus_16_outputs.csv',
     ],
@@ -62,6 +63,9 @@ if __name__ == '__main__':
     )
 
     fns = FNS_BY_DATASET[args.dataset]
+
+    print('Processing:\n', '\n'.join(fns))
+
     for fn in fns:
         fn = os.path.join(args.data_dir, fn)
         if not fn.endswith('.csv'):
