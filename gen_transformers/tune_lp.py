@@ -228,7 +228,7 @@ if __name__ == '__main__':
                 stats_by_extract_len[elen].append(r1)
 
         for elen, r1s in stats_by_extract_len.items():
-            row = {'extract_length': elen, 'rouge1': float(np.mean(r1s)), 'length_penalty': lp}
+            row = {'extract_length': elen, 'rouge1': float(np.mean(r1s)), 'length_penalty': lp, 'support': len(r1s)}
             results.append(row)
     results = pd.DataFrame(results)
     print(results.rouge1.tolist())
@@ -240,4 +240,5 @@ if __name__ == '__main__':
         er = results[results['extract_length'] == elen]
         best_row = er.rouge1.argmax()
         best_lp = er.length_penalty.tolist()[best_row]
-        print(f'Best for {elen} length extracts -> {best_lp}')
+        support = er.support.tolist()[best_row]
+        print(f'Best for {elen} length extracts -> {best_lp} (based on {support} examples)')

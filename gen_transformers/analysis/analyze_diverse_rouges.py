@@ -3,6 +3,7 @@ import json
 import argparse
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 
 def get_arr(num_str):
@@ -69,6 +70,7 @@ def analyze(experiment, output, summary_style=None, max_beams=16, use_calibratio
     # avg_bartscores = []
     max_rouges_by_beam = [[] for _ in range(min(max_beams, len(rouges[0])))]
     avg_rouges_by_beam = [[] for _ in range(min(max_beams, len(rouges[0])))]
+    avg_rouges_by_beam_cum = [[] for _ in range(min(max_beams, len(rouges[0])))]
     # avg_bartscores_by_beam = [[] for _ in range(len(rouges[0]))]
 
     lens_by_beam = [
@@ -76,7 +78,7 @@ def analyze(experiment, output, summary_style=None, max_beams=16, use_calibratio
     ]
 
     avg_lens = []
-    for i in range(n):
+    for i in tqdm(range(n)):
         rouge_arr = rouges[i]
         # bartscore_arr = bartscores[i]
         cand_arr = cands[i]
@@ -97,9 +99,14 @@ def analyze(experiment, output, summary_style=None, max_beams=16, use_calibratio
         max_rouges.append(max(rouge_arr))
         num_beams = min(max_beams, len(avg_rouges_by_beam))
         for beam in range(num_beams):
-            cum_rouge = rouge_arr_sorted[:beam + 1]
-            avg_rouges_by_beam[beam].append(np.mean(cum_rouge))
-            max_rouges_by_beam[beam].append(max(cum_rouge))
+            try:
+                cum_rouge = rouge_arr_sorted[:beam + 1]
+                avg_rouges_by_beam[beam].append(rouge_arr_sorted[beam])
+                avg_rouges_by_beam_cum[beam].append(np.mean(cum_rouge))
+                max_rouges_by_beam[beam].append(max(cum_rouge))
+            except Exception as e:
+                print(str(e))
+                print('If only happens once for nucleus that is fine because occasionally nucleus generates EM duplicates.')
             # cum_bartscore = bartscore_arr_sorted[:beam + 1]
             # avg_bartscores_by_beam[beam].append(np.mean(cum_bartscore))
 
@@ -108,97 +115,34 @@ def analyze(experiment, output, summary_style=None, max_beams=16, use_calibratio
     print(f'Mean Avg ROUGE-1 F1: {np.mean(avg_rouges)}')
     print(f'Mean Max ROUGE-1 F1: {np.mean(max_rouges)}')
     # print(f'Mean Avg BartScore: {np.mean(avg_bartscores)}')
-    print('Mean Avg ROUGE-1 F1 by Beam...')
+    print('Cumulative Mean Avg ROUGE-1 F1 by Beam...')
+    out = []
+    for beam in range(len(avg_rouges_by_beam)):
+        out.append(str(np.mean(avg_rouges_by_beam_cum[beam])))
+    print('\n'.join(out))
+
+    print('Mean Avg ROUGE-1 F1 @ each Beam...')
     out = []
     for beam in range(len(avg_rouges_by_beam)):
         out.append(str(np.mean(avg_rouges_by_beam[beam])))
-    print('\t'.join(out))
+    print('\n'.join(out))
 
     print('Mean Max ROUGE-1 F1 by Beam...')
     out = []
     for beam in range(len(max_rouges_by_beam)):
         out.append(str(np.mean(max_rouges_by_beam[beam])))
-    print('\t'.join(out))
+    print('\n'.join(out))
 
     print('Summary Length by Beam')
     for beam in range(len(lens_by_beam)):
         print(beam, np.mean(lens_by_beam[beam]))
 
-    # for bin in range(4):
-    #     df = orig_df[orig_df['bin'] == bin]
-    #     rouges = [get_arr(x) for x in df[rouge_col].tolist()]
-    #
-    #     # bartscore_col = f'{summary_style}_bartscores'
-    #     # bartscores = [get_arr(x) for x in df[bartscore_col].tolist()]
-    #     try:
-    #         diversities = [float(x) for x in df[diversity_col]]
-    #     except:
-    #         print('This has been fixed in generate but lets deal with it here.')
-    #         diversities = []
-    #         for x in df[diversity_col]:
-    #             diversities.append(np.mean(json.loads(x)))
-    #     n = len(df)
-    #
-    #     rank_scores = None
-    #     if reranked:
-    #         rank_scores = [get_arr(x) for x in df[score_col].tolist()]
-    #
-    #     avg_rouges = []
-    #     max_rouges = []
-    #     # avg_bartscores = []
-    #     max_rouges_by_beam = [[] for _ in range(len(rouges[0]))]
-    #     avg_rouges_by_beam = [[] for _ in range(len(rouges[0]))]
-    #     # avg_bartscores_by_beam = [[] for _ in range(len(rouges[0]))]
-    #
-    #     for i in range(n):
-    #         rouge_arr = rouges[i]
-    #         # bartscore_arr = bartscores[i]
-    #         rouge_arr_sorted = rouge_arr
-    #         # bartscore_arr_sorted = bartscore_arr
-    #         if rank_scores is not None:
-    #             scores = rank_scores[i]
-    #             priority = np.argsort(-np.array(scores))
-    #             rouge_arr_sorted = [rouge_arr[pidx] for pidx in priority]
-    #             # bartscore_arr_sorted = [bartscore_arr[pidx] for pidx in priority]
-    #
-    #         avg_rouges.append(np.mean(rouge_arr))
-    #         # avg_bartscores.append(np.mean(bartscore_arr_sorted))
-    #         max_rouges.append(max(rouge_arr))
-    #         for beam in range(len(avg_rouges_by_beam)):
-    #             cum_rouge = rouge_arr_sorted[:beam + 1]
-    #             avg_rouges_by_beam[beam].append(np.mean(cum_rouge))
-    #             max_rouges_by_beam[beam].append(max(cum_rouge))
-    #             # cum_bartscore = bartscore_arr_sorted[:beam + 1]
-    #             # avg_bartscores_by_beam[beam].append(np.mean(cum_bartscore))
-    #
-    #     print(f'Mean Avg inverse SELF-BLEU: {np.mean(diversities)}')
-    #     print(f'Mean Avg ROUGE-1 F1: {np.mean(avg_rouges)}')
-    #     print(f'Mean Max ROUGE-1 F1: {np.mean(max_rouges)}')
-    #     # print(f'Mean Avg BartScore: {np.mean(avg_bartscores)}')
-    #     print('Mean Avg ROUGE-1 F1 by Beam...')
-    #     out = []
-    #     for beam in range(len(avg_rouges_by_beam)):
-    #         out.append(str(np.mean(avg_rouges_by_beam[beam])))
-    #     print('\t'.join(out))
-    #
-    #     print('Mean Max ROUGE-1 F1 by Beam...')
-    #     out = []
-    #     for beam in range(len(max_rouges_by_beam)):
-    #         out.append(str(np.mean(max_rouges_by_beam[beam])))
-    #     print('\t'.join(out))
-
-    # print('Mean Cumulative BartScore by Beam...')
-    # out = []
-    # for beam in range(len(avg_rouges_by_beam)):
-    #     out.append(str(np.mean(avg_bartscores_by_beam[beam])))
-    # print('\t'.join(out)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Analyze ROUGE candidates.')
-    parser.add_argument('--experiment', default='pegasus_xsum')
-    parser.add_argument('--fn', default='test_diverse_16_outputs.csv')
+    parser.add_argument('--experiment', default='cnn_e_v1')
+    parser.add_argument('--fn', default='test_from_beam_16_extract_cnn_ea_rand_v2')
 
     args = parser.parse_args()
 
-    analyze(args.experiment, args.fn)
+    analyze(args.experiment, args.fn, summary_style='extract')

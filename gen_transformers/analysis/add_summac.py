@@ -10,12 +10,12 @@ import numpy as np
 FNS_BY_DATASET = {
     'cnn_dailymail': [
         'bart_large_cnn/test_diverse_16_outputs',
-        'bart_large_cnn/test_nucleus_16_outputs',
         'bart_large_cnn/test_beam_16_outputs',
+        'bart_large_cnn/test_nucleus_16_outputs',
         'cnn_e_v1/test_from_beam_16_extract_cnn_ea_rand',
     ],
     'xsum': [
-        'pegasus_xsum/test_diverse_16_outputs_1dp.csv',
+        # 'pegasus_xsum/test_diverse_16_outputs_1dp.csv',
         'pegasus_xsum/test_beam_16_outputs.csv',
         'pegasus_xsum/test_nucleus_16_outputs.csv',
     ],

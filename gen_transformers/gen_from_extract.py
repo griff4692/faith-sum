@@ -19,6 +19,7 @@ from gen_transformers.model_utils import infer_hf_model
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
 from gen_transformers.analysis.add_eval_rouge import process_file
+from preprocess.align_edu import edus_from_html
 
 
 os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
@@ -48,8 +49,7 @@ DATASET_KWARGS = {
 def compute_implied(args, nlp, pred_str, source_annotated):
     implied_extracts = []
 
-    source_sents = re.split(r'<s\d*>', source_annotated)
-    source_sents = [x.strip() for x in source_sents if len(x.strip()) > 0]
+    source_sents = edus_from_html(source_annotated)
 
     source_sent_toks = [
         [str(token.text) for token in nlp(sentence)] for sentence in source_sents
@@ -67,7 +67,7 @@ def compute_implied(args, nlp, pred_str, source_annotated):
 
     for idx in range(num_pred):
         implied_oracle_idx = gain_selection(
-            source_sent_toks, pred_toks[idx], 5, lower=True, sort=True
+            source_sent_toks, pred_toks[idx], 20, lower=True, sort=True
         )[0]
         implied_oracle = ' '.join([str(source_sents[i]) for i in implied_oracle_idx])
         implied_extracts.append({
