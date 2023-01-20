@@ -140,8 +140,8 @@ def analyze(experiment, output, summary_style=None, max_beams=16, use_calibratio
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Analyze ROUGE candidates.')
-    parser.add_argument('--experiment', default='xsum_e_v1')
-    parser.add_argument('--fn', default='test_from_beam_16_extract_xsum_ea_reg_1.0_0.1_0.1')
+    parser.add_argument('--experiment', default='cnn_e_v1')
+    parser.add_argument('--fn', default='test_from_beam_16_extract_cnn_ea_rand_v2')  # _no_unlike')
 
     args = parser.parse_args()
 

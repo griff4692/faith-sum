@@ -132,7 +132,10 @@ if __name__ == '__main__':
                 if 'eval_abstract_rouge1_f1' in record:
                     rouges = get_arr(record['eval_abstract_rouge1_f1'])
                 else:
-                    rouges = get_arr(record['abstract_rouges'])
+                    if args.num_candidates == 1:
+                        rouges = [record['rouge1_f1']]
+                    else:
+                        rouges = get_arr(record['abstract_rouges'])
             if num_repeated > 0:
                 last = rouges[-1]
                 extra = np.array([last for _ in range(num_repeated)])

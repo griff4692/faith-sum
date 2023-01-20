@@ -14,9 +14,9 @@ from preprocess.align_edu import edus_from_html
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Analyze implied EDU extracts.')
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
-    parser.add_argument('--experiment', default='bart_large_cnn')
+    parser.add_argument('--experiment', default='cnn_e_v1')
     parser.add_argument('--dataset', default=None)
-    parser.add_argument('--fn', default='test_nucleus_16_outputs.csv')
+    parser.add_argument('--fn', default='test_from_beam_16_extract_cnn_ea_rand_v2.csv')
 
     args = parser.parse_args()
 
@@ -36,10 +36,23 @@ if __name__ == '__main__':
     beam_implied_rouges_max = [[] for _ in range(16)]
     source_annotated = dataset['test']['source_edu_annotated']
     n = len(df)
+    plan_r, plan_p, plan_f1 = [], [], []
     for record in tqdm(df.to_dict('records'), total=n):
         extract_idx = record[idx_col]
         cands = extract_idx.split('<cand>')
         source = source_annotated[record['dataset_idx']]
+        if type(record['extract_idx']) == str:
+            for cand, extract in zip(cands, record['extract_idx'].split('<cand>')):
+                a, b = list(map(float, cand.split(','))), list(map(float, extract.split(',')))
+                agreement = set(a).intersection(b)
+                n = len(agreement)
+                r = n / len(b)
+                p = n / len(a)
+                f1 = 0 if min(r, p) == 0 else (2 * p * r) / (p + r)
+                plan_r.append(r)
+                plan_p.append(p)
+                plan_f1.append(f1)
+
         sedus = edus_from_html(source)
         num_sents = len(sedus)
         cand_str = []
@@ -64,6 +77,12 @@ if __name__ == '__main__':
             beam_implied_rouges_cum[beam].append(val)
             beam_implied_rouges_max[beam].append(float(max([extract_rouges[i] for i in range(beam + 1)])))
             beam_implied_rouges[beam].append(extract_rouges[beam])
+
+    if len(plan_f1) > 0:
+        print(f'Plan F1: {float(np.mean(plan_f1))}')
+        print(f'Plan Precision: {float(np.mean(plan_p))}')
+        print(f'Plan Recall: {float(np.mean(plan_r))}')
+
     print('Fraction Sentences Covered...')
     for beam, arr in enumerate(beam_num_unique_plans):
         # print(f'{beam + 1},{np.mean(arr)}')

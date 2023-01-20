@@ -83,7 +83,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--experiment', default='cnn_e_v1')
-    parser.add_argument('--fn', default='test_from_beam_16_extract_cnn_ea_rand_v2.csv')
+    parser.add_argument('--fn', default='test_from_beam_16_extract_cnn_ea_no_unlike.csv')
     parser.add_argument('--dataset', default=None)
     parser.add_argument('-overwrite', default=False, action='store_true')
 
