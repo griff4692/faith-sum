@@ -3,7 +3,7 @@ set -e
 
 export CLASSPATH=~/stanford-corenlp-3.8.0.jar
 
-CAND=1
+CAND=16
 EXP=$1
 FN=$2
 SUFFIX=$3

@@ -12,10 +12,15 @@ if __name__ == '__main__':
     non_scores = []
     plan_f1 = []
     x, y = [], []
+    by_beam = [[] for _ in range(16)]
     for record in records:
         extract_idx = record['extract_idx'].split('<cand>')
         implied_extract_idx = record['implied_extract_idx'].split('<cand>')
         extract_rouge = record['eval_extract_mean_f1'].split(',')
+
+        vals = record['implied_official_rouge1_f1'].split(',')
+        for beam, val in enumerate(vals):
+            by_beam[beam].append(float(val))
 
         for a, b, score in zip(extract_idx, implied_extract_idx, extract_rouge):
             overlaps = len(set(a.split(',')).intersection(set(b.split(','))))
@@ -28,3 +33,7 @@ if __name__ == '__main__':
     print(np.mean(non_scores))
     print(np.mean(adhere_scores))
     print(pearsonr(x, y))
+
+    for beam_arr in by_beam:
+        print(np.mean(beam_arr))
+

@@ -127,7 +127,10 @@ if __name__ == '__main__':
             article_untok = articles[dataset_idx]
             reference_untok = record['reference']
             if prediction_col == 'from_extract_abstract':
-                rouges = get_arr(record['eval_from_extract_abstract_rouge1_f1'])
+                if 'eval_from_extract_abstract_rouge1_f1' in record:
+                    rouges = get_arr(record['eval_from_extract_abstract_rouge1_f1'])
+                else:
+                    rouges = get_arr(record['from_extract_rouges'])
             else:
                 if 'eval_abstract_rouge1_f1' in record:
                     rouges = get_arr(record['eval_abstract_rouge1_f1'])
