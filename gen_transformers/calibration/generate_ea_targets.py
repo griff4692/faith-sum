@@ -73,7 +73,7 @@ if __name__ == '__main__':
 
         dataset_ids = list(sorted(list(all_oracles.keys())))
         if args.chunk is not None:
-            dataset_ids = np.array_split(dataset_ids, args.num_chunks)[args.chunk][:4]
+            dataset_ids = np.array_split(dataset_ids, args.num_chunks)[args.chunk]
 
         out_dict = {}
         for dataset_id in tqdm(dataset_ids):
