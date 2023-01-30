@@ -39,8 +39,8 @@ if __name__ == '__main__':
 
     chunk_suffix = '' if args.chunk is None else f'_chunk_{args.chunk}'
 
-    print(f'Loading {args.dataset}...')
     data_dir = os.path.join(args.data_dir, args.dataset + '_edu_alignments')
+    print(f'Loading {args.dataset} from {data_dir}...')
     dataset = load_from_disk(data_dir)
     _, target_col = summarization_name_mapping[args.dataset]
 
@@ -111,7 +111,10 @@ if __name__ == '__main__':
                 print(f'Dataset ID: {dataset_id}')
                 print(f'Source: {source_annotated}')
                 print(f'Reference: {reference}')
-                raise Exception(f'Gen from Guide Failed: {e}. See above inputs')
+                print(f'Number of Extract Candidates: {len(extract_idx)}')
+                print(e)
+                print('Skipping. See above.')
+                continue
 
             out_dict[dataset_id] = {'ea': gen_outputs, 'oracles': oracle_sample}
         print(f'Dumping examples with EA information to provide calibration targets to {out_fn}')
