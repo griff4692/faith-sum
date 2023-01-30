@@ -45,6 +45,7 @@ if __name__ == '__main__':
     _, target_col = summarization_name_mapping[args.dataset]
 
     oracle_dir = os.path.join(args.data_dir, args.dataset, 'oracle')
+    os.makedirs(oracle_dir, exist_ok=True)
 
     weight_dir = os.path.join(args.data_dir, 'weights')
     ckpt_path = get_path_from_exp(weight_dir, args.abstract_experiment)
