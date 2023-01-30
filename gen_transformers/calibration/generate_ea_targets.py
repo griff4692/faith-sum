@@ -9,6 +9,7 @@ from transformers import AutoTokenizer
 from tqdm import tqdm
 import spacy
 
+from gen_transformers.gen_from_extract import filter_out_extract_tags
 from gen_transformers.model import TransformerSummarizer
 from gen_transformers.model_utils import infer_hf_model
 from gen_transformers.data_utils import get_path_from_exp, infer_dataset
@@ -83,15 +84,33 @@ if __name__ == '__main__':
             # Get source tokens
             reference = all_references[dataset_idx]
 
+            # If empty source, continue
+            sa_clean = filter_out_extract_tags(source_annotated, [])
+            if len(sa_clean.split(' ')) <= 5:
+                print(dataset_id)
+                print(f'Source is too short: {sa_clean}')
+                continue
+
+            if len(reference.split(' ')) <= 3:
+                print(dataset_id)
+                print(f'Reference is too short: {reference}')
+                continue
+
             oracle_sample = oracles
             if len(oracles) > args.max_targets:
                 oracle_sample = list(np.random.choice(oracles, size=(args.max_targets), replace=False))
 
             extract_idx = [x['idxs'] for x in oracle_sample]
-            gen_outputs = gen_from_guide(
-                args, nlp, model, tokenizer, source_annotated, reference,
-                extract_idx, num_return_sequences=1
-            )
+            try:
+                gen_outputs = gen_from_guide(
+                    args, nlp, model, tokenizer, source_annotated, reference,
+                    extract_idx, num_return_sequences=1
+                )
+            except Exception as e:
+                print(f'Dataset ID: {dataset_id}')
+                print(f'Source: {source_annotated}')
+                print(f'Reference: {reference}')
+                raise Exception(f'Gen from Guide Failed: {e}. See above inputs')
 
             out_dict[dataset_id] = {'ea': gen_outputs, 'oracles': oracle_sample}
         print(f'Dumping examples with EA information to provide calibration targets to {out_fn}')
