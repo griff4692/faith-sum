@@ -70,7 +70,6 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--seed', default=1956, type=int)
     parser.add_argument('--max_num_sents', type=int, default=200)
-    parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('-use_hf_rouge', default=False, action='store_true')  # Much faster to use HF implementation
     parser.add_argument('--bootstraps', default=1, type=int)
     parser.add_argument('-add_brio_loss', default=False, action='store_true')

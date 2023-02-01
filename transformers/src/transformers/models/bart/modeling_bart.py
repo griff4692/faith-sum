@@ -1580,8 +1580,9 @@ class BartForConditionalCopy(BartPretrainedModel):
             1,
             config.classifier_dropout,
         )
+        addl_feats = 1
         self.calibration_classifier = BartClassificationHead(
-            config.d_model * 2,
+            config.d_model * 2 + addl_feats,
             config.d_model,
             1,
             config.classifier_dropout,
