@@ -387,7 +387,7 @@ class TransformerSummarizer(pl.LightningModule):
             self.sent_bart.reset_counter_for_generation()
             return pred_ids
 
-    def sample_gen_extracts(self, batch, source, encoder_h, source_ngrams, eos_token_ids, **gen_kwargs):
+    def sample_gen_extracts(self, batch, source, encoder_h, source_ngrams, eos_token_ids=None, **gen_kwargs):
         extractive_summaries = []
         raw_predictions = []
         cls_mask = batch['cls_mask']
@@ -397,7 +397,8 @@ class TransformerSummarizer(pl.LightningModule):
             cls_h = edu_reps(cls_mask[batch_idx], encoder_h[batch_idx])
             inputs_embeds = torch.cat([cls_h, self.stop_embed(stop_input_id).unsqueeze(0)], dim=1)
             eos_token_id = cls_h.size()[1] - 1
-            assert eos_token_id == eos_token_ids[batch_idx]
+            if eos_token_ids is not None:
+                assert eos_token_id == eos_token_ids[batch_idx]
             fixed_kwargs = {
                 'inputs_embeds': inputs_embeds,
                 'eos_token_id': eos_token_id,
@@ -421,8 +422,7 @@ class TransformerSummarizer(pl.LightningModule):
             encoder_sent = sent_encoder_h[:, 1:-1, :]
             encoder_doc = sent_encoder_h[:, 0, :]
             assert len(encoder_sent) == 1
-            lens = self.make_lens(sent_labels, source_ngrams[batch_idx]).unsqueeze(0)
-
+            lens = self.make_lens(sent_labels, source_ngrams[batch_idx]).unsqueeze(1)
             pooled_extract = torch.stack([encoder_sent[0, x].mean(dim=0) for i, x in enumerate(sent_labels)])
             encoder_doc_rep = encoder_doc.repeat(len(sent_labels), 1)
             pooled = torch.cat([encoder_doc_rep, pooled_extract, lens], dim=1)

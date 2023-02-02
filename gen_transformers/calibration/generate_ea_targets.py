@@ -21,7 +21,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Extract EA scores for calibration')
 
     parser.add_argument('--dataset', default=None)
-    parser.add_argument('--splits', default='validation,test,train')
+    parser.add_argument('--splits', default='validation,train')
     parser.add_argument('--abstract_experiment', default=None)
     parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
     parser.add_argument('--hf_model', default=None)
