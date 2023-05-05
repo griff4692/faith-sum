@@ -74,8 +74,8 @@ def run(args):
         name=args.experiment,
         save_dir=experiment_dir,
         offline=args.debug or args.offline,
-        project='faith_sum',
-        entity='griffinadams',
+        project=args.wandb_project,
+        entity=args.wandb_entity,
     )
 
     if args.val_monitor_metric is None:
@@ -102,10 +102,12 @@ def run(args):
             mode=mode
         )
         callbacks.append(checkpoint_callback)
+
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')
         callbacks.append(lr_monitor)
     plugins = DDPPlugin(find_unused_parameters=False) if args.num_gpus is not None and args.num_gpus > 1 else None
+
     trainer = pl.Trainer.from_argparse_args(
         args,
         resume_from_checkpoint=args.restore_path,
@@ -123,25 +125,24 @@ def run(args):
         log_every_n_steps=25,
         max_steps=args.max_steps,
         plugins=plugins,
-        # detect_anomaly=args.debug
     )
 
-    if args.find_lr:
-        lr_finder = trainer.tuner.lr_find(model, min_lr=1e-4, max_lr=1e-2, update_attr=True, num_training=100)
-        print(lr_finder.results)
-    else:
-        print('Starting training...')
-        trainer.fit(model, datamodule=datamodule)
-        if checkpoint_callback is not None:
-            print(f'Best weights saved --> {checkpoint_callback.best_model_path}')
+    print('Starting training...')
+    trainer.fit(model, datamodule=datamodule)
+    if checkpoint_callback is not None:
+        print(f'Best weights saved --> {checkpoint_callback.best_model_path}')
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('BART/PEGASUS trainer.')
+    parser = argparse.ArgumentParser(
+        'BART/PEGASUS trainer for Generating EDU extracts and EDU extract-conditioned abstracts.'
+    )
 
     # Configuration Parameters
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--experiment', default='default')
+    parser.add_argument('--wandb_project', default='faith-sum')
+    parser.add_argument('--wandb_entity', default='griffinadams')
     parser.add_argument('--dataset', default=None)
     parser.add_argument('--restore_path', default=None)
     parser.add_argument('--seed', default=1992, type=int)
@@ -160,22 +161,11 @@ if __name__ == '__main__':
     parser.add_argument('--unlike_coef', default=1.0, type=float)
     parser.add_argument('--corrupt_strategy', default='random', choices=['random', 'swap'])
     parser.add_argument('--copy_bart_class_dropout', default=0.1, type=float)
-    parser.add_argument('-add_brio_loss', default=False, action='store_true')
-    parser.add_argument('-use_oracle_candidates', default=False, action='store_true')
-    parser.add_argument('--brio_weight', default=1, type=float)
-    parser.add_argument('--mle_weight', default=1, type=float)
     parser.add_argument('--salience_weight', default=1.0, type=float)
     parser.add_argument('--salience_temp', default=10.0, type=float)
-    parser.add_argument('--brio_margin', default=0.001, type=float)
-    parser.add_argument('--brio_length_penalty', default=2.0, type=float)
-    parser.add_argument('--brio_scale', default=1.0, type=float)
-    parser.add_argument('--max_brio_candidates', default=10, type=int)
-    parser.add_argument('--brio_score_mode', default='likelihood', choices=['score', 'likelihood', 'similarity'])
-    parser.add_argument('-include_gold', default=False, action='store_true')
 
     parser.add_argument('--val_monitor_metric', default=None)
     parser.add_argument('--val_metric_mode', default=None)
-    parser.add_argument('--oracle_drop_p', default=0.0, type=float)
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 3e-5
@@ -190,7 +180,6 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', default=20, type=int)
     parser.add_argument('--save_top_k', type=int, default=1)
     parser.add_argument('-skip_if_present', default=False, action='store_true')
-    parser.add_argument('--extract_method', type=str, default='generate', choices=['generate', 'select'])
     parser.add_argument('--pretrained_path', default=None, help='Path to a pre-trained TransformerSummarizer model.')
     # HuggingFace identifier of model for which to load weights for fine-tuning
     parser.add_argument('--hf_model', default=None)
