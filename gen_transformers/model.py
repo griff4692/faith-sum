@@ -87,16 +87,10 @@ class TransformerSummarizer(pl.LightningModule):
 
         if 'extract' in self.hparams.summary_style:
             # Generate Sentence Plan with separate randomly initialized Bart Decoder (self.sent_bart)
-            extract_loss, salience_loss, extracts, brio_info = self.generate_extracts(
+            extract_loss, salience_loss, extracts = self.generate_extracts(
                 batch, source, encoder_h
             )
-            if brio_info is not None:
-                return_loss += self.hparams.brio_weight * brio_info['margin_loss']
-                metrics['sent_brio'] = brio_info['margin_loss']
-                metrics['pos_neg_gap'] = brio_info['pos_neg_gap']
-                metrics['brio_rank'] = brio_info['brio_rank']
-                metrics['brio_win_rate'] = brio_info['brio_win_rate']
-                metrics['rank_corel'] = brio_info['rank_corel']
+
             metrics['extract'] = extract_loss
             return_loss += self.hparams.mle_weight * extract_loss
             if salience_loss is not None:
@@ -290,14 +284,6 @@ class TransformerSummarizer(pl.LightningModule):
                 dist_flat = ','.join([str(x['beam_score']) for x in gen_output['extracts']])
                 save_out['extract_beam_scores'] = dist_flat
 
-            if (
-                    gen_output['extracts'] is not None
-                    and len(gen_output['extracts']) > 0
-                    and 'calibrated_beam_score' in gen_output['extracts'][0]
-            ):
-                dist_flat = ','.join([str(x['calibrated_beam_score']) for x in gen_output['extracts']])
-                save_out['calibrated_beam_score'] = dist_flat
-
             # If we just generate a plan there is only an "extracted" (from plan) summary.  No generation
             if gen_output['abstracts'] is not None:  # Take top of the beam or first returned sequence
                 save_out.update(self.compute_rouge(gen_output['abstracts'][:1], [reference], eval=eval))
@@ -426,7 +412,6 @@ class TransformerSummarizer(pl.LightningModule):
             pooled_extract = torch.stack([encoder_sent[0, x].mean(dim=0) for i, x in enumerate(sent_labels)])
             encoder_doc_rep = encoder_doc.repeat(len(sent_labels), 1)
             pooled = torch.cat([encoder_doc_rep, pooled_extract, lens], dim=1)
-            calibrated_scores = self.sent_bart.calibration_classifier(pooled).squeeze(1).cpu().numpy().tolist()
 
             raw_predictions.append(pred_ids)
             return_obj = []
@@ -442,14 +427,12 @@ class TransformerSummarizer(pl.LightningModule):
                     seen.add(sidx)
                 summary_obj = self.get_summary_from_sent_idxs(source[batch_idx], summary_idx_no_special_no_dup)
                 summary_obj['beam_score'] = beam_scores[pred_idx]
-                summary_obj['calibrated_beam_score'] = calibrated_scores[pred_idx]
                 return_obj.append(summary_obj)
             extractive_summaries.append(return_obj)
         return extractive_summaries, raw_predictions
 
     def generate_extracts(self, batch, source, encoder_h):
         cls_mask = batch['cls_mask']
-        brio_sent_labels = batch.pop('brio_sent_labels', None)
         source_ngrams = batch.pop('source_ngrams', None)
         loss, salience_loss, sent_encoder_h, eos_ids = self.compute_gen_extract_loss(
             cls_mask, encoder_h, batch['oracle_labels'], batch['oracle_soft_labels'], source_ngrams
@@ -464,44 +447,8 @@ class TransformerSummarizer(pl.LightningModule):
             summaries, _ = self.sample_gen_extracts(
                 batch, source, encoder_h, source_ngrams, eos_ids, **gen_kwargs
             )
-        brio_info = None
-        if self.hparams.add_brio_loss:
-            margin_losses = []
-            pos_neg_gaps = []
-            brio_ranks = []
-            win_fracs = []
-            rank_corels = []
-            for batch_idx in range(len(cls_mask)):
-                assert eos_ids[batch_idx] == sent_encoder_h[batch_idx].size()[1] - 2
-                margin_loss, pos_neg_gap, pred_idx, win_frac, rank_corel = self.brio_step(
-                    brio_sent_labels[batch_idx],
-                    sent_encoder_h[batch_idx],
-                    source_ngrams[batch_idx],
-                    eos_token_id=eos_ids[batch_idx],
-                )
 
-                rank_corels.append(rank_corel)
-                if margin_loss is not None:
-                    margin_losses.append(margin_loss)
-                if pos_neg_gap is not None:
-                    pos_neg_gaps.append(pos_neg_gap)
-                brio_ranks.append(pred_idx)
-                if win_frac is not None:
-                    win_fracs.append(win_frac)
-            # Sum in the BRIO paper, was previously mean for us
-            margin_losses = torch.stack(margin_losses).mean()
-            pos_neg_gaps = np.mean(pos_neg_gaps)
-            brio_ranks = np.mean(brio_ranks)
-            win_fracs = np.mean(win_fracs)
-            rank_corel = np.mean(rank_corels)
-            brio_info = {
-                'margin_loss': margin_losses,
-                'pos_neg_gap': pos_neg_gaps,
-                'brio_rank': brio_ranks,
-                'brio_win_rate': win_fracs,
-                'rank_corel': rank_corel,
-            }
-        return loss, salience_loss, summaries, brio_info
+        return loss, salience_loss, summaries
 
     def build_summaries(self, source, y_hat, trigram_block=True, max_num_sents=3):
         all_summaries = []
@@ -545,73 +492,6 @@ class TransformerSummarizer(pl.LightningModule):
         if len(sent_labels) > 1:
             lens = (lens - lens.min()) / (lens.max() - lens.min() + 1e-4)
         return lens
-
-    def brio_step(self, sent_labels, sent_encoder_h, source_ngrams, eos_token_id):
-        # Add EOS token to cand_labels and convert to LongTensor
-        cand_labels_eos = []
-        for cand_label in sent_labels:
-            cand_labels_eos.append(list(cand_label) + [eos_token_id])
-            num_cand = len(cand_labels_eos)
-            max_len = max([len(x) for x in cand_labels_eos])
-
-        brio_labels = np.zeros([num_cand, max_len], dtype=np.int64)
-        brio_labels.fill(-100)
-        for cand_idx in range(num_cand):
-            brio_labels[cand_idx, :len(cand_labels_eos[cand_idx])] = cand_labels_eos[cand_idx]
-        brio_labels = torch.from_numpy(brio_labels).to(self.device)
-        num_cand, target_len = brio_labels.size()
-        assert num_cand >= 2
-        encoder_outputs = sent_encoder_h.repeat(num_cand, 1, 1).contiguous().clone()
-        inputs = {
-            'encoder_outputs': [encoder_outputs],
-            'labels': brio_labels,
-        }
-        self.sent_bart.source_ngrams_cache = source_ngrams
-        contrast_outputs = self.sent_bart(
-            **inputs, calculate_loss=False, use_cache=False, output_hidden_states=True
-        )
-
-        encoder_h = contrast_outputs.encoder_last_hidden_state
-        # Don't include the DOC token or special EOS token
-        encoder_sent = encoder_h[:, 1:-1, :]
-        pooled_extract = torch.stack([encoder_sent[i, x].mean(dim=0) for i, x in enumerate(sent_labels)])
-        encoder_doc_rep = encoder_h[:, 0, :]
-        lens = self.make_lens(sent_labels, source_ngrams).unsqueeze(1)
-        pooled = torch.cat([encoder_doc_rep, pooled_extract, lens], dim=1)
-        scores = self.sent_bart.calibration_classifier(pooled).squeeze(1)
-
-        corel = spearmanr(-scores.detach().cpu().numpy(), list(range(len(scores))))[0]
-        contrast_loss = 0
-        wins, losses = 0, 0
-        pos_neg_gap = []
-        # ROUGE is always between gold-standard reference (abstract) and extract
-        # Oracle Extract, Highest Scoring Generated Extract, ..., Lowest Scoring Generated Extract
-
-        num_cand = len(scores)
-
-        # p(s|D) -> s extractive oracle : gets us good results
-        # p(s'|D) > p(s''|D) where score(s') > score(s''|D)
-        # f(s'|D) -> f(s''|D): s', s'' : decoder states pooled; [CLS]
-        for cand_idx in range(1, num_cand):
-            pos_score = scores[:-cand_idx]
-            neg_score = scores[cand_idx:]
-            ones = torch.ones_like(pos_score)
-            loss_func = torch.nn.MarginRankingLoss(self.hparams.brio_margin * cand_idx, reduction='mean')
-            loss = loss_func(pos_score, neg_score, ones)
-            contrast_loss += loss
-
-            wins += (pos_score > neg_score).int().sum().item()
-            losses += (pos_score < neg_score).int().sum().item()
-            pos_neg_gap.append(float((pos_score - neg_score).mean().detach().cpu().item()))
-
-        avg_gap = np.mean(pos_neg_gap)
-        if wins + losses == 0:
-            print('Warning: all predicted the same score. Setting win fraction to 0.5')
-            win_frac = 0.5
-        else:
-            win_frac = wins / (wins + losses)
-        score_idx = int(torch.argmax(scores).item()) / len(scores)
-        return contrast_loss, avg_gap, score_idx, win_frac, corel
 
     def shared_generate(self, batch, source, references, encoder_outputs=None, plan_encoder_outputs=None, **gen_kwargs):
         fixed_kwargs = {  # Some of these values may get overridden by gen_kwargs
@@ -778,10 +658,6 @@ class TransformerSummarizer(pl.LightningModule):
                     return True
             return False
 
-        high_lr_prefixes = ['calibration']
-        ext_embed = [(n, p) for n, p in nps if high_lr(n, high_lr_prefixes)]
-        nps = [(n, p) for n, p in nps if not high_lr(n, high_lr_prefixes)]
-
         grouped_parameters = [
             {
                 'params': [p for n, p in nps if not any(nd in n for nd in no_decay) and p.requires_grad],
@@ -792,11 +668,6 @@ class TransformerSummarizer(pl.LightningModule):
                 'params': [p for n, p in nps if any(nd in n for nd in no_decay) and p.requires_grad],
                 'weight_decay': 0.0,
                 'lr': self.lr,
-            },
-            {
-                'params': [p for n, p in ext_embed if p.requires_grad],
-                'weight_decay': 0.0,
-                'lr': self.hparams.high_lr
             },
         ]
 

@@ -16,7 +16,7 @@ def merge(fns):
             assert type(chunk) == dict
             n += len(chunk)
             obj.update(chunk)
-    assert len(obj) == n  # Otherwise ther are duplicate dataset_ids in the chunks
+    assert len(obj) == n  # Otherwise other are duplicate dataset_ids in the chunks
     return obj
 
 

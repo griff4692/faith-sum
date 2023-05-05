@@ -45,7 +45,7 @@ def sentencize(args, nlp, batch_data, input_col, target_col):
 
     return {
         'source_annotated': source_annotated,
-        'target': targets,
+        'target': targets,  # Keep the untouched original reference for evaluation
         'target_annotated': target_annotated,
     }
 

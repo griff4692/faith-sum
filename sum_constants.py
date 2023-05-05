@@ -10,4 +10,5 @@ summarization_name_mapping = {
     "xglue": ("news_body", "news_title"),
     "xsum": ("document", "summary"),
     "wiki_summary": ("article", "highlights"),
+    "nyt": ('article_untok', 'abstract_untok')
 }

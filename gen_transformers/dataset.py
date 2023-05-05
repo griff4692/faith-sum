@@ -114,34 +114,6 @@ class SummaryDataModule(pl.LightningDataModule):
         if self.args.debug and max_examples is None:
             max_examples = 128
 
-        brio_candidates = None
-        if self.args.add_brio_loss:
-            # if self.args.use_oracle_candidates:
-            out_dir = os.path.join(self.args.data_dir, self.args.dataset, 'oracle')
-            out_fn = os.path.join(out_dir, f'{split}_candidates_targets.json')
-            with open(out_fn, 'r') as fd:
-                candidates = ujson.load(fd)
-
-            brio_candidates = {}
-            for dataset_id, cands in candidates.items():
-                scores = [float(x) for x in cands['ea']['from_extract_rouges'].split('<cand>')]
-                extract_idxs = [x['idxs'] for x in cands['oracles']]
-                order = np.argsort(-np.array(scores))
-                scores_ordered = [scores[i] for i in order]
-                extract_idxs_ordered = [extract_idxs[i] for i in order]
-
-                for i in range(1, len(scores_ordered)):  # Assert it's pre-sorted by ROUGE
-                    assert scores_ordered[i - 1] >= scores_ordered[i]
-                if len(cands) < 2:
-                    continue
-                brio_candidates[dataset_id] = [extract_idxs_ordered, scores_ordered]
-
-            # Filter dataset to only include ones with BRIO candidates generated or 'oracled'
-            available_keys = set(list(brio_candidates.keys()))
-            valid_hf_ids = [i for i, dataset_idx in enumerate(split_dataset['id']) if dataset_idx in available_keys]
-            print(f'Filtering out for {len(valid_hf_ids)}/{len(split_dataset)} contrastive BRIO examples')
-            split_dataset = split_dataset.select(valid_hf_ids)
-
         n = len(split_dataset)
         idxs = list(range(n))
         if max_examples is not None and max_examples < n:
@@ -150,7 +122,7 @@ class SummaryDataModule(pl.LightningDataModule):
             split_dataset = split_dataset.select(idxs)
 
         split_dataset_pl = SummarizationDataset(
-            self.args, split_dataset, self.tokenizer, split, brio_candidates=brio_candidates
+            self.args, split_dataset, self.tokenizer, split
         )
         collate_fn = Seq2SeqCollate(
             self.tokenizer,
@@ -178,13 +150,12 @@ class SummaryDataModule(pl.LightningDataModule):
 
 
 class SummarizationDataset(Dataset):
-    def __init__(self, args, dataset, tokenizer, split, brio_candidates=None):
+    def __init__(self, args, dataset, tokenizer, split):
         super(SummarizationDataset, self).__init__()
         self.args = args
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.split = split
-        self.brio_candidates = brio_candidates
         self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
 
     def __len__(self):
@@ -238,9 +209,4 @@ class SummarizationDataset(Dataset):
             row['corrupt_input_ids'] = corrupt_input_ids
             row['plan_input_ids'] = plan_input_ids
 
-        if self.args.add_brio_loss:
-            candidates, _ = self.brio_candidates[dataset_id].copy()  # We modify it in place so let's insert
-            if len(candidates) > self.args.max_brio_candidates:
-                candidates = candidates[:self.args.max_brio_candidates]
-            row['brio_sent_labels'] = candidates
         return row

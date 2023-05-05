@@ -6,9 +6,9 @@ from tqdm import tqdm
 if __name__ == '__main__':
     dataset = 'xsum'
     brio_dir = os.path.expanduser(os.path.join('~', 'BRIO', dataset))
-    cand_dir = os.path.join(brio_dir, 'xsum_e_v1_ea', 'diverse', 'test')
+    cand_dir = os.path.join(brio_dir, 'xsum_e_fixed_v1', 'diverse', 'test')
     add_dir = os.path.join(brio_dir, 'xsum_ea_reg_1.0_0.1_0.1_unprompted', 'diverse', 'test')
-    out_dir = os.path.join(brio_dir, f'{dataset}_combined', 'diverse', 'test')
+    out_dir = os.path.join(brio_dir, f'{dataset}_combined_v2', 'diverse', 'test')
 
     print(f'Saving to {out_dir}')
     os.makedirs(out_dir, exist_ok=True)

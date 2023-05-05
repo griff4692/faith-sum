@@ -160,17 +160,12 @@ if __name__ == '__main__':
     parser.add_argument('--unlike_coef', default=1.0, type=float)
     parser.add_argument('--corrupt_strategy', default='random', choices=['random', 'swap'])
     parser.add_argument('--copy_bart_class_dropout', default=0.1, type=float)
-    parser.add_argument('-add_brio_loss', default=False, action='store_true')
-    parser.add_argument('--brio_weight', default=1, type=float)
     parser.add_argument('--mle_weight', default=1, type=float)
     parser.add_argument('--salience_weight', default=1.0, type=float)
     parser.add_argument('--salience_temp', default=10.0, type=float)
-    parser.add_argument('--brio_margin', default=1, type=float)
-    parser.add_argument('--max_brio_candidates', default=10, type=int)
 
     parser.add_argument('--val_monitor_metric', default=None)
     parser.add_argument('--val_metric_mode', default=None)
-    parser.add_argument('--oracle_drop_p', default=0.0, type=float)
 
     # Hyper-Parameters
     parser.add_argument('--lr', type=float, default=1e-5)  # used to be 3e-5
@@ -215,9 +210,6 @@ if __name__ == '__main__':
 
     # Won't held yet for multi-gpu
     args.grad_accum = args.target_batch_size // args.per_device_train_bs
-
-    # if args.debug:  # Use small data and tiny BART model
-    #     args.hf_model = 'sshleifer/bart-tiny-random'
 
     # Override: If we are generating an extract, we MUST include <s{idx}> tokens in the source input
     args.add_sent_toks = args.add_sent_toks or 'extract' in args.summary_style or args.extract_indicators
