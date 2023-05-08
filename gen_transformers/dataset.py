@@ -133,7 +133,7 @@ class SummarizationDataset(Dataset):
         self.dataset = dataset
         self.tokenizer = tokenizer
         self.split = split
-        self.input_col, self.target_col = summarization_name_mapping[self.args.dataset]
+        _, self.target_col = summarization_name_mapping[self.args.dataset]
 
     def __len__(self):
         return len(self.dataset)

@@ -141,7 +141,7 @@ if __name__ == '__main__':
     # Configuration Parameters
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('--experiment', default='default')
-    parser.add_argument('--wandb_project', default='faith-sum')
+    parser.add_argument('--wandb_project', default='faith_sum')
     parser.add_argument('--wandb_entity', default='griffinadams')
     parser.add_argument('--dataset', default=None)
     parser.add_argument('--restore_path', default=None)
@@ -157,6 +157,7 @@ if __name__ == '__main__':
     # How many processes to use when loading batches on CPU
     parser.add_argument('--num_dataloaders', default=8, type=int)
     parser.add_argument('-extract_indicators', default=False, action='store_true')
+    parser.add_argument('--mle_weight', default=1.0, type=float)
     parser.add_argument('--like_coef', default=1.0, type=float)
     parser.add_argument('--unlike_coef', default=1.0, type=float)
     parser.add_argument('--corrupt_strategy', default='random', choices=['random', 'swap'])
@@ -201,7 +202,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     infer_dataset(args, 'experiment')
-    infer_hf_model(args, is_abstract=args.summary_style=='abstract')
+    infer_hf_model(args, is_abstract=args.summary_style == 'abstract')
 
     if args.dataset == 'xsum':
         args.max_input_length = 512

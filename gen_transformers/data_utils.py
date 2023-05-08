@@ -105,17 +105,6 @@ class Seq2SeqCollate:
             row['plan_input_ids'] = plan_input_ids_pad
             row['plan_attention_mask'] = plan_attention_mask
 
-        if 'brio_sent_labels' in batch_list[0]:
-            row['brio_sent_labels'] = [x['brio_sent_labels'] for x in batch_list]
-    
-        if 'brio_scores' in batch_list[0]:
-            row['brio_scores'] = [x['brio_scores'] for x in batch_list]
-
-        if 'brio_norm_scores' in batch_list[0]:
-            row['brio_norm_scores'] = [torch.from_numpy(x['brio_norm_scores']) for x in batch_list]
-
-        if 'source_ngrams' in batch_list[0]:
-            row['source_ngrams'] = [x['source_ngrams'] for x in batch_list]
         return row
 
 
