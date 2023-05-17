@@ -112,7 +112,7 @@ def run(args):
         callbacks=callbacks,
         logger=logger,
         precision=precision,
-        accelerator=None if args.num_gpus is None or args.num_gpus == 1 else 'ddp',
+        accelerator='cpu' if args.num_gpus is None or 'cuda',
         gpus=gpus,
         default_root_dir=experiment_dir,
         gradient_clip_val=0.1,
