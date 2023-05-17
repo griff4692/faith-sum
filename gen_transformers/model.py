@@ -750,4 +750,4 @@ class TransformerSummarizer(pl.LightningModule):
     def log_metrics(self, metrics, is_train):
         for k, v in metrics.items():
             split_str = 'train' if is_train else 'validation'
-            self.log(f'{split_str}/{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True)
+            self.log(f'{split_str}/{k}', v, on_epoch=not is_train, on_step=is_train, prog_bar=True, sync_dist=True)
