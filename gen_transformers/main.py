@@ -5,7 +5,6 @@ import argparse
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.plugins import DDPPlugin
 import torch
 from transformers import AutoTokenizer
 
@@ -106,7 +105,6 @@ def run(args):
     if not (args.no_schedule or args.debug or args.find_lr):
         lr_monitor = LearningRateMonitor(logging_interval='step')
         callbacks.append(lr_monitor)
-    plugins = DDPPlugin(find_unused_parameters=False) if args.num_gpus is not None and args.num_gpus > 1 else None
 
     trainer = pl.Trainer.from_argparse_args(
         args,
@@ -124,7 +122,6 @@ def run(args):
         num_sanity_val_steps=1 if args.debug else 2,
         log_every_n_steps=25,
         max_steps=args.max_steps,
-        plugins=plugins,
     )
 
     print('Starting training...')
