@@ -14,6 +14,11 @@ openai.organization = OA_ORGANIZATION
 openai.api_key = OA_KEY
 
 
+def shorten(prompt):
+    batches = prompt.split('-----')
+    return '-----'.join([batches[0], batches[-1]])
+
+
 @backoff.on_exception(backoff.expo, openai.error.RateLimitError, max_tries=3)
 def chat_gpt(messages, model='gpt-4', temperature=0.3, max_tokens=256):
     response = openai.ChatCompletion.create(
@@ -72,6 +77,12 @@ if __name__ == '__main__':
             continue
         with open(fn, 'r') as fd:
             prompt = fd.read()
+
+            num_toks = len(prompt.split(' '))
+            if num_toks > 2750:  # This will likely trigger 4k token limit error
+                prompt = shorten(prompt)
+                new_toks = len(prompt.split(' '))
+                print(f'Shortened from {num_toks} to {new_toks}')
 
             if is_chat:
                 messages = [
