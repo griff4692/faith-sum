@@ -40,8 +40,8 @@ if __name__ == '__main__':
     # Configuration Parameters
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--extract_experiment', default='cnn_e_final')
-    parser.add_argument('--model', default='gpt-3.5-turbo', choices=['text-davinci-003', 'gpt-3.5-turbo'])
-    parser.add_argument('--max_examples', default=16, type=int)
+    parser.add_argument('--model', default='gpt-3.5-turbo', choices=['text-davinci-003', 'gpt-3.5-turbo', 'gpt-4'])
+    parser.add_argument('--max_examples', default=1000, type=int)
     parser.add_argument('-overwrite', default=False, action='store_true')
     parser.add_argument('--mode', default='pga', choices=['vanilla', 'pga'])
 
@@ -49,8 +49,8 @@ if __name__ == '__main__':
 
     in_dir = os.path.join('/nlp/projects/faithsum/results', args.extract_experiment, args.mode + '_prompts')
     assert os.path.exists(in_dir)
-    out_dir = os.path.join('/nlp/projects/faithsum/results', args.extract_experiment, args.model)
-    print(out_dir)
+    out_dir = os.path.join('/nlp/projects/faithsum/results', args.extract_experiment, args.mode + '_' + args.model)
+    print(f'Saving to {out_dir}.')
     os.makedirs(out_dir, exist_ok=True)
 
     is_chat = args.model in {'gpt-3.5-turbo', 'gpt-4'}
@@ -68,7 +68,7 @@ if __name__ == '__main__':
     for fn in tqdm(fns_filt):
         out_fn = os.path.join(out_dir, fn.split('/')[-1])
         if os.path.exists(out_fn) and not args.overwrite:
-            print('Skipping ', out_fn)
+            print(f'Warning! Skipping: {out_fn}. Run with -overwrite if not desired behavior.')
             continue
         with open(fn, 'r') as fd:
             prompt = fd.read()
