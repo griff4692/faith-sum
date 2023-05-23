@@ -15,10 +15,15 @@ if __name__ == '__main__':
                     continue
                 like = unlike = plan
                 experiment = f'{data_name}_ea_final_mle_{mle}_like_{like}_unlike_{unlike}'
-                cmd = f'python main.py --per_device_train_bs 2 --summary_style abstract -extract_indicators ' \
-                      f'--dataset {dataset} --mle_weight {mle} --like_coef {like} --unlike_coef {unlike} ' \
-                      f'--experiment {experiment} {extra_args}'.strip()
-                row = [experiment, data_name, str(mle), str(like), str(unlike)]
-                row_str = ' '.join(row)
+                # cmd = f'python main.py --per_device_train_bs 2 --summary_style abstract -extract_indicators ' \
+                #       f'--dataset {dataset} --mle_weight {mle} --like_coef {like} --unlike_coef {unlike} ' \
+                #       f'--experiment {experiment} {extra_args}'.strip()
+                # row = [experiment, data_name, str(mle), str(like), str(unlike)]
+
+                # row_str = ' '.join(row)
                 # print(row_str)
-                print(cmd)
+                # print(cmd)
+
+                args = f'--split validation --decode_method beam --max_examples 1024 -add_abstract_experiment --extract_experiment {data_name}_e_final --abstract_experiment {experiment} --num_candidates 16 --num_return_sequences 1 --device 0'
+                ea_cmd = f'python gen_from_extract.py {args}'
+                print(ea_cmd)

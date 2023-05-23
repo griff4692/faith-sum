@@ -98,6 +98,7 @@ if __name__ == '__main__':
                     assert len(cand_tok) == args.num_candidates
                     ptb_results.append({'ref': ref_tok, 'cand': cand_tok})
 
+            print(len(ptb_results), len(records))
             assert len(ptb_results) == len(records)
 
         for_ptb = []
