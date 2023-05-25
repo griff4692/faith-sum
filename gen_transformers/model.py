@@ -71,7 +71,6 @@ class TransformerSummarizer(pl.LightningModule):
             # <s> is never used but there as padding since it's id is 0
             self.sent_config.vocab_size = 3  # <s> <pad> </s>
             self.sent_bart = BartForConditionalCopy(self.sent_config)
-            # self.sent_bart.model.encoder.layers[-1].load_state_dict(self.model.model.encoder.layers[-1].state_dict())
             self.stop_embed = nn.Embedding(
                 num_embeddings=1, embedding_dim=self.sent_config.d_model, padding_idx=None
                 )
@@ -704,12 +703,6 @@ class TransformerSummarizer(pl.LightningModule):
     def configure_optimizers(self):
         no_decay = ['bias', 'LayerNorm.weight']
         nps = list(self.named_parameters())
-
-        def high_lr(n, prefix_arr):
-            for prefix in prefix_arr:
-                if prefix in n:
-                    return True
-            return False
 
         grouped_parameters = [
             {

@@ -1,0 +1,11 @@
+# --model {gpt-3.5-turbo, gpt-4}
+
+# Single Candidate
+python run.py --mode vanilla --candidates 1 --temperature 0.3
+
+# Sampling
+python run.py --mode vanilla --candidates 16 --temperature 0.7
+
+# PGA
+python run.py --mode pga --candidates 16 --temperature 0.3
+

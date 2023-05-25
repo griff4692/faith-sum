@@ -154,7 +154,6 @@ if __name__ == '__main__':
             args=args, checkpoint_path=ckpt_path, tokenizer=tokenizer, hf_model=args.hf_model, strict=False
         ).to(gpu).eval()
 
-    # TODO why do we need this
     model.hparams.summary_style = args.summary_style
     model.hparams.extract_indicators = args.extract_indicators
     datamodule = SummaryDataModule(args, tokenizer)

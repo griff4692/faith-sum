@@ -35,13 +35,24 @@ if __name__ == '__main__':
 
     # Configuration Parameters
     parser.add_argument('--dataset', default='cnn_dailymail')
+    parser.add_argument('--experiment', default=None)
     parser.add_argument('--extract_experiment', default='cnn_e_final')
     parser.add_argument('--model', default='gpt-3.5-turbo', choices=['text-davinci-003', 'gpt-3.5-turbo'])
     parser.add_argument('--mode', default='vanilla')
+    parser.add_argument('--candidates', default=16, type=int)
 
     args = parser.parse_args()
 
-    results_dir = os.path.join('/nlp/projects/faithsum/results', args.extract_experiment, args.mode + '_' + args.model)
+    if args.experiment is None:
+        args.experiment = args.mode + '_' + args.model + '_' + str(args.candidates)
+
+    results_dir = os.path.join(
+        '/nlp/projects/faithsum/results',
+        args.extract_experiment,
+        args.experiment
+    )
+
+    print(results_dir)
 
     fns = list(glob(os.path.join(results_dir, '*.txt')))
 
@@ -56,7 +67,10 @@ if __name__ == '__main__':
 
     for dataset_idx in tqdm(dataset_idxs):
         idx_fns = list(sorted([fn for fn in fns if get_dataset_idx(fn) == dataset_idx]))
-        cands = [open(fn).read().strip() for fn in idx_fns]
+        cands = []
+        for fn in idx_fns:
+            with open(fn, 'r') as fd:
+                cands += [x.strip() for x in fd.read().split('<SEP>')]
 
         reference = idx2target[int(dataset_idx)]
 
