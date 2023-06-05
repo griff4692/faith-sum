@@ -65,7 +65,7 @@ if __name__ == '__main__':
 
     agg_stats = []
 
-    for dataset_idx in tqdm(dataset_idxs):
+    for dataset_idx in tqdm(dataset_idxs[:100]):
         idx_fns = list(sorted([fn for fn in fns if get_dataset_idx(fn) == dataset_idx]))
         cands = []
         for fn in idx_fns:

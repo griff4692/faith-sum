@@ -9,8 +9,9 @@ from datasets import load_from_disk
 
 if __name__ == '__main__':
     experiments = [
-        'cnn_e_v1_ea_rand_v2', 'bart_large_cnn_beam', 'bart_large_cnn_dbs_dendrite',
-        'bart_large_cnn_nucleus_v2'
+        # 'cnn_e_v1_ea_rand_v2', 'bart_large_cnn_beam', 'bart_large_cnn_dbs_dendrite',
+        # 'bart_large_cnn_nucleus_v2'
+        'cnn_e_final_cnn_ea_final_mle_10.0_like_1_unlike_1'
     ]
 
     from_dirs = []
