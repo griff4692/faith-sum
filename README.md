@@ -4,6 +4,9 @@ This is the PyTorch implementation of the ACL 2023 Paper: [Generating EDU Extrac
 
 Please feel free to raise an Issue or directly email `griffin.adams@columbia.edu` with any questions.
 
+
+![diagram](static/EDU_PGA_Diagram.pdf)
+
 # Setup
 
 ```
