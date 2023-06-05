@@ -1,5 +1,4 @@
 import os
-import pandas as pd
 from glob import glob
 import ujson
 from tqdm import tqdm
@@ -47,7 +46,7 @@ def ptb_prepare(text):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Convert fn to BRIO directory format')
-    parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
+    parser.add_argument('--data_dir', default=os.environ.get('DATA_DIR', '~/tmp'))
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--num_candidates', default=16, type=int)
 

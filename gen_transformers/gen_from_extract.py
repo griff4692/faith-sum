@@ -21,15 +21,13 @@ from preprocess.convert_abstractive_to_extractive import gain_selection
 from gen_transformers.analysis.add_eval_rouge import process_file
 from preprocess.align_edu import edus_from_html
 
-
-os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 np.random.seed(1992)
 
 
 # TODO: Grid-search
 DATASET_KWARGS = {
     'cnn_dailymail': {
-        'length_penalty': 2.0,  # [4.0, 4.0, 3.0, 2.0, 1.0],  # Previously 1.0 (this was tuned for unlikelihood training)
+        'length_penalty': 2.0,
         'max_length': 142,
         'min_length': 56,
     },
@@ -41,7 +39,7 @@ DATASET_KWARGS = {
     'xsum': {
         'min_length': 11,
         'max_length': 62,
-        'length_penalty': 0.6  # [0.6, 0.9, 0.5]
+        'length_penalty': 0.6,
     }
 }
 
@@ -117,15 +115,6 @@ def gen_from_guide(
         args, nlp, model, tokenizer, source_annotated, reference, idx_to_keep, num_return_sequences=1
 ):
     n = len(idx_to_keep)
-    # Remove Duplicates
-    # idx_to_keep_no_dup = []
-    # seen = set()
-    # for extract in idx_to_keep:
-    #     key = '_'.join(list(map(str, list(sorted(list(set(extract)))))))
-    #     if key in seen:
-    #         continue
-    #     idx_to_keep_no_dup.append(list(sorted(set(extract))))
-    #     seen.add(key)
 
     source_annotated_tagged = [
         filter_out_extract_tags(source_annotated, extract_idxs) for extract_idxs in idx_to_keep
@@ -232,7 +221,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Generate From Extract')
 
     parser.add_argument('--device', default=0, type=int)
-    parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
+    parser.add_argument('--data_dir', default=os.environ.get('DATA_DIR', '~/tmp'))
     parser.add_argument('--abstract_experiment', default='extract_indicators')
     parser.add_argument('--extract_experiment', default='add_doc')
     parser.add_argument('-debug', default=False, action='store_true')
@@ -263,10 +252,7 @@ if __name__ == '__main__':
     print(f'Reading in extracts from {in_fn}')
     outputs = pd.read_csv(in_fn)
     prev_n = len(outputs)
-    # outputs.dropna(subset=['extract'], inplace=True)
     n = len(outputs)
-    # if prev_n > n:
-    #     print(f'Filtered out {prev_n - n} null extracts.')
     if n > args.max_examples:
         outputs = outputs.sample(n=args.max_examples, replace=False, random_state=111)
         n = len(outputs)

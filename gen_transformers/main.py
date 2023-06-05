@@ -147,7 +147,7 @@ if __name__ == '__main__':
     parser.add_argument('-cpu', default=False, action='store_true')
     parser.add_argument('--max_val_examples', default=1024, type=int)
     parser.add_argument('--gpu_device', default=None, type=int)
-    parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
+    parser.add_argument('--data_dir', default=os.environ.get('DATA_DIR', '~/tmp'))
     parser.add_argument('-no_schedule', default=False, action='store_true')
     parser.add_argument('-offline', default=False, action='store_true')
     parser.add_argument('-find_lr', default=False, action='store_true')

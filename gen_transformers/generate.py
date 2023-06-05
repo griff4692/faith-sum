@@ -8,7 +8,6 @@ from tqdm import tqdm
 import torch
 from transformers import AutoTokenizer, BartTokenizer
 
-os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
 from data_utils import get_path_from_exp, infer_dataset
 from gen_transformers.main import add_edus_to_tokenizer
 from gen_transformers.dataset import SummaryDataModule
@@ -58,7 +57,7 @@ if __name__ == '__main__':
     parser.add_argument('--wandb_name', default=None)
     parser.add_argument('--experiment', default=None)
     parser.add_argument('--dataset', default=None)
-    parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
+    parser.add_argument('--data_dir', default=os.environ.get('DATA_DIR', '~/tmp'))
     parser.add_argument('-debug', default=False, action='store_true')
     parser.add_argument('-do_not_save', default=False, action='store_true')
     parser.add_argument('-cpu', default=False, action='store_true')

@@ -25,9 +25,6 @@ from eval.rouge_metric import RougeMetric
 from eval.diversity import diversity_score
 
 
-os.environ['ROUGE_HOME'] = os.path.expanduser('~/faith-sum/eval/ROUGE-1.5.5/')
-
-
 def edu_reps(mask, h):
     assert mask.sum() % 2 == 1  # Assert Odd
 

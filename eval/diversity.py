@@ -31,7 +31,7 @@ def diversity_score(candidates):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Score for Diversity')
 
-    parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
+    parser.add_argument('--data_dir', default=os.environ.get('DATA_DIR', '~/tmp'))
     parser.add_argument('--experiment', default='add_doc')
     parser.add_argument('--fn', default='validation_sample_w_diverse_outputs')
     parser.add_argument('--candidate_column', default='extract')

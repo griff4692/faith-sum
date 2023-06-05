@@ -55,7 +55,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--dataset', default='cnn_dailymail')
     parser.add_argument('--splits', default='train,validation,test')
-    parser.add_argument('--data_dir', default='/nlp/projects/faithsum')
+    parser.add_argument('--data_dir', default=os.environ.get('DATA_DIR', '~/tmp'))
     parser.add_argument('--num_proc', default=16, type=int)
     parser.add_argument('--max_num_sents', default=200, type=int)
     parser.add_argument('-debug', default=False, action='store_true')
