@@ -20,7 +20,7 @@ from transformers.models.bart.modeling_bart import BartForConditionalCopy
 
 from preprocess.align_edu import edus_from_html
 from preprocess.extract_oracles import convert_to_sents
-from gen_transformers.objectives import label_smoothed_unlikelihood
+from model.objectives import label_smoothed_unlikelihood
 from eval.rouge_metric import RougeMetric
 from eval.diversity import diversity_score
 

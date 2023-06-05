@@ -5,7 +5,7 @@ import pytorch_lightning as pl
 from torch.utils.data import Dataset, DataLoader
 from datasets import load_from_disk
 
-from gen_transformers.data_utils import Seq2SeqCollate
+from model.data_utils import Seq2SeqCollate
 from sum_constants import summarization_name_mapping
 
 

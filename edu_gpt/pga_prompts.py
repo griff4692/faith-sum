@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from nltk import sent_tokenize
 from p_tqdm import p_uimap
-from gen_transformers.gen_from_extract import filter_out_extract_tags
+from model.gen_from_extract import filter_out_extract_tags
 
 
 INSTRUCTION = 'Summarize the content in between the HTML tags <e> and </e> in one to three sentences.'

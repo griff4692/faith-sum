@@ -9,14 +9,13 @@ import torch
 from transformers import AutoTokenizer, BartTokenizer
 
 from data_utils import get_path_from_exp, infer_dataset
-from gen_transformers.main import add_edus_to_tokenizer
-from gen_transformers.dataset import SummaryDataModule
-from gen_transformers.model import TransformerSummarizer
-from gen_transformers.model_utils import infer_hf_model
+from model.main import add_edus_to_tokenizer
+from model.dataset import SummaryDataModule
+from model.model import TransformerSummarizer
+from model.model_utils import infer_hf_model
 from global_utils import get_free_gpus
 
 
-# TODO: Grid-search (only necessary for extracts)
 DATASET_KWARGS = {
     'cnn_dailymail': {
         'abstract': {'min_length': 56, 'max_length': 142, 'length_penalty': 2.0},

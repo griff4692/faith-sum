@@ -5,7 +5,7 @@ import argparse
 from p_tqdm import p_uimap
 
 from eval.rouge_metric import RougeMetric
-from gen_transformers.analysis.analyze_diverse_rouges import analyze
+from eval.analyze_diverse_rouges import analyze
 
 
 def get_arr(num_str):

@@ -5,7 +5,7 @@ import argparse
 import ujson
 from datasets import load_from_disk
 from transformers import AutoTokenizer
-from gen_transformers.model_utils import infer_hf_model
+from model.model_utils import infer_hf_model
 
 
 EDU_SPECIAL_TOKENS = ['<e>', '</e>']

@@ -8,11 +8,11 @@ from pytorch_lightning import loggers as pl_loggers
 import torch
 from transformers import AutoTokenizer
 
-from gen_transformers.dataset import SummaryDataModule
-from gen_transformers.model import TransformerSummarizer
+from model.dataset import SummaryDataModule
+from model.model import TransformerSummarizer
 from global_utils import get_free_gpus, set_same_seed
-from gen_transformers.model_utils import infer_hf_model
-from gen_transformers.data_utils import infer_dataset
+from model.model_utils import infer_hf_model
+from model.data_utils import infer_dataset
 
 
 def add_edus_to_tokenizer(tokenizer):

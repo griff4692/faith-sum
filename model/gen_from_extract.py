@@ -13,18 +13,17 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from eval.rouge_metric import RougeMetric
-from gen_transformers.data_utils import get_path_from_exp, infer_dataset
-from gen_transformers.model import TransformerSummarizer
-from gen_transformers.model_utils import infer_hf_model
+from eval.add_eval_rouge import process_file
+from model.data_utils import get_path_from_exp, infer_dataset
+from model.model import TransformerSummarizer
+from model.model_utils import infer_hf_model
 from preprocess.extract_oracles import convert_to_sents
 from preprocess.convert_abstractive_to_extractive import gain_selection
-from gen_transformers.analysis.add_eval_rouge import process_file
 from preprocess.align_edu import edus_from_html
 
 np.random.seed(1992)
 
 
-# TODO: Grid-search
 DATASET_KWARGS = {
     'cnn_dailymail': {
         'length_penalty': 2.0,
