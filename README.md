@@ -24,10 +24,13 @@ If you want to use BRIO re-ranker, please feel README under `./BRIO`. The direct
 
 ```angular2html
 python preprocess/split_into_sentences.py
-[ Run EDU script ]
+[Run NeuralEDUSeg EDU segmenter]
 python preprocess/add_edu.py
 python preprocess/align_edu.py
 ```
+
+The `NeuralEDUSeg` model comes from [codebase](https://github.com/PKU-TANGENT/NeuralEDUSeg) is described in the EMNLP 2018 paper ([Toward Fast and Accurate Neural Discourse Segmentation
+](https://aclanthology.org/D18-1116/)). Instructions will be posted shortly for how to run the parser on sentence level.
 
 # Training
 
@@ -82,9 +85,65 @@ OA_ORGANIZATION = 'org-xx'
 
 ```
 python edu_gpt/pga_prompts.py --extract_fn {.csv file}
-python edu_gpt/run.py --mode pga --candidates 16 --temperature 0.3
+python edu_gpt/run.py --extract_experiment {my-extract-experiment} --mode pga --candidates 16 --temperature 0.3
+python edu_gpt/convert_to_brio.py --extract_experiment {my-extract-experiment} --mode pga
 ```
 
 `{.csv}` file should be the absolute path to a file with extractive candidates: `$DATA_DIR/results/{my-extract-experiment}/test_beam_16_outputs.csv`.
 
 Please email `griffin.adams@columbia.edu` for full test set 16 candidate outputs for `CNN/DM` and `Xsum` if you want to skip [EDU Generation](#EDU-Extract-Generator).
+
+## Using Outputs for RLHF/Calibration
+
+On a sample of 1,000 test set examples, we have uploaded PGA GPT-3.5-Turbo outputs, as well as outputs for sampling-methods (nucleus, temperature), as a [HuggingFace Dataset](https://huggingface.co/datasets/griffin/ChemSum).
+
+Please feel free to download and use for any downstream use-case which requires high-quality diverse candidates.
+
+```angular2html
+from datasets import load_dataset
+dataset = load_dataset('griffin/ChemSum')
+```
+
+# Citation
+
+If you use this in your research, please cite
+
+```
+@article{adams2023generating,
+  title={Generating EDU Extracts for Plan-Guided Summary Re-Ranking},
+  author={Adams, Griffin and Fabbri, Alexander R and Ladhak, Faisal and McKeown, Kathleen and Elhadad, No{\'e}mie},
+  journal={arXiv preprint arXiv:2305.17779},
+  year={2023}
+}
+@inproceedings{wang-etal-2018-toward,
+    title = "Toward Fast and Accurate Neural Discourse Segmentation",
+    author = "Wang, Yizhong  and
+      Li, Sujian  and
+      Yang, Jingfeng",
+    booktitle = "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing",
+    month = oct # "-" # nov,
+    year = "2018",
+    address = "Brussels, Belgium",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/D18-1116",
+    doi = "10.18653/v1/D18-1116",
+    pages = "962--967",
+    abstract = "Discourse segmentation, which segments texts into Elementary Discourse Units, is a fundamental step in discourse analysis. Previous discourse segmenters rely on complicated hand-crafted features and are not practical in actual use. In this paper, we propose an end-to-end neural segmenter based on BiLSTM-CRF framework. To improve its accuracy, we address the problem of data insufficiency by transferring a word representation model that is trained on a large corpus. We also propose a restricted self-attention mechanism in order to capture useful information within a neighborhood. Experiments on the RST-DT corpus show that our model is significantly faster than previous methods, while achieving new state-of-the-art performance.",
+}
+@inproceedings{liu-etal-2022-brio,
+    title = "{BRIO}: Bringing Order to Abstractive Summarization",
+    author = "Liu, Yixin  and
+      Liu, Pengfei  and
+      Radev, Dragomir  and
+      Neubig, Graham",
+    booktitle = "Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)",
+    month = may,
+    year = "2022",
+    address = "Dublin, Ireland",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2022.acl-long.207",
+    doi = "10.18653/v1/2022.acl-long.207",
+    pages = "2890--2903",
+    abstract = "Abstractive summarization models are commonly trained using maximum likelihood estimation, which assumes a deterministic (one-point) target distribution in which an ideal model will assign all the probability mass to the reference summary. This assumption may lead to performance degradation during inference, where the model needs to compare several system-generated (candidate) summaries that have deviated from the reference summary. To address this problem, we propose a novel training paradigm which assumes a non-deterministic distribution so that different candidate summaries are assigned probability mass according to their quality. Our method achieves a new state-of-the-art result on the CNN/DailyMail (47.78 ROUGE-1) and XSum (49.07 ROUGE-1) datasets. Further analysis also shows that our model can estimate probabilities of candidate summaries that are more correlated with their level of quality.",
+}
+```

@@ -51,6 +51,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_candidates', default=16, type=int)
 
     # Configuration Parameters
+    parser.add_argument('--extract_experiment', default=None)
     parser.add_argument('--experiment', default=None)
     parser.add_argument('--model', default='gpt-3.5-turbo', choices=['text-davinci-003', 'gpt-3.5-turbo'])
     parser.add_argument('--mode', default='vanilla')
@@ -67,8 +68,9 @@ if __name__ == '__main__':
     split = 'test'
 
     results_dir = os.path.join(
-        '/nlp/projects/faithsum/results',
-        'cnn_e_final',
+        args.data_dir,
+        'results',
+        args.extract_experiment,
         args.experiment
     )
 

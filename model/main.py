@@ -159,6 +159,8 @@ if __name__ == '__main__':
     parser.add_argument('--unlike_coef', default=1.0, type=float)
     parser.add_argument('--corrupt_strategy', default='random', choices=['random', 'swap'])
     parser.add_argument('--copy_bart_class_dropout', default=0.1, type=float)
+
+    # Learn the ROUGE distribution over EDUs
     parser.add_argument('--salience_weight', default=1.0, type=float)
     parser.add_argument('--salience_temp', default=10.0, type=float)
 

@@ -71,7 +71,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    in_dir = os.path.join('/nlp/projects/faithsum/results', args.extract_experiment, args.mode + '_prompts')
+    in_dir = os.path.join(os.environ['DATA_DIR'], 'results', args.extract_experiment, args.mode + '_prompts')
     assert os.path.exists(in_dir)
     if args.experiment is None:
         args.experiment = args.mode + '_' + args.model + '_' + str(args.candidates)

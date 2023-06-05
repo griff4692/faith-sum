@@ -10,7 +10,6 @@ from nltk import trigrams
 import numpy as np
 import spacy
 from scipy.special import expit
-from scipy.stats import spearmanr
 import torch
 import torch.nn as nn
 from transformers import AutoModelForSeq2SeqLM
