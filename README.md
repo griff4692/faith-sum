@@ -69,4 +69,22 @@ The end of the script will provide the specific command in `./BRIO` to run to ob
 
 # Guiding with GPT
 
-TODO
+## Setup
+
+Create a file `edu_gpt/oa_secrets.py` that which should look like
+
+```angular2html
+OA_KEY = 'sk-xx'
+OA_ORGANIZATION = 'org-xx'
+```
+
+## Running
+
+```
+python edu_gpt/pga_prompts.py --extract_fn {.csv file}
+python edu_gpt/run.py --mode pga --candidates 16 --temperature 0.3
+```
+
+`{.csv}` file should be the absolute path to a file with extractive candidates: `$DATA_DIR/results/{my-extract-experiment}/test_beam_16_outputs.csv`.
+
+Please email `griffin.adams@columbia.edu` for full test set 16 candidate outputs for `CNN/DM` and `Xsum` if you want to skip [EDU Generation](#EDU-Extract-Generator).
